@@ -5,3 +5,4 @@
 //! system access (ADR 0009).
 
 pub mod catalogue;
+pub mod honeyscore;
