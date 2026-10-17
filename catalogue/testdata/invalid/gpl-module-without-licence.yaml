@@ -1,0 +1,15 @@
+# Must be rejected: module-backed entries record the upstream SPDX licence.
+id: module/conpot/0.6
+product: ICS honeypot
+vendor: Conpot project
+version: "0.6"
+decoy_kind: emulation
+artefact:
+  module_id: conpot
+  module_profile: default
+cves: []
+listen_ports:
+  - { port: 502, protocol: tcp, service: modbus }
+sources: ["https://example.com/advisory"]
+status: draft
+risk_notes: test fixture

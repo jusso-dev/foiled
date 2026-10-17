@@ -1,0 +1,31 @@
+# Draft emulation entry. The profile lands with the emulator plug-ins (#30).
+# CVE-2099-0001 is a placeholder id used to exercise the schema. It is not a real CVE.
+id: emulator/redis/7.0
+product: Redis
+vendor: Redis
+version: 7.0.11
+version_constraint: ">=7.0.0, <7.0.12"
+decoy_kind: emulation
+artefact:
+  emulator_id: redis
+  emulator_profile: redis-7.0
+cves:
+  - cve_id: CVE-2099-0001
+    severity: high
+    sources: [synthetic]
+    auth_requirement: unauth
+    notes: Illustrative claim only. No real Redis CVE is asserted by this draft.
+listen_ports:
+  - port: 6379
+    protocol: tcp
+    service: redis
+banner_hints:
+  - "redis_version:7.0.11"
+expected_techniques:
+  - T1190
+sources:
+  - https://redis.io/docs/latest/operate/oss_and_stack/management/security/
+status: draft
+risk_notes: >-
+  Unauthenticated Redis is a common target for config-rewrite and module-load abuse.
+  The emulator answers a small command subset and never runs attacker Lua or modules.

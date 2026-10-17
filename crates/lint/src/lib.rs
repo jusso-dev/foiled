@@ -13,8 +13,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use foiled_core::catalogue::{Artefact, CatalogueEntry, EntryStatus};
 use serde_json::Value;
 use walkdir::WalkDir;
+
+const CATALOGUE_ENTRIES: &str = "catalogue/entries";
 
 /// Directory to schema bindings, relative to the repository root.
 pub const BINDINGS: &[Binding] = &[Binding {
@@ -162,7 +165,62 @@ pub fn run(root: &Path, bindings: &[Binding]) -> Result<Report> {
         }
     }
 
+    check_catalogue(root, &mut report)?;
     Ok(report)
+}
+
+/// Catalogue checks the schema cannot express: id matches path, artefact
+/// shape matches the decoy kind, and verified emulation entries point at a
+/// profile or module manifest that exists in the tree.
+fn check_catalogue(root: &Path, report: &mut Report) -> Result<()> {
+    let entries_dir = root.join(CATALOGUE_ENTRIES);
+    if !entries_dir.exists() {
+        return Ok(());
+    }
+    for entry in WalkDir::new(&entries_dir).sort_by_file_name() {
+        let entry = entry?;
+        let path = entry.path();
+        if !entry.file_type().is_file() || !is_data_file(path) {
+            continue;
+        }
+        let rel = path.strip_prefix(root).unwrap_or(path).to_path_buf();
+        let Ok(value) = load(path) else {
+            continue; // reported by the schema pass
+        };
+        let Ok(parsed) = serde_json::from_value::<CatalogueEntry>(value) else {
+            continue; // the schema pass reports the shape error
+        };
+        let within = path
+            .strip_prefix(&entries_dir)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        for problem in parsed.problems_at(&within) {
+            report.findings.push(Finding {
+                path: rel.clone(),
+                message: problem.to_string(),
+            });
+        }
+        if parsed.status == EntryStatus::Verified {
+            let required = match &parsed.artefact {
+                Some(Artefact::Emulator(a)) => Some(format!(
+                    "emulators/{}/profiles/{}.yaml",
+                    a.emulator_id, a.emulator_profile
+                )),
+                Some(Artefact::Module(a)) => Some(format!("modules/{}/manifest.yaml", a.module_id)),
+                _ => None,
+            };
+            if let Some(required) = required
+                && !root.join(&required).exists()
+            {
+                report.findings.push(Finding {
+                    path: rel.clone(),
+                    message: format!("verified entry needs {required}"),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -273,6 +331,73 @@ mod tests {
             "{:?}",
             report.findings
         );
+    }
+
+    const MINIMAL_ENTRY_SCHEMA: &str = r#"{"type": "object"}"#;
+
+    fn catalogue_entry(id: &str, status: &str, artefact: &str) -> String {
+        format!(
+            r#"{{"id":"{id}","product":"p","vendor":"v","version":"1","decoy_kind":"emulation",
+            "artefact":{artefact},"cves":[],"listen_ports":[{{"port":1,"protocol":"tcp","service":"x"}}],
+            "sources":["https://example.com"],"status":"{status}","risk_notes":"r"}}"#
+        )
+    }
+
+    #[test]
+    fn catalogue_id_must_match_path() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "catalogue/schema/entry.schema.json",
+            MINIMAL_ENTRY_SCHEMA,
+        );
+        write(
+            dir.path(),
+            "catalogue/entries/emulator/redis/7.0.json",
+            &catalogue_entry(
+                "emulator/redis/6.0",
+                "draft",
+                r#"{"emulator_id":"redis","emulator_profile":"redis-7.0"}"#,
+            ),
+        );
+        let report = run(dir.path(), BINDINGS).unwrap();
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        assert!(report.findings[0].message.contains("emulator/redis/7.0"));
+    }
+
+    #[test]
+    fn verified_emulation_needs_existing_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "catalogue/schema/entry.schema.json",
+            MINIMAL_ENTRY_SCHEMA,
+        );
+        let body = catalogue_entry(
+            "emulator/redis/7.0",
+            "verified",
+            r#"{"emulator_id":"redis","emulator_profile":"redis-7.0"}"#,
+        );
+        write(
+            dir.path(),
+            "catalogue/entries/emulator/redis/7.0.json",
+            &body,
+        );
+        let report = run(dir.path(), BINDINGS).unwrap();
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        assert!(
+            report.findings[0]
+                .message
+                .contains("emulators/redis/profiles/redis-7.0.yaml")
+        );
+
+        write(
+            dir.path(),
+            "emulators/redis/profiles/redis-7.0.yaml",
+            "id: redis-7.0\n",
+        );
+        let report = run(dir.path(), BINDINGS).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
     }
 
     #[test]

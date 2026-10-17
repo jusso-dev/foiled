@@ -249,10 +249,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "foiled-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "foiled-lint"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "foiled-core",
  "jsonschema",
  "serde_json",
  "serde_yaml_ng",
