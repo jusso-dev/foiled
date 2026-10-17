@@ -49,10 +49,12 @@ wait_for() { # description seconds command...
 
 log "1. Build the demo image and push it to a local registry"
 docker run -d --rm --name foiled-registry -p 127.0.0.1:5000:5000 registry:2 >/dev/null
-SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" build/recipes/foiled-demo-app/build.sh
-docker load -i build/output/foiled-demo-app.oci | tee "$WORK/load.txt"
-LOADED="$(sed -n 's/^Loaded image[^:]*: //p' "$WORK/load.txt" | tail -1)"
-docker tag "$LOADED" localhost:5000/foiled-demo-app:1.0.0
+# Same Containerfile and offline build as build/recipes/foiled-demo-app/build.sh,
+# loaded into the local image store so it can be pushed to the lab registry.
+grep -vE '^[[:space:]]*(#|$)' build/recipes/foiled-demo-app/sources.lock \
+  | (cd build/recipes/foiled-demo-app && sha256sum -c -)
+docker buildx build --builder default --load --network=none \
+  -t localhost:5000/foiled-demo-app:1.0.0 build/recipes/foiled-demo-app
 docker push -q localhost:5000/foiled-demo-app:1.0.0 >/dev/null
 IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' localhost:5000/foiled-demo-app:1.0.0)"
 DIGEST="${IMAGE#*@}"
