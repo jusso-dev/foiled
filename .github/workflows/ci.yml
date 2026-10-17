@@ -46,7 +46,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: wasm32
-      - run: cargo clippy -p foiled-api --target wasm32-unknown-unknown --locked -- -D warnings
+      - run: cargo clippy -p foiled-api -p foiled-core --target wasm32-unknown-unknown --locked -- -D warnings
       - run: cargo build -p foiled-api --target wasm32-unknown-unknown --release --locked
 
   web:

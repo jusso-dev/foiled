@@ -1,0 +1,29 @@
+# Draft module-backed decoy. Cowrie runs as its own container; Foiled never imports its code (#30, #38).
+id: module/cowrie/2.6
+product: SSH and Telnet honeypot (Cowrie)
+vendor: Cowrie project
+version: "2.6"
+decoy_kind: emulation
+artefact:
+  module_id: cowrie
+  module_profile: debian-openssh
+  licence: BSD-3-Clause
+cves: []
+listen_ports:
+  - port: 22
+    protocol: tcp
+    service: ssh
+  - port: 23
+    protocol: tcp
+    service: telnet
+banner_hints:
+  - "SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3"
+expected_techniques:
+  - T1110
+  - T1059.004
+sources:
+  - https://github.com/cowrie/cowrie
+status: draft
+risk_notes: >-
+  Breadth sensor for credential stuffing and post-login shell commands. Change the default
+  hostname and banner (#18). Digest pinning and the persona land with #30.

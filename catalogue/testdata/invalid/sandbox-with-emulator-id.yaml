@@ -1,0 +1,14 @@
+# Must be rejected: a sandbox entry whose artefact only has emulator_id.
+id: foiled/bad-sandbox/1.0.0
+product: Bad
+vendor: Test
+version: 1.0.0
+decoy_kind: sandbox
+artefact:
+  emulator_id: redis
+cves: []
+listen_ports:
+  - { port: 80, protocol: tcp, service: http }
+sources: ["https://example.com/advisory"]
+status: draft
+risk_notes: test fixture

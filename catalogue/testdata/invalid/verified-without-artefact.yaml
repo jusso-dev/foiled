@@ -1,0 +1,12 @@
+# Must be rejected: verified entries need the artefact shape for their kind.
+id: foiled/no-artefact/1.0.0
+product: Bad
+vendor: Test
+version: 1.0.0
+decoy_kind: emulation
+cves: []
+listen_ports:
+  - { port: 6379, protocol: tcp, service: redis }
+sources: ["https://example.com/advisory"]
+status: verified
+risk_notes: test fixture

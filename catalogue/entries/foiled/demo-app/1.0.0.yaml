@@ -1,0 +1,43 @@
+# Synthetic demo victim built from build/recipes/foiled-demo-app (#6).
+# FOILED-DEMO-0001 is a made-up vulnerability id for demos and tests. It is not a real CVE.
+id: foiled/demo-app/1.0.0
+product: Foiled demo app
+vendor: Foiled project
+version: 1.0.0
+decoy_kind: sandbox
+artefact:
+  recipe_id: foiled-demo-app
+  runtime: firecracker
+cves:
+  - cve_id: FOILED-DEMO-0001
+    severity: critical
+    sources: [synthetic]
+    auth_requirement: unauth
+    notes: Unauthenticated arbitrary file write through the upload endpoint's path parameter.
+listen_ports:
+  - port: 8080
+    protocol: tcp
+    service: http
+default_credentials:
+  - username: admin
+    password: foiled-demo-admin
+    note: Decoy-only login for the fake admin page. Replaced by a per-decoy canary at start (#17).
+fingerprint_hints:
+  - "Server: Werkzeug-style banner is avoided; the app sends a plain 'Server: demo-app/1.0.0'."
+banner_hints:
+  - "demo-app/1.0.0"
+expected_techniques:
+  - T1190
+  - T1505.003
+instrumentation_hooks:
+  - demo-app.upload-path-traversal
+canary_slots:
+  - path: /srv/demo-app/.env
+    kind: api_key
+sources:
+  - https://github.com/jusso-dev/foiled/tree/main/build/recipes/foiled-demo-app
+status: verified
+risk_notes: >-
+  Deliberately vulnerable synthetic app for the MVP walkthrough (#22). Safe to redistribute
+  because it is our own MIT code. Not wormable. Run only under the Firecracker runtime on a
+  public IP.
