@@ -1,5 +1,7 @@
 # Foiled
 
+![Foiled hero art: a hooded figure in a burning cyberpunk wasteland facing a wall of red threat intelligence dashboards showing live attacks, exploits and honeypot feeds](docs/assets/foiled-hero.jpg)
+
 Foiled runs sandboxed and emulated vulnerable decoys that foil exploit attempts and capture threat intelligence.
 
 It stands up real software at deliberately old, known-vulnerable versions (and lightweight high-fidelity product emulations) inside tightly contained environments. Every request, payload and process an attacker triggers is captured, enriched and exported as threat intelligence (STIX 2.1, MISP, TAXII and plain IOC files).
@@ -15,7 +17,8 @@ Planning. There is no product code yet. Design and roadmap live in issues and do
 - All issues: https://github.com/jusso-dev/foiled/issues
 - Research landscape: [docs/research/landscape.md](docs/research/landscape.md)
 - Lessons from commercial platforms: [docs/research/lessons.md](docs/research/lessons.md)
-- Design direction and mockup: [docs/design/design-direction.md](docs/design/design-direction.md), [docs/design/mockup.html](docs/design/mockup.html)
+- Design direction: [docs/design/design-direction.md](docs/design/design-direction.md)
+- Dashboard target (v3, chosen): [docs/design/mockup-v3.png](docs/design/mockup-v3.png) ([HTML](docs/design/mockup-v3.html)). Earlier explorations: [v1](docs/design/mockup.png), [v2](docs/design/mockup-v2.png)
 
 ## Safety
 
