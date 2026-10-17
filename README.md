@@ -1,5 +1,7 @@
 # Foiled
 
+![Foiled hero art: a hooded figure in a burning cyberpunk wasteland facing a wall of red threat intelligence dashboards showing live attacks, exploits and honeypot feeds](docs/assets/foiled-hero.jpg)
+
 Foiled runs sandboxed and emulated vulnerable decoys that foil exploit attempts and capture threat intelligence.
 
 It stands up real software at deliberately old, known-vulnerable versions (and lightweight high-fidelity product emulations) inside tightly contained environments. Every request, payload and process an attacker triggers is captured, enriched and exported as threat intelligence (STIX 2.1, MISP, TAXII and plain IOC files).
