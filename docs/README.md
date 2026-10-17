@@ -7,6 +7,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | Doc | What it covers |
 | --- | --- |
 | [mvp-walkthrough.md](mvp-walkthrough.md) | Run the MVP loop: launch, exploit, capture, rotate, export. Lab track runnable today. |
+| [attempts.md](attempts.md) | Exploit attempts: grouping, state machine, noise score and the attempts API. |
 | [glossary.md](glossary.md) | Terms used across issues, docs and code. |
 | [ci.md](ci.md) | CI jobs and how to run the same checks locally. |
 | [research/landscape.md](research/landscape.md) | Honeypot, deception and threat intel references that Foiled builds on. |

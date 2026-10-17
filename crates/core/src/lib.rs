@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod attack;
+pub mod attempt;
 pub mod audit;
 pub mod auth;
 pub mod capture;

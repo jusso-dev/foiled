@@ -1,7 +1,7 @@
 //! Capture event storage against a real Postgres (CI service container).
 
 use foiled_core::capture::{CaptureEvent, Source, SourceKind};
-use foiled_pg::{InsertError, events_for_decoy, insert_events, ip_iocs, migrate};
+use foiled_pg::{InsertError, events_between, events_for_decoy, insert_events, ip_iocs, migrate};
 use tokio_postgres::{Client, NoTls};
 
 async fn connect() -> Client {
@@ -98,4 +98,26 @@ async fn ip_iocs_aggregate_per_source_and_respect_since() {
     assert_eq!(later.len(), 1);
     assert_eq!(later[0].ip, "198.51.100.23");
     assert!(ip_iocs(&c, "nobody", 0).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn events_between_is_half_open_and_tenant_scoped() {
+    let c = connect().await;
+    let tenant = format!("win-{}", std::process::id());
+    let http = stamped(fixture("http-upload.json"), &tenant);
+    let hook = stamped(fixture("hook-trigger.json"), &tenant);
+    insert_events(&c, &[http.clone(), hook.clone()], 1)
+        .await
+        .unwrap();
+    let all = events_between(&c, &tenant, 0, i64::MAX, 10).await.unwrap();
+    assert_eq!(all, vec![http.clone(), hook.clone()]);
+    let first = events_between(&c, &tenant, 0, hook.ts, 10).await.unwrap();
+    assert_eq!(first, vec![http]);
+    assert!(
+        events_between(&c, "other", 0, i64::MAX, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

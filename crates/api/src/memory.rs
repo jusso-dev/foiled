@@ -366,4 +366,24 @@ impl Store for MemoryStore {
         out.sort_by(|a, b| (a.first_seen, &a.ip).cmp(&(b.first_seen, &b.ip)));
         ready(Ok(out))
     }
+
+    fn events_between(
+        &self,
+        tenant_id: &str,
+        since: i64,
+        until: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<CaptureEvent>> {
+        let mut out: Vec<CaptureEvent> = self
+            .lock()
+            .events
+            .iter()
+            .filter(|e| e.tenant_id.as_deref() == Some(tenant_id) && e.ts >= since && e.ts < until)
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| (a.ts, &a.event_id).cmp(&(b.ts, &b.event_id)));
+        out.dedup_by(|a, b| a.event_id == b.event_id);
+        out.truncate(limit);
+        ready(Ok(out))
+    }
 }

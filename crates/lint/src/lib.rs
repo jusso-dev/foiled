@@ -70,6 +70,10 @@ pub const BINDINGS: &[Binding] = &[
         schema: "schemas/quarantine-meta.schema.json",
     },
     Binding {
+        data_dir: "testdata/attempts/expected",
+        schema: "schemas/attempt.schema.json",
+    },
+    Binding {
         data_dir: "testdata/agent/jobs",
         schema: "schemas/agent/job.schema.json",
     },

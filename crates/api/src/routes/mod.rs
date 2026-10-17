@@ -1,5 +1,6 @@
 //! Route handlers grouped by resource.
 
+pub mod attempts;
 pub mod audit;
 pub mod catalogue;
 pub mod decoys;

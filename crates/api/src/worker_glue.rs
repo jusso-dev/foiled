@@ -719,4 +719,20 @@ impl Store for CfStore {
                 .collect())
         })
     }
+
+    fn events_between(
+        &self,
+        tenant_id: &str,
+        since: i64,
+        until: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<CaptureEvent>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::events_between(&client, &t, since, until, limit as i64)
+                .await
+                .map_err(err)
+        })
+    }
 }

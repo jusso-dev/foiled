@@ -1,0 +1,39 @@
+{
+  "attempt_id": "att_b7fa7221fcf4b6d01cd5b680",
+  "tenant_id": "t1",
+  "decoy_id": "dcy-redis-1",
+  "catalogue_id": "emulator/redis/7.0",
+  "decoy_kind": "emulation",
+  "sensor_id": null,
+  "src": "198.51.100.23",
+  "first_seen": 1792285328000,
+  "last_seen": 1792285328000,
+  "state": "probe",
+  "state_history": [
+    {
+      "state": "probe",
+      "at": 1792285328000,
+      "signal": "first_contact",
+      "event_id": "s2"
+    }
+  ],
+  "event_ids": [
+    "s2"
+  ],
+  "payload_refs": [],
+  "ioc_refs": [],
+  "hook_hits": [],
+  "campaign_id": null,
+  "labels": {},
+  "noise": {
+    "score": 40,
+    "band": "mixed",
+    "hits": 2,
+    "decoy_types_touched": 2,
+    "decoys_touched": 2,
+    "fleet_scope": "tenant",
+    "evidence": [
+      "touched 2 catalogue product(s)"
+    ]
+  }
+}
