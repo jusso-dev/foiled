@@ -1,0 +1,151 @@
+# Foiled egress allow-list for the logging proxy and resolver.
+#
+# Design: docs/adr/0003-network-isolation.md (#4)
+# Read by the host agent (crates/hostd, #41), which validates it and renders
+# the proxy config, the resolver config and the nftables upstream_resolvers
+# set from it. Sandboxes never read this file.
+#
+# Egress from a sandbox is denied by default. This file can only open narrow,
+# logged paths through the proxy. It cannot open direct routes: the nftables
+# ruleset (configs/nftables/honeypot.nft) only lets sandboxes reach the proxy
+# and the resolver, whatever is written here.
+#
+# Rules hostd enforces when loading this file (load fails otherwise):
+#   - default_action must be "deny".
+#   - logging.enabled must be true.
+#   - No allow entry may match a control-plane hostname or any entry in
+#     always_deny. hostd adds its own control-plane hostnames to always_deny.
+#   - Hosts are exact names or a single leading "*." wildcard. No bare "*".
+#   - Every allow entry needs a reason and an expiry.
+#   - Only ports 80 and 443 are allowed (the nftables ruleset matches this).
+#   - Never allow-list attacker infrastructure. Foiled observes traffic that
+#     arrives at a decoy and does not initiate contact with attacker systems.
+#     Use canned_responses to keep an exploit chain going instead.
+
+version: 1
+
+# Only "deny" is accepted.
+default_action: deny
+
+logging:
+  # Every request is logged, allowed or denied, including requests answered
+  # from canned_responses. Cannot be turned off.
+  enabled: true
+  format: jsonl
+  proxy_log: /var/log/foiled/egress-proxy.jsonl
+  dns_log: /var/log/foiled/dns.jsonl
+  # Fields recorded per request: time, decoy id (from source address),
+  # method, scheme, host, port, path and query (plain HTTP only), SNI or
+  # CONNECT target (HTTPS), user agent, decision, matched rule, bytes in/out.
+  log_request_headers: true
+  # Request and response bodies are not logged. Payloads fetched through an
+  # allow-listed path are hashed and handed to quarantine (#9), not logged.
+  log_bodies: false
+
+# What a denied request gets back.
+deny_response:
+  # "status": plain HTTP gets an HTTP status; CONNECT gets the status before
+  # any tunnel is opened. "reset": close the connection with no response.
+  mode: status
+  status: 403
+
+dns:
+  # Names that are not allow-listed get NXDOMAIN and are not resolved
+  # upstream, so DNS cannot be used to tunnel data out. Every query is logged.
+  default_answer: nxdomain
+  # Upstream resolvers for allow-listed names only. Empty by default because
+  # the allow-list is empty. Use addresses you trust; these populate the
+  # upstream_resolvers set in the nftables ruleset.
+  upstreams: []
+  # upstreams:
+  #   - 192.0.2.53
+
+# Allow-list. Empty by default: no sandbox can fetch anything.
+allow: []
+
+# Examples. Uncomment and adapt; keep entries narrow and short-lived.
+#
+# allow:
+#   # A web decoy whose plug-in update check should succeed so the app does
+#   # not look broken. Scoped to one catalogue entry.
+#   - host: updates.vendor.example
+#     ports: [443]
+#     methods: [GET, HEAD]
+#     clients:
+#       decoys: ["FOILED-DEMO-0001"]
+#     reason: "Decoy update check must succeed for fidelity"
+#     expires: 2026-12-31
+#
+#   # ACME for the optional Caddy TLS frontend. Frontend only, never decoys.
+#   - host: acme-v02.api.letsencrypt.org
+#     ports: [443]
+#     methods: [CONNECT]
+#     clients:
+#       frontend: true
+#       decoys: []
+#     reason: "Certificate issuance for the TLS frontend"
+#     expires: 2027-03-31
+
+# Canned responses are served by the proxy itself and never contact the
+# upstream host, so they may match hosts that are not on the allow-list.
+# They only work for plain HTTP requests, or for HTTPS when active
+# inspection is on for that host. Without active inspection the proxy sees
+# only the CONNECT target and SNI, and can allow or deny but not answer.
+canned_responses:
+  enabled: false
+  rules: []
+
+# Example: an exploit tries to fetch a second-stage script over plain HTTP.
+# Answer with a harmless stub so the attacker's next step is observed, and
+# log the request in full.
+#
+# canned_responses:
+#   enabled: true
+#   rules:
+#     - match:
+#         scheme: http
+#         host: "198.51.100.23"
+#         path_prefix: /bins/
+#       status: 200
+#       content_type: text/plain
+#       body_file: /etc/foiled/canned/empty.txt
+#       reason: "FOILED-DEMO-0001 second-stage fetch"
+#     - match:
+#         scheme: http
+#         host: "*.callback.example"
+#       status: 204
+#       reason: "Out-of-band callback probe, answer without contacting it"
+
+# Always denied, checked before allow and canned_responses. hostd appends
+# the control-plane hostnames it dials (from its enrolment config) at load
+# time, so they never need to be written here.
+always_deny:
+  hosts:
+    # Placeholder for operator-specific names, for example an internal
+    # status page. Control-plane names are added by hostd.
+    - "*.internal.example"
+  networks:
+    - 0.0.0.0/8
+    - 10.0.0.0/8
+    - 100.64.0.0/10
+    - 127.0.0.0/8
+    - 169.254.0.0/16
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 224.0.0.0/3
+
+# ACTIVE INSPECTION: breaks TLS. Default off. Separate, clearly labelled mode.
+#
+# When enabled, the proxy terminates TLS for the listed hosts using a Foiled
+# CA that must be baked into the decoy image, and logs decrypted request
+# lines and headers. This changes what the decoy trusts and can be detected
+# by an attacker who checks the certificate chain. Turning it on is an
+# operator decision recorded in the audit log with a reason; it is never on
+# by default and never applies to hosts not listed here. Check your own
+# legal advice before enabling it.
+active_inspection:
+  enabled: false
+  hosts: []
+  ca_cert: /etc/foiled/inspection/ca.pem
+  ca_key: /etc/foiled/inspection/ca.key
+  log_bodies: false
