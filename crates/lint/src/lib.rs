@@ -4,7 +4,8 @@
 //!
 //! 1. Every `*.schema.json` file is valid JSON and a valid JSON Schema.
 //! 2. Every data file in a directory listed in [`BINDINGS`] validates against
-//!    the schema bound to that directory. JSON and YAML are both accepted.
+//!    the schema bound to that directory. A binding may also name a single
+//!    file. JSON and YAML are both accepted.
 //!
 //! A binding whose schema file does not exist yet is skipped, so the lint can
 //! land before the schemas it will police.
@@ -19,17 +20,24 @@ use walkdir::WalkDir;
 
 const CATALOGUE_ENTRIES: &str = "catalogue/entries";
 
-/// Directory to schema bindings, relative to the repository root.
-pub const BINDINGS: &[Binding] = &[Binding {
-    data_dir: "catalogue/entries",
-    schema: "catalogue/schema/entry.schema.json",
-}];
+/// Data to schema bindings, relative to the repository root.
+pub const BINDINGS: &[Binding] = &[
+    Binding {
+        data_dir: "catalogue/entries",
+        schema: "catalogue/schema/entry.schema.json",
+    },
+    Binding {
+        data_dir: "configs/retention.yaml",
+        schema: "schemas/retention-config.schema.json",
+    },
+];
 
 /// Directories never scanned for schema files.
 const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", "dist", "build"];
 
 #[derive(Debug, Clone, Copy)]
 pub struct Binding {
+    /// A directory, walked recursively, or a single data file.
     pub data_dir: &'static str,
     pub schema: &'static str,
 }
@@ -398,6 +406,27 @@ mod tests {
         );
         let report = run(dir.path(), BINDINGS).unwrap();
         assert!(report.findings.is_empty(), "{:?}", report.findings);
+    }
+
+    #[test]
+    fn binding_can_name_a_single_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let single = [Binding {
+            data_dir: "configs/one.yaml",
+            schema: "schema/entry.schema.json",
+        }];
+        write(dir.path(), "schema/entry.schema.json", ENTRY_SCHEMA);
+        write(dir.path(), "configs/one.yaml", "id: ok\n");
+        // A sibling that would fail the schema is not bound, so not checked.
+        write(dir.path(), "configs/other.yaml", "id: 7\n");
+        let report = run(dir.path(), &single).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert_eq!(report.files_checked, 1);
+
+        write(dir.path(), "configs/one.yaml", "product: demo\n");
+        let report = run(dir.path(), &single).unwrap();
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        assert!(report.findings[0].path.ends_with("configs/one.yaml"));
     }
 
     #[test]

@@ -6,3 +6,4 @@
 
 pub mod catalogue;
 pub mod honeyscore;
+pub mod retention;
