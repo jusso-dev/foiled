@@ -1,0 +1,12 @@
+id: t1190-matcher-hit
+technique: T1190
+weight: 55
+evidence_summary: Request matched a known exploit signature for the decoy's product
+description: >-
+  data.matcher_id is set on application events when a #12 tier 1 signature
+  (catalogue/matchers/) matched the request. Signatures also fire on scanners,
+  so the weight sits below a hook trigger.
+channels: [application]
+all:
+  - field: data.matcher_id
+    exists: true

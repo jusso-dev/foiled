@@ -1,0 +1,12 @@
+id: t1046-scanner-tools
+technique: T1046
+weight: 50
+evidence_summary: Attacker ran a port scanner from the decoy
+any:
+  - field: hook.cmd_lines
+    contains_any: &scanners
+      - "nmap "
+      - "masscan "
+      - "zmap "
+  - field: data.input
+    contains_any: *scanners

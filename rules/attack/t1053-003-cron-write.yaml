@@ -1,0 +1,15 @@
+id: t1053-003-cron-write
+technique: T1053.003
+weight: 75
+evidence_summary: File written to a cron spool or cron configuration path
+channels: [hook, filesystem]
+any:
+  - field: hook.file_writes
+    prefix_any: &cron_paths
+      - /var/spool/cron
+      - /etc/cron.d/
+      - /etc/crontab
+      - /etc/cron.hourly/
+      - /etc/cron.daily/
+  - field: data.path
+    prefix_any: *cron_paths

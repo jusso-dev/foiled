@@ -1,0 +1,12 @@
+id: t1071-001-egress-http-post
+technique: T1071.001
+weight: 35
+evidence_summary: Decoy sent an HTTP POST out through the egress proxy, possible web C2 check-in
+description: >-
+  Outbound HTTP POSTs from a decoy look like implant check-ins or data
+  upload over web protocols. Low weight on its own; it gains weight when the
+  same attempt also shows a download (T1105) or an implant (#34).
+channels: [egress]
+all:
+  - field: data.method
+    equals: POST

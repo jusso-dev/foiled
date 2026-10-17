@@ -1,0 +1,16 @@
+id: t1082-system-info
+technique: T1082
+weight: 40
+evidence_summary: Attacker queried operating system or hardware details
+any:
+  - field: hook.cmd_lines
+    contains_any: &sysinfo
+      - "uname -a"
+      - "uname -m"
+      - "cat /proc/cpuinfo"
+      - "cat /etc/os-release"
+      - "cat /etc/issue"
+      - lscpu
+      - hostnamectl
+  - field: data.input
+    contains_any: *sysinfo

@@ -1,0 +1,22 @@
+id: t1059-004-hook-shell
+technique: T1059.004
+weight: 80
+evidence_summary: Unix shell command ran after the vulnerable path fired
+description: >-
+  Post-exploitation command lines recorded by a #32 hook that invoke a Unix
+  shell directly or pipe a download into one.
+channels: [hook]
+all:
+  - field: hook.stage
+    equals: post_exploit
+  - field: hook.cmd_lines
+    contains_any:
+      - "sh -c"
+      - "bash -c"
+      - "bash -i"
+      - "/bin/sh"
+      - "/bin/bash"
+      - "| sh"
+      - "|sh"
+      - "| bash"
+      - "|bash"

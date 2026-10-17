@@ -1,0 +1,12 @@
+id: t1105-hook-download
+technique: T1105
+weight: 55
+evidence_summary: Post-exploitation command fetches a file from a remote host
+channels: [hook]
+all:
+  - field: hook.cmd_lines
+    contains_any:
+      - "curl "
+      - "wget "
+      - "tftp "
+      - "ftpget "

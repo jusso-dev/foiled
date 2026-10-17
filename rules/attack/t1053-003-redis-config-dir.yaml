@@ -1,0 +1,22 @@
+id: t1053-003-redis-config-dir
+technique: T1053.003
+weight: 70
+evidence_summary: Redis CONFIG SET dir pointed at a cron directory
+description: >-
+  The classic unauthenticated Redis abuse: point the dump directory at the
+  cron spool, store a cron line as a key and SAVE. The emulator (#30) records
+  the command; nothing is written on a real host.
+channels: [application]
+all:
+  - field: data.protocol
+    equals: redis
+  - field: data.command
+    equals: config
+    ignore_case: true
+  - field: data.args
+    equals: dir
+    ignore_case: true
+  - field: data.args
+    prefix_any:
+      - /var/spool/cron
+      - /etc/cron.d

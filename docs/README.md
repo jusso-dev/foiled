@@ -24,6 +24,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [deploy/modes.md](deploy/modes.md) | Deployment modes (research, edge, central) and the MVP topology. |
 | [deploy/vps.md](deploy/vps.md) | Bringing up a research sensor on a VPS. |
 | [instrumentation.md](instrumentation.md) | Vulnerable-path hooks: kinds, manifest, event fields, sandbox and emulator wiring, post-exploit capture and redaction. |
+| [attack-mapping.md](attack-mapping.md) | MITRE ATT&CK mapping: the pinned version and update process, mapping rules, the technique link object, and how links feed confidence, STIX export and the console. |
 | [privacy-and-retention.md](privacy-and-retention.md) | Personal information in capture data, default TTLs, the purge job and metadata-only mode. |
 | [deploy/workers.md](deploy/workers.md), [deploy/cloudflare.md](deploy/cloudflare.md), [deploy/cloud-sketch.md](deploy/cloud-sketch.md) | The control plane on Workers, Cloudflare-in-front trade-offs, multi-region sketch. |
 

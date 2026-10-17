@@ -1,0 +1,13 @@
+{
+  "event_id": "atk-redis-03",
+  "ts": 1792285330300,
+  "decoy_id": "dcy-redis-1",
+  "catalogue_id": "emulator/redis/7.0",
+  "decoy_kind": "emulation",
+  "channel": "application",
+  "severity": "low",
+  "src": { "ip": "198.51.100.23", "port": 40001 },
+  "dst": { "ip": "10.85.1.10", "port": 6379 },
+  "attempt_id": "atm-redis-1",
+  "data": { "protocol": "redis", "command": "CONFIG", "args": ["SET", "dbfilename", "root"] }
+}

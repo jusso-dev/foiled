@@ -1,0 +1,13 @@
+{
+  "event_id": "atk-demo-05",
+  "ts": 1792285335000,
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "decoy_kind": "sandbox",
+  "channel": "egress",
+  "severity": "high",
+  "src": { "ip": "10.85.1.2", "port": 44112 },
+  "dst": { "ip": "192.0.2.81", "port": 443 },
+  "attempt_id": "atm-demo-1",
+  "data": { "verdict": "blocked", "host": "c2.example.invalid", "method": "POST", "path": "/api/checkin" }
+}

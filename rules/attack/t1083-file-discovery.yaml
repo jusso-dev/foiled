@@ -1,0 +1,12 @@
+id: t1083-file-discovery
+technique: T1083
+weight: 25
+evidence_summary: Attacker listed or searched directories
+any:
+  - field: hook.cmd_lines
+    contains_any: &file_discovery
+      - "ls -la"
+      - "ls -al"
+      - "find / "
+  - field: data.input
+    contains_any: *file_discovery

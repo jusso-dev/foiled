@@ -46,6 +46,18 @@ pub const BINDINGS: &[Binding] = &[
         schema: "schemas/capture-event.schema.json",
     },
     Binding {
+        data_dir: "testdata/attack",
+        schema: "schemas/capture-event.schema.json",
+    },
+    Binding {
+        data_dir: "rules/attack",
+        schema: "schemas/attack-rule.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/technique-links",
+        schema: "schemas/technique-link.schema.json",
+    },
+    Binding {
         data_dir: "testdata/quarantine",
         schema: "schemas/quarantine-meta.schema.json",
     },
