@@ -54,6 +54,7 @@ docker run -d --rm --name foiled-registry -p 127.0.0.1:5000:5000 registry:2 >/de
 grep -vE '^[[:space:]]*(#|$)' build/recipes/foiled-demo-app/sources.lock \
   | (cd build/recipes/foiled-demo-app && sha256sum -c -)
 docker buildx build --builder default --load --network=none \
+  -f build/recipes/foiled-demo-app/Containerfile \
   -t localhost:5000/foiled-demo-app:1.0.0 build/recipes/foiled-demo-app
 docker push -q localhost:5000/foiled-demo-app:1.0.0 >/dev/null
 IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' localhost:5000/foiled-demo-app:1.0.0)"
