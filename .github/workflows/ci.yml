@@ -80,6 +80,11 @@ jobs:
           key: lint
       - name: Validate JSON Schemas and catalogue entries
         run: cargo run -p foiled-lint --locked -- .
+      - name: Check nftables ruleset syntax
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nftables
+          sudo nft -c -f configs/nftables/honeypot.nft
       - name: Check internal Markdown links
         uses: lycheeverse/lychee-action@v2
         with:

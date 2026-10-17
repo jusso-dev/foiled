@@ -1,0 +1,247 @@
+#!/usr/sbin/nft -f
+#
+# Foiled honeypot network isolation ruleset.
+#
+# Design:   docs/adr/0003-network-isolation.md (#4)
+# Owner:    the host agent, crates/hostd (#41). hostd loads this file at start,
+#           then adds and removes map/set elements as decoys are created and
+#           destroyed. Do not hand-edit elements on a live host.
+#
+# Check:    nft -c -f honeypot.nft
+# Load:     nft -f honeypot.nft
+#
+# Loading replaces the whole "inet foiled" table in one transaction. Other
+# tables are not touched, but a drop verdict in any base chain is final, so
+# the forward policy below drops ALL routed traffic on this host that is not
+# accepted here. Run decoys on a dedicated sandbox host.
+#
+# Every log line starts with "foiled drop " so it can be filtered, for example:
+#   journalctl -k -g 'foiled drop'
+#
+# IPv4 only for MVP. IPv6 is disabled on honeypot interfaces by sysctl and is
+# also dropped here.
+#
+# Address plan (see ADR 0003):
+#   10.85.0.0/16   honeypot range, never routed off this host
+#   10.85.0.0/29   egress services namespace: .1 host, .2 resolver, .3 proxy
+#   10.85.0.8/29   optional TLS frontend namespace: .9 host, .10 Caddy
+#   10.85.1.0/24+  decoys, one /29 each: .1 host gateway, .2 primary guest
+#
+# Interface names:
+#   foil-<8 hex>   host side of one decoy (veth, Firecracker tap or per-decoy bridge)
+#   foilsvc0       host side of the egress services namespace
+#   foilfront0     host side of the optional TLS frontend namespace
+
+# Operator settings. Replace before loading.
+define WAN_IF       = "eth0"
+define FRONTEND_V4  = 203.0.113.10
+
+# Fixed by the address plan. hostd checks these match its own config.
+define HONEYPOT_NET = 10.85.0.0/16
+define SVC_IF       = "foilsvc0"
+define SVC_NET      = 10.85.0.0/29
+define RESOLVER_V4  = 10.85.0.2
+define PROXY_V4     = 10.85.0.3
+define PROXY_PORT   = 3128
+define FRONT_IF     = "foilfront0"
+define FRONT_NET    = 10.85.0.8/29
+define CADDY_V4     = 10.85.0.10
+
+# Create-then-delete makes the reload atomic and idempotent.
+table inet foiled
+delete table inet foiled
+
+table inet foiled {
+
+	# Destinations the egress namespace may never reach, even for an
+	# allow-listed name: private ranges (including this honeypot range),
+	# CGNAT (Tailscale and similar), loopback, link-local (cloud metadata),
+	# benchmarking, multicast and reserved space, and the host's own
+	# public address. Add any other host addresses here.
+	set blocked_dst {
+		type ipv4_addr
+		flags interval
+		elements = {
+			0.0.0.0/8,
+			10.0.0.0/8,
+			100.64.0.0/10,
+			127.0.0.0/8,
+			169.254.0.0/16,
+			172.16.0.0/12,
+			192.0.0.0/24,
+			192.168.0.0/16,
+			198.18.0.0/15,
+			224.0.0.0/3,
+			$FRONTEND_V4
+		}
+	}
+
+	# Upstream resolvers the logging resolver forwards allow-listed names to.
+	# Empty by default: with an empty allow-list nothing needs resolving.
+	# hostd fills this from egress-allowlist.yaml (dns.upstreams).
+	set upstream_resolvers {
+		type ipv4_addr
+	}
+
+	# Published ports: frontend address . port -> guest address.
+	# The guest listens on the same port number it is published on.
+	# The two elements below are the worked example in ADR 0003 (one web
+	# decoy at 10.85.1.2). hostd flushes and rebuilds both maps from its own
+	# state after loading this file.
+	map published_tcp {
+		type ipv4_addr . inet_service : ipv4_addr
+		elements = {
+			$FRONTEND_V4 . 80 : 10.85.1.2,
+			$FRONTEND_V4 . 443 : 10.85.1.2
+		}
+	}
+
+	map published_udp {
+		type ipv4_addr . inet_service : ipv4_addr
+	}
+
+	# Guest address . port pairs the optional Caddy frontend may open.
+	# Empty unless a web decoy uses the TLS frontend.
+	set front_targets {
+		type ipv4_addr . inet_service
+	}
+
+	# Log-and-drop chains. Logging is rate limited so a noisy decoy cannot
+	# flood the kernel log; the counter still counts every dropped packet.
+
+	chain drop_spoof {
+		limit rate 10/second burst 20 packets log prefix "foiled drop spoof: " level warn
+		counter drop
+	}
+
+	chain drop_ipv6 {
+		limit rate 5/second burst 10 packets log prefix "foiled drop ipv6: " level info
+		counter drop
+	}
+
+	chain drop_egress {
+		limit rate 20/second burst 40 packets log prefix "foiled drop egress: " level info
+		counter drop
+	}
+
+	chain drop_host {
+		limit rate 20/second burst 40 packets log prefix "foiled drop host: " level warn
+		counter drop
+	}
+
+	chain drop_svc {
+		limit rate 20/second burst 40 packets log prefix "foiled drop svc: " level warn
+		counter drop
+	}
+
+	chain drop_inbound {
+		limit rate 20/second burst 40 packets log prefix "foiled drop inbound: " level info
+		counter drop
+	}
+
+	chain drop_forward {
+		limit rate 10/second burst 20 packets log prefix "foiled drop forward: " level info
+		counter drop
+	}
+
+	# Before conntrack: anti-spoofing and IPv6.
+	chain raw_prerouting {
+		type filter hook prerouting priority raw; policy accept;
+
+		# IPv6 never enters from a honeypot interface (MVP is IPv4 only).
+		iifname "foil-*" meta nfproto ipv6 jump drop_ipv6
+		iifname $SVC_IF meta nfproto ipv6 jump drop_ipv6
+		iifname $FRONT_IF meta nfproto ipv6 jump drop_ipv6
+
+		# A decoy may only send from addresses routed back through its own
+		# interface (strict reverse path check).
+		iifname "foil-*" fib saddr . iif oif missing jump drop_spoof
+		iifname "foil-*" ip saddr != $HONEYPOT_NET jump drop_spoof
+
+		# Service namespaces may only use their own /29.
+		iifname $SVC_IF ip saddr != $SVC_NET jump drop_spoof
+		iifname $FRONT_IF ip saddr != $FRONT_NET jump drop_spoof
+
+		# Nothing from the internet may claim a honeypot source address.
+		iifname $WAN_IF ip saddr $HONEYPOT_NET jump drop_spoof
+	}
+
+	# Ingress: DNAT published ports only. Anything not in the maps is left
+	# alone and lands on the host, where it meets the host's own firewall.
+	# DNAT is bound to the WAN interface, so a decoy aiming at the frontend
+	# address (hairpin) is never translated and hits the input chain instead.
+	chain nat_prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+
+		iifname $WAN_IF ip daddr $FRONTEND_V4 dnat ip to ip daddr . tcp dport map @published_tcp
+		iifname $WAN_IF ip daddr $FRONTEND_V4 dnat ip to ip daddr . udp dport map @published_udp
+	}
+
+	# Only the egress services namespace is masqueraded. Decoy addresses are
+	# never source-NATed, so a decoy packet that somehow got past the forward
+	# chain would still leave with an unroutable 10.85.0.0/16 source.
+	chain nat_postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+
+		oifname $WAN_IF ip saddr { $RESOLVER_V4, $PROXY_V4 } masquerade
+	}
+
+	# Sandboxes and service namespaces never talk to the host itself: not the
+	# gateway address, not the frontend address, not hostd, not sshd.
+	chain input {
+		type filter hook input priority filter; policy accept;
+
+		# Replies to connections the host opened (hostd health probes) only.
+		iifname "foil-*" ct state established,related accept
+		iifname "foil-*" jump drop_host
+
+		iifname $SVC_IF ct state established,related accept
+		iifname $SVC_IF jump drop_host
+
+		iifname $FRONT_IF ct state established,related accept
+		iifname $FRONT_IF jump drop_host
+
+		# Belt and braces: any honeypot source on any other interface.
+		ip saddr $HONEYPOT_NET jump drop_host
+	}
+
+	# Default deny. Every accept below is a deliberate, named path.
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+
+		ct state invalid jump drop_forward
+		ct state established,related accept
+
+		# 1. Attacker -> decoy: only connections DNATed from a published port.
+		iifname $WAN_IF oifname "foil-*" ct status dnat accept
+		iifname $WAN_IF oifname $FRONT_IF ct status dnat accept
+
+		# 2. Optional TLS frontend -> decoy, published ports only.
+		iifname $FRONT_IF oifname "foil-*" ip saddr $CADDY_V4 ip daddr . tcp dport @front_targets accept
+
+		# 3. Decoy -> logging resolver (DNS only).
+		iifname "foil-*" oifname $SVC_IF ip daddr $RESOLVER_V4 udp dport 53 accept
+		iifname "foil-*" oifname $SVC_IF ip daddr $RESOLVER_V4 tcp dport 53 accept
+
+		# 4. Decoy or frontend -> logging proxy (HTTP and CONNECT only).
+		iifname "foil-*" oifname $SVC_IF ip daddr $PROXY_V4 tcp dport $PROXY_PORT accept
+		iifname $FRONT_IF oifname $SVC_IF ip saddr $CADDY_V4 ip daddr $PROXY_V4 tcp dport $PROXY_PORT accept
+
+		# 5. Egress namespace -> internet. Never to blocked destinations.
+		iifname $SVC_IF ip daddr @blocked_dst jump drop_svc
+		iifname $SVC_IF oifname $WAN_IF ip saddr $PROXY_V4 tcp dport { 80, 443 } accept
+		iifname $SVC_IF oifname $WAN_IF ip saddr $RESOLVER_V4 ip daddr @upstream_resolvers udp dport 53 accept
+		iifname $SVC_IF oifname $WAN_IF ip saddr $RESOLVER_V4 ip daddr @upstream_resolvers tcp dport 53 accept
+
+		# Everything else is logged and dropped: decoy -> internet, decoy ->
+		# control plane, decoy -> other decoys, decoy -> metadata services,
+		# service namespaces -> anything not listed, internet -> unpublished.
+		iifname "foil-*" jump drop_egress
+		iifname $SVC_IF jump drop_svc
+		iifname $FRONT_IF jump drop_svc
+		oifname "foil-*" jump drop_inbound
+		oifname $SVC_IF jump drop_inbound
+		oifname $FRONT_IF jump drop_inbound
+		jump drop_forward
+	}
+}
