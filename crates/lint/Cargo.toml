@@ -1,0 +1,22 @@
+[package]
+name = "foiled-lint"
+description = "Validates Foiled schemas, catalogue entries and config files against their JSON Schemas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow = "1"
+jsonschema = { version = "0.59", default-features = false }
+serde_json.workspace = true
+serde_yaml_ng = "0.10"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
