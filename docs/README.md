@@ -19,6 +19,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [fingerprint-resistance.md](fingerprint-resistance.md) | Fingerprint resistance checklist, known remaining tells and the Shodan Honeyscore self-check runbook. |
 | [deploy/modes.md](deploy/modes.md) | Deployment modes (research, edge, central) and the MVP topology. |
 | [deploy/vps.md](deploy/vps.md) | Bringing up a research sensor on a VPS. |
+| [privacy-and-retention.md](privacy-and-retention.md) | Personal information in capture data, default TTLs, the purge job and metadata-only mode. |
 | [deploy/workers.md](deploy/workers.md), [deploy/cloudflare.md](deploy/cloudflare.md), [deploy/cloud-sketch.md](deploy/cloud-sketch.md) | The control plane on Workers, Cloudflare-in-front trade-offs, multi-region sketch. |
 
 ## Planned
@@ -29,7 +30,6 @@ These docs do not exist yet. Each is owned by the issue listed.
 | --- | --- | --- |
 | Remaining ADRs | One file per decision under `docs/adr/` (`NNNN-slug.md`). | #6, #9, #28, #30, #31, #41 |
 | `docs/deploy/edge-sensor.md` | Enrolling and running an edge sensor. | #31 |
-| `docs/privacy-and-retention.md` | Data retention and personal information handling. | #16 |
 | `docs/agent/protocol.md` | Protocol between the control plane and the sandbox host agent. | #41 |
 | `docs/radar.md` | Radar feed, review queue and research write-ups. | #35 |
 | `docs/compliance/licence-register.md` | Licence and data-terms compliance register. | #38 |

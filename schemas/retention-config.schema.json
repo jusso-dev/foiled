@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/retention-config.schema.json",
+  "title": "Foiled retention config",
+  "description": "Retention TTLs, payload storage, purge settings and legal holds (#16). See docs/privacy-and-retention.md. Mirrors RetentionConfig in crates/core/src/retention.rs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "store_payloads", "purge", "ttl_days", "enrichment_cache", "legal_holds"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "store_payloads": {
+      "type": "boolean",
+      "description": "Keep full request bodies and payload bytes. When false only hashes are stored."
+    },
+    "purge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "dry_run"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "When false the purge job deletes nothing."
+        },
+        "dry_run": {
+          "type": "boolean",
+          "description": "When true the purge job reports what it would delete and deletes nothing."
+        }
+      }
+    },
+    "ttl_days": {
+      "type": "object",
+      "description": "Time to live in whole days per data class. 0 means delete at the next purge run.",
+      "additionalProperties": false,
+      "required": [
+        "pcap",
+        "access_log",
+        "fs_diff",
+        "quarantine_file",
+        "quarantine_meta",
+        "attempt",
+        "forensic_snapshot",
+        "export_bundle",
+        "audit"
+      ],
+      "properties": {
+        "pcap": { "$ref": "#/$defs/days" },
+        "access_log": { "$ref": "#/$defs/days" },
+        "fs_diff": { "$ref": "#/$defs/days" },
+        "quarantine_file": { "$ref": "#/$defs/days" },
+        "quarantine_meta": { "$ref": "#/$defs/days" },
+        "attempt": { "$ref": "#/$defs/days" },
+        "forensic_snapshot": { "$ref": "#/$defs/days" },
+        "export_bundle": { "$ref": "#/$defs/days" },
+        "audit": {
+          "$ref": "#/$defs/days",
+          "minimum": 30,
+          "description": "The audit log must outlive the purge runs it records."
+        }
+      }
+    },
+    "enrichment_cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_ttl_days"],
+      "properties": {
+        "default_ttl_days": { "$ref": "#/$defs/days" },
+        "providers": {
+          "type": "object",
+          "description": "Per-provider TTL in days, keyed by provider id.",
+          "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+          "additionalProperties": { "$ref": "#/$defs/days" }
+        }
+      }
+    },
+    "legal_holds": {
+      "type": "array",
+      "description": "Decoy ids whose data the purge job must not delete.",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "days": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    }
+  }
+}

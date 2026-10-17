@@ -1,0 +1,65 @@
+# Foiled retention policy (#16).
+#
+# Read docs/privacy-and-retention.md before changing anything here. Capture
+# data can hold personal information. These defaults are a starting point,
+# not legal advice: get your own advice on what your organisation must keep
+# and for how long.
+#
+# Validated in CI against schemas/retention-config.schema.json. Parsed by the
+# purge planner in crates/core/src/retention.rs.
+
+version: 1
+
+# Keep full request bodies and payload bytes. Off by default: the capture
+# layer stores a SHA-256 of each request body instead of the body.
+store_payloads: false
+
+purge:
+  # Set to false to stop all purging (for example during an incident).
+  enabled: true
+  # First runs only report what they would delete. Read the dry-run audit
+  # records, then set this to false.
+  dry_run: true
+
+# Time to live in whole days, counted from when the control plane received
+# the item. 0 means "delete at the next purge run".
+ttl_days:
+  pcap: 14
+  access_log: 30
+  fs_diff: 30
+  quarantine_file: 30
+  quarantine_meta: 90
+  attempt: 90
+  forensic_snapshot: 7
+  export_bundle: 1
+  # Floored at 30 days by the planner so a purge never deletes its own record.
+  audit: 365
+
+enrichment_cache:
+  default_ttl_days: 7
+  # Per-provider TTL in days. Set a shorter value where a provider's terms
+  # require it, for example:
+  #   greynoise: 1
+  providers: {}
+
+# Decoy ids whose data the purge job must not delete. A legal hold should be
+# rare, short and recorded: note who asked, why and until when in your own
+# records. Remember to adjust any R2 lifecycle rule too.
+#   - decoy-0001
+legal_holds: []
+
+# Metadata-only mode. Keeps attempt rows, quarantine metadata and the audit
+# log, and drops raw evidence at the next run. Replace ttl_days above with:
+#
+# ttl_days:
+#   pcap: 0
+#   access_log: 1
+#   fs_diff: 0
+#   quarantine_file: 0
+#   quarantine_meta: 90
+#   attempt: 90
+#   forensic_snapshot: 0
+#   export_bundle: 0
+#   audit: 365
+#
+# and set a short snap length on the host capture (docs/deploy/vps.md).
