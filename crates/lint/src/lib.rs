@@ -38,6 +38,18 @@ pub const BINDINGS: &[Binding] = &[
         schema: "catalogue/schema/matcher.schema.json",
     },
     Binding {
+        data_dir: "catalogue/sequences",
+        schema: "catalogue/schema/sequence.schema.json",
+    },
+    Binding {
+        data_dir: "catalogue/advisories",
+        schema: "catalogue/schema/advisory.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/watchlist",
+        schema: "schemas/watchlist-entry.schema.json",
+    },
+    Binding {
         data_dir: "configs/confidence.yaml",
         schema: "schemas/confidence-config.schema.json",
     },

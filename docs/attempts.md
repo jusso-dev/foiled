@@ -48,7 +48,7 @@ State only moves forward: `probe` to `exploit` to `post-exploitation`.
 | YARA match | #11 | `post-exploitation` |
 | Canary used | #17 | `post-exploitation` |
 
-Matcher, YARA and canary signals are computed outside the grouping and passed in by event id, so this module never needs to know their rule formats.
+Matcher, YARA and canary signals are computed outside the grouping and passed in by event id, so this module never needs to know their rule formats. The API passes tier 1 signature hits ([exploit-attribution.md](exploit-attribution.md)) today.
 
 ## Noise score
 

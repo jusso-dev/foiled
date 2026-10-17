@@ -1,0 +1,25 @@
+# Tier 2 sequence for the synthetic FOILED-DEMO-0001 (#12). Steps describe
+# the order of an exploit chain on the wire; this is not exploit code.
+id: foiled-demo-0001-upload-chain
+cve_ids: [FOILED-DEMO-0001]
+catalogue_ids: [foiled/demo-app/1.0.0]
+max_span_ms: 600000
+steps:
+  - channel: application
+    all:
+      - field: data.method
+        op: equals
+        value: GET
+    description: Any page load first (recon of the app before the upload).
+  - matcher: foiled-demo-0001-upload-traversal
+    description: Upload whose path parameter climbs out of the upload directory.
+  - channel: hook
+    all:
+      - field: hook.hook_id
+        op: equals
+        value: demo-app.upload-path-traversal
+    description: The vulnerable write path ran (tier 3 hook).
+description: >-
+  Look around, send the traversal upload, and reach the vulnerable write path,
+  in that order and within ten minutes. Scanners that only spray the upload
+  request match tier 1 but not this sequence.

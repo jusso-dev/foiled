@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/watchlist-entry.schema.json",
+  "title": "Pre-disclosure watchlist entry (CVE mapping tier 4)",
+  "description": "Consistent, non-generic traffic against a catalogued product with no CVE yet (#12). Stored per tenant; never published by itself. When an advisory appears, entries are back-matched to it and the first_seen time is kept as evidence that Foiled saw the traffic first.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "catalogue_id",
+    "pattern",
+    "first_seen",
+    "last_seen",
+    "hits",
+    "distinct_sources",
+    "notes"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^wl-[a-z0-9-]+$"
+    },
+    "catalogue_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pattern": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/condition"
+      }
+    },
+    "first_seen": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "last_seen": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "hits": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "distinct_sources": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 2000
+    }
+  },
+  "$defs": {
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "op"
+      ],
+      "properties": {
+        "field": {
+          "type": "string",
+          "pattern": "^(data|hook)\\.[a-z_]+$"
+        },
+        "op": {
+          "enum": [
+            "equals",
+            "prefix",
+            "contains",
+            "contains_any",
+            "regex"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "case_insensitive": {
+          "type": "boolean"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "op": {
+              "const": "contains_any"
+            }
+          },
+          "required": [
+            "values"
+          ]
+        },
+        {
+          "properties": {
+            "op": {
+              "enum": [
+                "equals",
+                "prefix",
+                "contains",
+                "regex"
+              ]
+            }
+          },
+          "required": [
+            "value"
+          ]
+        }
+      ]
+    }
+  }
+}

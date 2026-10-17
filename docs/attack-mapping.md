@@ -246,7 +246,7 @@ Attempt detail shows one chip per link: the official id in mono (for example `T1
 
 ## Related
 
-- #12 CVE mapping tiers (`docs/exploit-attribution.md`, planned): CVE links on the same attempt and the `data.matcher_id` signatures.
+- #12 CVE mapping tiers ([exploit-attribution.md](exploit-attribution.md)): CVE links on the same attempt and the `data.matcher_id` signatures.
 - #25 Attempts (`docs/attempts.md`, planned): the object links hang off.
 - #27 Confidence (`docs/confidence.md`, planned): scoring, thresholds, overrides.
 - #28 LLM worker: the only path for LLM technique suggestions.
