@@ -1,0 +1,30 @@
+{
+  "kind": "attempt_cve",
+  "attempt_id": "att_000000000000000000000003",
+  "target": "CVE-2099-0001",
+  "score": 20,
+  "band": "low",
+  "wording": "we assess as",
+  "evidence": [
+    {
+      "signal_id": "llm:proposal-1",
+      "source": "llm",
+      "weight": 100,
+      "summary": "model proposed this CVE"
+    }
+  ],
+  "contributions": [
+    {
+      "source": "llm",
+      "points": 20,
+      "signal_ids": [
+        "llm:proposal-1"
+      ]
+    }
+  ],
+  "caps_applied": [],
+  "publishable": false,
+  "ui_highlight": false,
+  "auto_state_promote": false,
+  "radar_queue": false
+}

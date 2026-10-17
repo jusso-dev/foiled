@@ -20,6 +20,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         "0002_capture_events",
         include_str!("../../../migrations/postgres/0002_capture_events.sql"),
     ),
+    (
+        "0003_link_overrides",
+        include_str!("../../../migrations/postgres/0003_link_overrides.sql"),
+    ),
 ];
 
 /// Arbitrary constant key for the migration advisory lock.
@@ -331,5 +335,60 @@ pub async fn events_between(
     Ok(rows
         .iter()
         .filter_map(|r| serde_json::from_value(r.get("body")).ok())
+        .collect())
+}
+
+/// One stored analyst decision (`link_overrides`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkOverrideRow {
+    pub attempt_id: String,
+    pub kind: String,
+    pub target: String,
+    pub feedback: String,
+    pub analyst_id: String,
+    pub at: i64,
+    pub note: String,
+}
+
+pub async fn put_link_override(
+    client: &Client,
+    tenant_id: &str,
+    r: &LinkOverrideRow,
+) -> Result<(), Error> {
+    client
+        .execute(
+            "INSERT INTO link_overrides (tenant_id, attempt_id, kind, target, feedback, analyst_id, at, note)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (tenant_id, attempt_id, kind, target)
+             DO UPDATE SET feedback = $5, analyst_id = $6, at = $7, note = $8",
+            &[&tenant_id, &r.attempt_id, &r.kind, &r.target, &r.feedback, &r.analyst_id, &r.at, &r.note],
+        )
+        .await?;
+    Ok(())
+}
+
+pub async fn link_overrides(
+    client: &Client,
+    tenant_id: &str,
+    attempt_id: &str,
+) -> Result<Vec<LinkOverrideRow>, Error> {
+    let rows = client
+        .query(
+            "SELECT attempt_id, kind, target, feedback, analyst_id, at, note FROM link_overrides
+             WHERE tenant_id = $1 AND attempt_id = $2 ORDER BY kind, target",
+            &[&tenant_id, &attempt_id],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| LinkOverrideRow {
+            attempt_id: r.get("attempt_id"),
+            kind: r.get("kind"),
+            target: r.get("target"),
+            feedback: r.get("feedback"),
+            analyst_id: r.get("analyst_id"),
+            at: r.get("at"),
+            note: r.get("note"),
+        })
         .collect())
 }

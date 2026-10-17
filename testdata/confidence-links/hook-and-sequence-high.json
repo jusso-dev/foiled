@@ -1,0 +1,56 @@
+{
+  "kind": "attempt_cve",
+  "attempt_id": "att_000000000000000000000001",
+  "target": "FOILED-DEMO-0001",
+  "score": 100,
+  "band": "high",
+  "wording": "we assess as",
+  "evidence": [
+    {
+      "signal_id": "hook:demo-app.upload-path-traversal",
+      "source": "vuln_path_hook",
+      "weight": 100,
+      "summary": "vulnerable path ran"
+    },
+    {
+      "signal_id": "seq:demo-upload-chain",
+      "source": "sequence",
+      "weight": 90,
+      "summary": "probe, upload, write in order"
+    },
+    {
+      "signal_id": "catalogue:foiled/demo-app/1.0.0",
+      "source": "catalogue_prior",
+      "weight": 100,
+      "summary": "decoy stood up for this CVE"
+    }
+  ],
+  "contributions": [
+    {
+      "source": "sequence",
+      "points": 36,
+      "signal_ids": [
+        "seq:demo-upload-chain"
+      ]
+    },
+    {
+      "source": "vuln_path_hook",
+      "points": 60,
+      "signal_ids": [
+        "hook:demo-app.upload-path-traversal"
+      ]
+    },
+    {
+      "source": "catalogue_prior",
+      "points": 10,
+      "signal_ids": [
+        "catalogue:foiled/demo-app/1.0.0"
+      ]
+    }
+  ],
+  "caps_applied": [],
+  "publishable": true,
+  "ui_highlight": true,
+  "auto_state_promote": true,
+  "radar_queue": true
+}

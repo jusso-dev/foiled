@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/confidence-link.schema.json",
+  "title": "Foiled confidence link",
+  "description": "One scored link from an attempt to a CVE, technique, actor or campaign (#27). Evidence must not be empty.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "attempt_id", "target", "score", "band", "wording", "evidence", "contributions", "caps_applied", "publishable", "ui_highlight", "auto_state_promote", "radar_queue"],
+  "properties": {
+    "kind": { "enum": ["attempt_cve", "attempt_technique", "attempt_actor", "attempt_campaign"] },
+    "attempt_id": { "type": "string" },
+    "target": { "type": "string", "minLength": 1 },
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "band": { "enum": ["low", "medium", "high"] },
+    "wording": { "enum": ["we assess as", "confirmed", "possible association", "confirmed association", "possible"] },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["signal_id", "source", "weight", "summary"],
+        "properties": {
+          "signal_id": { "type": "string" },
+          "source": { "$ref": "#/$defs/source" },
+          "weight": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "summary": { "type": "string" },
+          "ref": { "type": "string" }
+        }
+      }
+    },
+    "contributions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "points", "signal_ids"],
+        "properties": {
+          "source": { "$ref": "#/$defs/source" },
+          "points": { "type": "integer" },
+          "signal_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "caps_applied": { "type": "array", "items": { "type": "string" } },
+    "override": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feedback", "analyst_id", "at", "note"],
+      "properties": {
+        "feedback": { "enum": ["true_positive", "false_positive", "unsure"] },
+        "analyst_id": { "type": "string" },
+        "at": { "type": "integer" },
+        "note": { "type": "string" }
+      }
+    },
+    "publishable": { "type": "boolean" },
+    "ui_highlight": { "type": "boolean" },
+    "auto_state_promote": { "type": "boolean" },
+    "radar_queue": { "type": "boolean" }
+  },
+  "$defs": {
+    "source": { "enum": ["rule", "sequence", "vuln_path_hook", "catalogue_prior", "vendor_desc", "predisclosure_backmatch", "enrichment", "llm", "analyst", "campaign_cluster", "noise_score"] }
+  }
+}

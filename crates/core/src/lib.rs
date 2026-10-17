@@ -11,6 +11,7 @@ pub mod audit;
 pub mod auth;
 pub mod capture;
 pub mod catalogue;
+pub mod confidence;
 pub mod decoy;
 pub mod enrichment;
 pub mod honeyscore;

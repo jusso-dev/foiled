@@ -78,6 +78,15 @@ pub struct JobRecord {
     pub leased_until: Option<i64>,
 }
 
+/// An analyst decision on one link of one attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkOverride {
+    pub attempt_id: String,
+    pub kind: foiled_core::confidence::LinkKind,
+    pub target: String,
+    pub decision: foiled_core::confidence::Override,
+}
+
 /// One source IP seen at a tenant's decoys, for the IOC export (#22, #34).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IpIocRow {
@@ -188,6 +197,16 @@ pub trait Store: Send + Sync {
         until: i64,
         limit: usize,
     ) -> StoreFuture<'_, Vec<CaptureEvent>>;
+
+    /// Analyst decisions on an attempt's links (#27).
+    fn link_overrides(
+        &self,
+        tenant_id: &str,
+        attempt_id: &str,
+    ) -> StoreFuture<'_, Vec<LinkOverride>>;
+
+    /// Record an analyst decision, replacing any earlier one for the link.
+    fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()>;
 
     /// Source IPs seen since `since` (Unix ms), oldest first.
     fn ip_iocs(&self, tenant_id: &str, since: i64) -> StoreFuture<'_, Vec<IpIocRow>>;

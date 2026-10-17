@@ -1,0 +1,28 @@
+# Confidence layer defaults (#27, docs/confidence.md). Tunable per deployment.
+# A test keeps this file equal to ConfidenceConfig::default() in foiled-core.
+version: 1
+thresholds:
+  medium: 40              # band: low below this
+  high: 70                # band: high at or above this
+  publish_min: 60         # never auto-publish below this (#13, #35)
+  ui_highlight_min: 50    # console highlights (#14)
+  auto_state_promote_min: 70
+  radar_queue_min: 40     # review queue candidates (#35)
+# points: what one full-strength signal adds; cap: most the source can add.
+# Tier order from #12: vuln_path_hook > sequence > rule (signature) >
+# vendor_desc > catalogue_prior.
+weights:
+  vuln_path_hook: { points: 60, cap: 60 }
+  sequence: { points: 40, cap: 45 }
+  rule: { points: 30, cap: 40 }
+  vendor_desc: { points: 15, cap: 15 }
+  catalogue_prior: { points: 10, cap: 10 }
+  predisclosure_backmatch: { points: 25, cap: 25 }   # below publish_min until reviewed
+  enrichment: { points: 10, cap: 15 }
+  llm: { points: 20, cap: 20 }                       # LLM can add at most 20 and never reaches high alone
+  campaign_cluster: { points: 15, cap: 20 }
+  analyst: { points: 0, cap: 0 }                     # analysts override, they do not add points
+  noise_score: { points: 0, cap: 0 }                 # applied as a penalty, see noise_max_penalty
+# A mass-scanning source (noise score 100) loses up to this many points, but
+# never below what a hook or signature established on its own.
+noise_max_penalty: 20

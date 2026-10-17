@@ -1,34 +1,42 @@
-//! Bundle `catalogue/entries/**` into the Worker as one JSON array.
+//! Bundle reviewed repository data into the Worker as JSON:
+//! - `catalogue/entries/**` (#5) as `catalogue.json`, sorted by id;
+//! - `rules/attack/*.yaml` (#26) as `attack_rules.json`, sorted by id.
 //!
-//! The catalogue is reviewed data in git, so each deploy serves exactly the
-//! entries that were merged. `foiled-lint` validates the files in CI; this
-//! script only converts YAML to JSON and sorts by id.
+//! Each deploy serves exactly what was merged. `foiled-lint` validates the
+//! files in CI; this script only converts YAML to JSON.
 
 use std::path::Path;
 
-fn main() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalogue/entries");
+fn bundle(rel: &str, out_name: &str) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel);
     println!("cargo:rerun-if-changed={}", dir.display());
-    let mut entries: Vec<serde_json::Value> = Vec::new();
+    let mut items: Vec<serde_json::Value> = Vec::new();
     if dir.exists() {
         for entry in walkdir::WalkDir::new(&dir).sort_by_file_name() {
-            let entry = entry.expect("walk catalogue");
+            let entry = entry.expect("walk");
             let path = entry.path();
             println!("cargo:rerun-if-changed={}", path.display());
             let ext = path.extension().and_then(|e| e.to_str());
             if !entry.file_type().is_file() || !matches!(ext, Some("yaml" | "yml" | "json")) {
                 continue;
             }
-            let text = std::fs::read_to_string(path).expect("read entry");
+            let text = std::fs::read_to_string(path).expect("read");
             let value: serde_json::Value = if ext == Some("json") {
-                serde_json::from_str(&text).expect("parse JSON entry")
+                serde_json::from_str(&text).expect("parse JSON")
             } else {
-                serde_yaml_ng::from_str(&text).expect("parse YAML entry")
+                serde_yaml_ng::from_str(&text).expect("parse YAML")
             };
-            entries.push(value);
+            items.push(value);
         }
     }
-    entries.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-    let out = Path::new(&std::env::var("OUT_DIR").unwrap()).join("catalogue.json");
-    std::fs::write(out, serde_json::to_vec(&entries).unwrap()).unwrap();
+    items.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    let out = Path::new(&std::env::var("OUT_DIR").unwrap()).join(out_name);
+    std::fs::write(out, serde_json::to_vec(&items).unwrap()).unwrap();
+}
+
+fn main() {
+    bundle("catalogue/entries", "catalogue.json");
+    bundle("rules/attack", "attack_rules.json");
 }

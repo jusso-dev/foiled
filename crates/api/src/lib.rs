@@ -19,6 +19,7 @@ pub mod auth;
 pub mod catalogue;
 pub mod d1_sql;
 pub mod error;
+pub mod links;
 pub mod memory;
 pub mod routes;
 pub mod store;

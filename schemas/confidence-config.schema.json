@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/confidence-config.schema.json",
+  "title": "Foiled confidence configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "thresholds", "weights", "noise_max_penalty"],
+  "properties": {
+    "version": { "const": 1 },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["medium", "high", "publish_min", "ui_highlight_min", "auto_state_promote_min", "radar_queue_min"],
+      "properties": {
+        "medium": { "$ref": "#/$defs/pct" },
+        "high": { "$ref": "#/$defs/pct" },
+        "publish_min": { "$ref": "#/$defs/pct" },
+        "ui_highlight_min": { "$ref": "#/$defs/pct" },
+        "auto_state_promote_min": { "$ref": "#/$defs/pct" },
+        "radar_queue_min": { "$ref": "#/$defs/pct" }
+      }
+    },
+    "weights": {
+      "type": "object",
+      "propertyNames": { "enum": ["rule", "sequence", "vuln_path_hook", "catalogue_prior", "vendor_desc", "predisclosure_backmatch", "enrichment", "llm", "analyst", "campaign_cluster", "noise_score"] },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["points", "cap"],
+        "properties": { "points": { "$ref": "#/$defs/pct" }, "cap": { "$ref": "#/$defs/pct" } }
+      }
+    },
+    "noise_max_penalty": { "$ref": "#/$defs/pct" }
+  },
+  "$defs": { "pct": { "type": "integer", "minimum": 0, "maximum": 100 } }
+}
