@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<title>Foiled console v2 (example data)</title>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Big+Shoulders+Stencil+Display:wght@800;900&family=Chakra+Petch:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+ --ink:#0A0A0B;--pit:#111214;--slab:#17191C;--slab2:#1E2125;--edge:#2C3036;--edge2:#3D434B;
+ --bone:#ECE6D6;--dust:#A9A396;--grit:#6E6B64;
+ --blood:#E4521B;--blood-d:#3A1609;--acid:#D7E635;--acid-d:#2B2E0B;--hazard:#F0B323;--ox:#4F9A86;--ox-d:#10251F;--alarm:#D93A2B;--alarm-d:#3B110C;
+ --disp:'Big Shoulders Display',sans-serif;--sten:'Big Shoulders Stencil Display',sans-serif;--ui:'Chakra Petch',sans-serif;--mono:'JetBrains Mono',monospace;
+ --c:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1600px;background:var(--ink);color:var(--dust);font:13px/1.4 var(--ui);
+ background-image:radial-gradient(#1C1E21 1px,transparent 1.2px);background-size:6px 6px}
+.app{display:grid;grid-template-columns:76px 1fr;grid-template-rows:40px 1fr;min-height:1320px}
+/* chamfer frame: outer = border colour, inner = fill */
+.cut{--k:var(--c);background:var(--edge);padding:1px;clip-path:polygon(var(--k) 0,100% 0,100% calc(100% - var(--k)),calc(100% - var(--k)) 100%,0 100%,0 var(--k))}
+.cut>.in{background:var(--slab);height:100%;clip-path:polygon(calc(var(--k) - .5px) 0,100% 0,100% calc(100% - var(--k) + .5px),calc(100% - var(--k) + .5px) 100%,0 100%,0 calc(var(--k) - .5px));position:relative}
+.cut.hot{background:var(--blood)}
+.cut.sm{--k:8px}
+/* top bar */
+.top{grid-column:1/3;display:flex;align-items:stretch;background:var(--pit);border-bottom:2px solid var(--edge)}
+.brand{display:flex;align-items:center;gap:10px;padding:0 18px 0 14px;background:var(--blood);color:var(--ink);clip-path:polygon(0 0,100% 0,calc(100% - 16px) 100%,0 100%);padding-right:34px}
+.glyph{width:24px;height:24px;background:var(--ink);clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px);position:relative}
+.glyph b{position:absolute;left:6px;top:4px;width:4px;height:16px;background:var(--blood)}
+.glyph i{position:absolute;left:6px;top:4px;width:12px;height:4px;background:var(--blood)}
+.glyph u{position:absolute;left:6px;top:10px;width:9px;height:3px;background:var(--blood)}
+.glyph s{position:absolute;left:-4px;top:15px;width:34px;height:2px;background:var(--ink);transform:rotate(-35deg)}
+.wm{font:900 26px/1 var(--sten);letter-spacing:.12em}
+.sys{display:flex;align-items:center;gap:0;font:500 11px var(--mono);color:var(--grit);text-transform:uppercase}
+.sys span{padding:0 16px;border-right:1px solid var(--edge);height:100%;display:flex;align-items:center;gap:6px}
+.sys b{color:var(--bone);font-weight:700}
+.sys .live b{color:var(--acid)}
+.sq{width:8px;height:8px;display:inline-block}
+.exm{margin-left:auto;display:flex;align-items:center;padding:0 18px;font:700 11px var(--mono);letter-spacing:.08em;color:var(--ink);
+ background:repeating-linear-gradient(135deg,var(--hazard) 0 10px,#1a1a1a 10px 20px)}
+.exm em{font-style:normal;background:var(--hazard);padding:3px 8px}
+/* rail */
+.rail{background:var(--pit);border-right:2px solid var(--edge);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:4px}
+.ri{width:56px;padding:8px 0 6px;text-align:center;font:600 9px var(--ui);letter-spacing:.1em;color:var(--grit);text-transform:uppercase}
+.ri .ic{width:22px;height:22px;margin:0 auto 4px;border:2px solid var(--grit);clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px)}
+.ri.on{color:var(--bone);background:var(--slab2);border-left:3px solid var(--blood)}
+.ri.on .ic{border-color:var(--blood);background:var(--blood-d)}
+.ri .n{display:block;font:700 10px var(--mono);color:var(--blood)}
+.rsep{width:36px;height:1px;background:var(--edge);margin:6px 0}
+main{padding:14px 16px;display:grid;grid-template-columns:repeat(12,1fr);gap:12px;align-content:start}
+/* labels */
+.hd{display:flex;align-items:center;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--edge)}
+.hl{font:700 12px var(--ui);letter-spacing:.16em;text-transform:uppercase;color:var(--bone)}
+.hl:before{content:'[ ';color:var(--blood)}.hl:after{content:' ]';color:var(--blood)}
+.code{font:500 10px var(--mono);color:var(--grit);letter-spacing:.06em}
+.lab{font:600 10px var(--ui);letter-spacing:.16em;text-transform:uppercase;color:var(--grit)}
+.mono{font-family:var(--mono)}
+.reg{position:absolute;width:12px;height:12px;border-color:var(--edge2);border-style:solid}
+.reg.tr{top:6px;right:6px;border-width:2px 2px 0 0}.reg.bl{bottom:6px;left:6px;border-width:0 0 2px 2px}
+/* chips */
+.chip{display:inline-flex;align-items:center;gap:6px;font:700 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:3px 9px 3px 7px;
+ clip-path:polygon(6px 0,100% 0,calc(100% - 6px) 100%,0 100%)}
+.k-crit{background:var(--alarm);color:var(--ink)}
+.k-ass{background:var(--hazard);color:var(--ink)}
+.k-conf{background:var(--ox);color:var(--ink)}
+.k-live{background:var(--acid);color:var(--ink)}
+.k-out{background:var(--slab2);color:var(--bone);box-shadow:inset 0 0 0 1px var(--edge2)}
+.k-blood{background:var(--blood);color:var(--ink)}
+/* hero */
+.hero{grid-column:span 12}
+.hero .in{background:var(--slab);display:grid;grid-template-columns:10px 1fr 330px}
+.stripe{background:repeating-linear-gradient(180deg,var(--blood) 0 12px,var(--ink) 12px 20px)}
+.hbody{padding:16px 22px 16px 20px;border-right:1px solid var(--edge)}
+.hrow{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.hrow .t{margin-left:auto;font:500 11px var(--mono);color:var(--grit)}
+.htitle{font:800 40px/1 var(--disp);color:var(--bone);text-transform:uppercase;letter-spacing:.01em;margin-bottom:6px}
+.htitle span{color:var(--blood)}
+.hsub{font:400 14px var(--ui);color:var(--dust);max-width:820px;margin-bottom:14px}
+.meta{display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--edge);border-bottom:1px solid var(--edge)}
+.meta div{padding:9px 12px;border-right:1px solid var(--edge)}
+.meta div:last-child{border-right:0}
+.meta .v{font:700 15px var(--mono);color:var(--bone);margin-top:3px}
+.meta .v.red{color:var(--blood)}
+.noise{display:flex;gap:2px;margin-top:5px}.noise i{width:10px;height:5px;background:var(--edge2)}.noise i.f{background:var(--acid)}
+.chain{display:grid;grid-template-columns:repeat(5,1fr);gap:0;margin-top:12px}
+.st{position:relative;height:40px;padding:6px 10px 0 18px;font:700 11px var(--ui);letter-spacing:.12em;color:var(--grit);background:var(--slab2);
+ clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%,12px 50%);margin-right:-8px}
+.st small{display:block;font:500 10px var(--mono);letter-spacing:0;margin-top:2px}
+.st:first-child{clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%)}
+.st.o{background:var(--blood);color:var(--ink)}.st.o small{color:#2a0f04}
+.st.w{background:#5c3a12;color:var(--hazard)}
+.st.inf{background:repeating-linear-gradient(135deg,var(--slab2) 0 6px,#2b2f34 6px 8px);color:var(--bone)}
+.hside{padding:16px 18px;display:flex;flex-direction:column;gap:10px;background:var(--pit)}
+.big{display:flex;align-items:flex-end;gap:10px}
+.big .n{font:900 72px/0.85 var(--disp);color:var(--hazard)}
+.big .u{font:700 12px var(--mono);color:var(--grit);padding-bottom:6px}
+.seg{display:grid;grid-template-columns:repeat(20,1fr);gap:2px}
+.seg i{height:16px;background:var(--edge)}.seg i.f{background:var(--hazard)}
+.scale{display:flex;justify-content:space-between;font:600 9px var(--mono);color:var(--grit);letter-spacing:.06em}
+.verdict{font:500 12px var(--ui);color:var(--bone);border-left:3px solid var(--hazard);padding:6px 10px;background:var(--slab)}
+.btns{display:flex;gap:6px;margin-top:auto}
+.b{font:700 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:7px 10px;background:var(--slab2);color:var(--bone);clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px)}
+.b.p{background:var(--blood);color:var(--ink)}
+/* stream */
+.stream{grid-column:span 8}
+table{width:100%;border-collapse:collapse}
+.tb th{font:600 10px var(--ui);letter-spacing:.16em;text-transform:uppercase;color:var(--grit);text-align:left;padding:8px 12px;border-bottom:2px solid var(--edge)}
+.tb td{padding:8px 12px;border-bottom:1px solid #222529;font-size:12.5px;color:var(--dust);vertical-align:middle}
+.tb td.m{font-family:var(--mono);font-size:12px}
+.tb tr.sel td{background:#1d1510}
+.tb tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--blood)}
+.vi{width:22px;height:22px;display:inline-grid;place-items:center;font:800 11px var(--disp);color:var(--ink);background:var(--bone);clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px);margin-right:8px;vertical-align:middle}
+.red{color:var(--blood)!important}
+.bar5{display:inline-flex;gap:2px;vertical-align:middle;margin-right:6px}.bar5 i{width:6px;height:10px;background:var(--edge2)}.bar5 i.f{background:var(--bone)}
+/* attack */
+.atk{grid-column:span 4}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:3px;padding:12px 14px 6px}
+.tac{font:700 8.5px var(--mono);color:var(--grit);text-align:center;margin-bottom:4px;height:12px}
+.cl{height:14px;margin-bottom:3px;background:#1A1C1F;box-shadow:inset 0 0 0 1px #24272B}
+.h1{background:#3A3528}.h2{background:#6B5320}.h3{background:#A0601C}.h4{background:#C9541A}.h5{background:var(--blood)}
+.hx{background-image:repeating-linear-gradient(135deg,transparent 0 3px,rgba(236,230,214,.45) 3px 4px)}
+.leg{display:flex;gap:4px;align-items:center;padding:4px 14px 12px;font:600 9px var(--mono);color:var(--grit)}
+.leg .cl{width:14px;margin:0}
+.toptech{padding:0 14px 12px}
+.toptech div{display:flex;justify-content:space-between;font:500 11.5px var(--mono);padding:4px 0;border-top:1px solid #222529;color:var(--dust)}
+.toptech b{color:var(--bone);font-weight:700}
+/* map */
+.map{grid-column:span 5}
+.mbox{position:relative;height:262px;margin:12px 14px 8px;background:var(--pit);box-shadow:inset 0 0 0 1px var(--edge)}
+.slist td{font:500 11px var(--mono);padding:5px 14px;border-top:1px solid #222529}
+/* ioc */
+.ioc{grid-column:span 7}
+.foot{grid-column:span 12;display:flex;justify-content:space-between;font:500 10.5px var(--mono);color:var(--grit);padding:2px}
+.rawpre{margin:12px 14px;padding:10px 12px;background:var(--ink);box-shadow:inset 0 0 0 1px var(--edge);font:12px/1.6 var(--mono);color:var(--dust);white-space:pre}
+.rawpre .ln{color:var(--edge2);margin-right:12px}.rd{background:var(--bone);color:var(--bone)}
+.camp{padding:6px 14px 12px}.cr{display:grid;grid-template-columns:1fr auto;gap:5px 10px;padding:8px 0;border-bottom:1px solid #222529;font-size:12.5px;color:var(--dust)}
+.cr b{font-family:var(--mono);color:var(--bone);margin-right:6px}.cbar{height:6px;background:var(--edge)}.cbar i{display:block;height:100%;background:var(--bone)}.cr .mono{font-size:10.5px;color:var(--grit);text-align:right}
+</style>
+</head>
+<body>
+<div class="app">
+ <header class="top">
+  <div class="brand"><div class="glyph"><b></b><i></i><u></u><s></s></div><div class="wm">FOILED</div></div>
+  <div class="sys">
+   <span>SYS <b>FLD-CON/0.2</b></span>
+   <span class="live"><i class="sq" style="background:var(--acid)"></i>FEED <b>LIVE</b></span>
+   <span>SENSORS <b>14/16</b></span>
+   <span>ATTEMPTS/1H <b>37</b></span>
+   <span>AEDT <b>21:58:04</b></span>
+   <span>UTC <b>10:58:04</b></span>
+  </div>
+  <div class="exm"><em>EXAMPLE DATA // NOT REAL TELEMETRY</em></div>
+ </header>
+ <nav class="rail">
+  <div class="ri on"><div class="ic"></div>Live<span class="n">37</span></div>
+  <div class="ri"><div class="ic"></div>Attempts</div>
+  <div class="ri"><div class="ic"></div>Campaign</div>
+  <div class="rsep"></div>
+  <div class="ri"><div class="ic"></div>Sandbox</div>
+  <div class="ri"><div class="ic"></div>Catalog</div>
+  <div class="rsep"></div>
+  <div class="ri"><div class="ic"></div>CVE<span class="n">9</span></div>
+  <div class="ri"><div class="ic"></div>ATT&amp;CK</div>
+  <div class="ri"><div class="ic"></div>IOC</div>
+  <div class="ri"><div class="ic"></div>Review<span class="n">4</span></div>
+  <div class="rsep"></div>
+  <div class="ri"><div class="ic"></div>MCP</div>
+ </nav>
+ <main>
+  <!-- HERO -->
+  <section class="cut hot hero" style="--k:22px"><div class="in">
+   <div class="stripe"></div>
+   <div class="hbody">
+    <div class="hrow"><span class="chip k-live">&#9632; Live</span><span class="chip k-crit">Critical</span><span class="chip k-ass">Assessed</span><span class="chip k-out">Pre-advisory · T-12d</span><span class="chip k-out">ATT-0193</span><span class="t">CAPTURED 21:56:41 AEDT · 01m 23s AGO</span></div>
+    <div class="htitle">Auth bypass <span>//</span> in-memory implant</div>
+    <div class="hsub">Spoofed dispatch header reached an upload handler without a session. Vulnerable path hook fired. No file writes followed, consistent with a memory-only implant.</div>
+    <div class="meta">
+     <div><div class="lab">Persona</div><div class="v">ExampleVPN 9.2</div></div>
+     <div><div class="lab">Source</div><div class="v red">198.51.100.42</div></div>
+     <div><div class="lab">Sensor</div><div class="v">SYD-EDGE-03</div></div>
+     <div><div class="lab">ASN · CC</div><div class="v">AS64500 · XX</div></div>
+     <div><div class="lab">Noise 2.3 · targeted</div><div class="noise"><i class="f"></i><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+    </div>
+    <div class="chain">
+     <div class="st w">RECON<small>21:52 · 2 req</small></div>
+     <div class="st w">FINGERPRINT<small>/api/version</small></div>
+     <div class="st o">EXPLOIT<small>hook · T1190</small></div>
+     <div class="st inf">IMPLANT<small>inferred · T1620</small></div>
+     <div class="st">CLEANUP<small>not seen</small></div>
+    </div>
+   </div>
+   <div class="hside">
+    <div class="lab">CVE-2026-EXAMPLE1 · confidence</div>
+    <div class="big"><div class="n">64</div><div class="u">/100<br>ASSESSED</div></div>
+    <div class="seg"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="scale"><span>SPEC</span><span>ASSESSED</span><span>PROBABLE</span><span>CONFIRMED</span></div>
+    <div class="verdict">We assess this as CVE-2026-EXAMPLE1. Not vendor-confirmed.</div>
+    <div class="btns"><span class="b p">Open attempt</span><span class="b">Evidence</span><span class="b">STIX</span></div>
+   </div>
+  </div></section>
+
+  <!-- STREAM -->
+  <section class="cut stream"><div class="in">
+   <span class="reg tr"></span>
+   <div class="hd"><span class="hl">Attempt stream</span><span class="code">FLT: SEV≥MAJOR · 24H · 412 TOTAL · 3,980 NOISE SUPPRESSED</span></div>
+   <table class="tb">
+    <tr><th>Time AEDT</th><th>Persona</th><th>Source</th><th>Assessment</th><th>Sev</th><th>Confidence</th><th>Stage</th></tr>
+    <tr class="sel"><td class="m">21:56:41</td><td><span class="vi">V</span>ExampleVPN 9.2</td><td class="m red">198.51.100.42</td><td class="m">CVE-2026-EXAMPLE1</td><td><span class="chip k-crit">Crit</span></td><td><span class="bar5"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></span><span class="mono">64</span></td><td class="m">EXPLOIT</td></tr>
+    <tr><td class="m">21:41:07</td><td><span class="vi">R</span>ExampleKV 8.6</td><td class="m red">203.0.113.77</td><td class="m">CVE-2026-EXAMPLE3</td><td><span class="chip k-blood">Major</span></td><td><span class="bar5"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i></span><span class="mono">81</span></td><td class="m">IMPACT</td></tr>
+    <tr><td class="m">21:33:52</td><td><span class="vi">G</span>ExampleGW 14.1</td><td class="m red">192.0.2.15</td><td class="m">CVE-2025-EXAMPLE2</td><td><span class="chip k-blood">Major</span></td><td><span class="bar5"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span><span class="mono">96</span></td><td class="m">POST-EXP</td></tr>
+    <tr><td class="m">21:20:18</td><td><span class="vi">C</span>Example CMS 4.1</td><td class="m red">198.51.100.9</td><td class="m ">none · recon</td><td><span class="chip k-out">Med</span></td><td><span class="bar5"><i class="f"></i><i></i><i></i><i></i><i></i></span><span class="mono">18</span></td><td class="m">FINGERPRINT</td></tr>
+    <tr><td class="m">21:12:44</td><td><span class="vi">I</span>ExamplePLC S7</td><td class="m red">203.0.113.201</td><td class="m">CVE-2024-EXAMPLE4</td><td><span class="chip k-blood">Major</span></td><td><span class="bar5"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></span><span class="mono">58</span></td><td class="m">EXPLOIT</td></tr>
+    <tr><td class="m">20:58:30</td><td><span class="vi">S</span>ExampleSSH 9.6</td><td class="m red">192.0.2.140</td><td class="m">credential spray</td><td><span class="chip k-out">Med</span></td><td><span class="bar5"><i class="f"></i><i class="f"></i><i></i><i></i><i></i></span><span class="mono">35</span></td><td class="m">ACCESS</td></tr>
+   </table>
+  </div></section>
+
+  <!-- ATTACK -->
+  <section class="cut atk"><div class="in">
+   <div class="hd"><span class="hl">ATT&amp;CK // 7D</span><span class="code">ENT-v17 · EXAMPLE</span></div>
+   <div class="grid" id="hm"></div>
+   <div class="leg">LO <span class="cl"></span><span class="cl h1"></span><span class="cl h2"></span><span class="cl h3"></span><span class="cl h4"></span><span class="cl h5"></span> HI &nbsp; <span class="cl h2 hx"></span> LLM-SUGGESTED</div>
+   <div class="toptech">
+    <div><span>T1190 Exploit public-facing app</span><b>212</b></div>
+    <div><span>T1595 Active scanning</span><b>164</b></div>
+    <div><span>T1105 Ingress tool transfer</span><b>41</b></div>
+   </div>
+  </div></section>
+
+  <!-- MAP -->
+  <section class="cut map"><div class="in">
+   <span class="reg tr"></span><span class="reg bl"></span>
+   <div class="hd"><span class="hl">Sensor grid // AU</span><span class="code">14 UP · 1 WARM · 1 COLD</span></div>
+   <div class="mbox"><svg id="mapsvg" viewBox="0 0 400 250" width="100%" height="262"></svg></div>
+   <table class="slist">
+    <tr><td style="color:var(--bone)">SYD-EDGE-03</td><td>ExampleVPN 9.2</td><td style="color:var(--ox)">WARM 41D</td><td class="red">88 HITS</td></tr>
+    <tr><td style="color:var(--bone)">CBR-WEB-01</td><td>Example CMS 4.1</td><td style="color:var(--hazard)">WARMING 2D</td><td>6 HITS</td></tr>
+   </table>
+  </div></section>
+
+  <!-- IOC -->
+  <section class="cut ioc"><div class="in">
+   <span class="reg tr"></span>
+   <div class="hd"><span class="hl">Indicators // 24H</span><span><span class="b" style="padding:4px 8px">CSV</span> <span class="b" style="padding:4px 8px">SIGMA</span> <span class="b" style="padding:4px 8px">MISP</span> <span class="b p" style="padding:4px 8px">STIX 2.1</span></span></div>
+   <table class="tb">
+    <tr><th>Type</th><th>Value (example)</th><th>Hits</th><th>Linked</th><th>Status</th><th>TLP</th></tr>
+    <tr><td><span class="chip k-out">IPV4</span></td><td class="m red">198.51.100.42</td><td class="m">4</td><td class="m">CVE-2026-EXAMPLE1</td><td><span class="chip k-ass">Assessed</span></td><td class="m" style="color:var(--hazard)">AMBER</td></tr>
+    <tr><td><span class="chip k-out">BEHAV</span></td><td class="m">recon›ver›hdr-upload›mem</td><td class="m">1</td><td class="m">CVE-2026-EXAMPLE1</td><td><span class="chip k-ass">Assessed</span></td><td class="m" style="color:var(--hazard)">AMBER</td></tr>
+    <tr><td><span class="chip k-out">URL</span></td><td class="m">hxxp://203.0.113.17:81/s2.sh</td><td class="m">27</td><td class="m">CVE-2025-EXAMPLE2</td><td><span class="chip k-conf">Confirmed</span></td><td class="m" style="color:var(--ox)">GREEN</td></tr>
+    <tr><td><span class="chip k-out">SHA256</span></td><td class="m">3f9a1c…e07b</td><td class="m">27</td><td class="m">CVE-2025-EXAMPLE2</td><td><span class="chip k-conf">Probable</span></td><td class="m" style="color:var(--ox)">GREEN</td></tr>
+    <tr><td><span class="chip k-out">UA</span></td><td class="m">probe/1</td><td class="m">140</td><td class="m">recon</td><td><span class="chip k-out">Spec</span></td><td class="m">CLEAR</td></tr>
+    <tr><td><span class="chip k-out">ACTOR</span></td><td class="m">EXAMPLE-PANDA (public cluster)</td><td class="m">2</td><td class="m">ATT-0193</td><td><span class="chip k-out">Possible</span></td><td class="m" style="color:var(--hazard)">AMBER</td></tr>
+   </table>
+  </div></section>
+
+
+  <!-- RAW -->
+  <section class="cut raw5" style="grid-column:span 5"><div class="in">
+   <div class="hd"><span class="hl">Raw capture // ATT-0193</span><span><span class="b" style="padding:4px 8px">COPY</span> <span class="b" style="padding:4px 8px">REDACT</span> <span class="b" style="padding:4px 8px">DECODE</span> <span class="b p" style="padding:4px 8px">PCAP</span></span></div>
+   <pre class="rawpre"><span class="ln">01</span>POST /api/v1/upload HTTP/1.1
+<span class="ln">02</span>Host: [redacted]
+<span class="ln">03</span>X-Internal-Dispatch: <span class="rd">████████████</span>
+<span class="ln">04</span>Content-Type: application/octet-stream
+<span class="ln">05</span>Content-Length: 4096
+<span class="ln">06</span>
+<span class="ln">07</span><span class="rd">██████████████████████████</span> <span style="color:var(--grit)">// payload withheld · example</span></pre>
+  </div></section>
+
+  <!-- CAMPAIGNS -->
+  <section class="cut" style="grid-column:span 4"><div class="in">
+   <span class="reg tr"></span>
+   <div class="hd"><span class="hl">Campaigns</span><span class="code">CLUSTERED · 7D</span></div>
+   <div class="camp">
+    <div class="cr"><div><b>CMP-07</b> edge VPN memory implants</div><span class="chip k-ass">Assessed</span><div class="cbar"><i style="width:62%"></i></div><span class="mono">3 src · 2 sensors</span></div>
+    <div class="cr"><div><b>CMP-05</b> KV store wipe after exploit</div><span class="chip k-conf">Probable</span><div class="cbar"><i style="width:81%"></i></div><span class="mono">1 src · 4 sensors</span></div>
+    <div class="cr"><div><b>CMP-02</b> stage-2 shell dropper</div><span class="chip k-conf">Confirmed</span><div class="cbar"><i style="width:96%"></i></div><span class="mono">27 src · 9 sensors</span></div>
+   </div>
+  </div></section>
+
+  <!-- LAUNCH -->
+  <section class="cut" style="grid-column:span 3"><div class="in">
+   <div class="hd"><span class="hl">Launch // MCP</span><span class="code">AGENT</span></div>
+   <pre class="rawpre" style="margin:12px 14px;font-size:11px"><span style="color:var(--grit)">&gt;</span> create_sandbox(
+   persona=<span style="color:var(--acid)">"examplevpn"</span>,
+   version=<span style="color:var(--acid)">"9.2"</span>,
+   region=<span style="color:var(--acid)">"au-syd"</span>)
+<span style="color:var(--ox)">OK</span> SBX-0412 warming · 0d</pre>
+   <div style="padding:0 14px 12px;display:flex;gap:6px"><span class="b p">Launch</span><span class="b">Catalogue</span></div>
+  </div></section>
+  <div class="foot"><span>FOILED // CONSOLE CONCEPT v2 · ALL VALUES, IPS (RFC 5737), ASN (RFC 5398), CVE IDS AND ACTOR NAMES ARE INVENTED EXAMPLES</span><span>MATTE · CHAMFERED · NO GLOW</span></div>
+ </main>
+</div>
+<script>
+// heatmap
+const tac=['RC','RD','IA','EX','PE','PR','DE','CA','DI','LM','C2','IM'];
+const lv=[[3,4,2,1,0],[0,1,0],[5,4,3,1,2,0],[4,3,2,1,0,0],[2,1,0,1],[1,0,2],[3,2,1,0,0],[2,1,0],[3,2,2,1],[0,1],[3,2,1,0],[1,2,0]];
+const hx={'4-1':1,'6-0':1,'9-1':1,'11-1':1};
+document.getElementById('hm').innerHTML=tac.map((t,i)=>'<div><div class="tac">'+t+'</div>'+Array.from({length:6},(_,j)=>{const v=lv[i][j];return v===undefined?'<div class="cl" style="opacity:.3"></div>':'<div class="cl'+(v?' h'+v:'')+(hx[i+'-'+j]?' hx':'')+'"></div>'}).join('')+'</div>').join('');
+// map
+const P=(lon,lat)=>[60+(lon-113)/41*280,25+(-10-lat)/34*205];
+const main=[[113.5,-22],[114,-26],[115,-34],[117.9,-35.1],[124,-33.9],[129,-31.6],[134,-32.5],[135.6,-34.8],[138,-35.6],[140.5,-38],[144,-38.3],[146.3,-39.1],[150,-37.5],[151.3,-33.9],[153.6,-28.2],[153,-25],[149,-21.5],[146,-18.5],[145.3,-14.9],[143.5,-14],[142.5,-10.7],[141.6,-12.9],[141.5,-17],[139.5,-17.5],[136.5,-15.8],[137,-12.2],[132.5,-11.5],[130.3,-12.5],[129,-14.9],[126,-14],[122.2,-17.5],[121,-19.5],[117,-20.6],[114.2,-21.8]];
+const tas=[[144.6,-40.7],[148.3,-40.9],[148,-43.2],[146,-43.6],[145.2,-42.2]];
+const d=a=>'M'+a.map(p=>P(...p).map(v=>v.toFixed(1)).join(' ')).join(' L')+' Z';
+let s='<defs><pattern id="ht" width="5" height="5" patternUnits="userSpaceOnUse"><rect width="2.4" height="2.4" fill="#4A4740"/></pattern></defs>';
+for(let y=8;y<250;y+=24) s+='<line x1="0" x2="400" y1="'+y+'" y2="'+y+'" stroke="#1F2226"/>';
+for(let x=8;x<400;x+=24) s+='<line y1="0" y2="250" x1="'+x+'" x2="'+x+'" stroke="#1F2226"/>';
+s+='<path d="'+d(main)+'" fill="url(#ht)" stroke="#3D434B"/><path d="'+d(tas)+'" fill="url(#ht)" stroke="#3D434B"/>';
+const sens=[[151.2,-33.9,'#4F9A86',1,'SYD-03'],[145,-37.8,'#4F9A86',0,'MEL-01'],[149.1,-35.3,'#F0B323',0,'CBR-01'],[153,-27.5,'#4F9A86',0,'BNE-02'],[115.9,-32,'#4F9A86',0,'PER-02'],[138.6,-34.9,'#6E6B64',0,'ADL-01'],[130.8,-12.5,'#4F9A86',1,'DRW-01']];
+sens.forEach(([lo,la,c,h,n])=>{const [x,y]=P(lo,la);
+ if(h){s+='<path d="M'+(x-11)+' '+(y-5)+' V'+(y-11)+' H'+(x-5)+' M'+(x+5)+' '+(y-11)+' H'+(x+11)+' V'+(y-5)+' M'+(x+11)+' '+(y+5)+' V'+(y+11)+' H'+(x+5)+' M'+(x-5)+' '+(y+11)+' H'+(x-11)+' V'+(y+5)+'" stroke="#E4521B" stroke-width="2" fill="none"/>';}
+ s+='<rect x="'+(x-4)+'" y="'+(y-4)+'" width="8" height="8" fill="'+c+'" stroke="#0A0A0B"/>';
+ const off={'SYD-03':[14,4],'MEL-01':[-46,12],'CBR-01':[-44,-6],'BNE-02':[10,3],'PER-02':[9,3],'ADL-01':[-44,4],'DRW-01':[14,4]}[n];s+='<text x="'+(x+off[0])+'" y="'+(y+off[1])+'" fill="#A9A396" font-family="JetBrains Mono" font-size="8.5">'+n+'</text>';});
+s+='<text x="8" y="16" fill="#6E6B64" font-family="JetBrains Mono" font-size="9">GRID AU-01 · ENLARGED · +3 OFFSHORE (EXAMPLE)</text>';
+document.getElementById('mapsvg').innerHTML=s;
+</script>
+</body>
+</html>

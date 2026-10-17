@@ -10,11 +10,15 @@ The idea: if you expose "Product X at version Y, which is affected by CVE Z", th
 
 ## Status
 
-Planning. There is no code yet. The design and roadmap live in the issues:
+Planning. There is no product code yet. Design and roadmap live in issues and docs:
 
 - Roadmap and tracking: https://github.com/jusso-dev/foiled/issues/23
 - MVP scope: https://github.com/jusso-dev/foiled/milestone/1
 - All issues: https://github.com/jusso-dev/foiled/issues
+- Research landscape: [docs/research/landscape.md](docs/research/landscape.md)
+- Lessons from commercial platforms: [docs/research/lessons.md](docs/research/lessons.md)
+- Design direction: [docs/design/design-direction.md](docs/design/design-direction.md)
+- Dashboard target (v3, chosen): [docs/design/mockup-v3.png](docs/design/mockup-v3.png) ([HTML](docs/design/mockup-v3.html)). Earlier explorations: [v1](docs/design/mockup.png), [v2](docs/design/mockup-v2.png)
 
 ## Safety
 
@@ -22,4 +26,4 @@ This project deliberately runs vulnerable software. The design treats containmen
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Third-party honeypot modules shipped as separate container images keep their own licences; see the landscape doc and the compliance register issue.
