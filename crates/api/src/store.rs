@@ -78,6 +78,19 @@ pub struct JobRecord {
     pub leased_until: Option<i64>,
 }
 
+/// One source IP seen at a tenant's decoys, for the IOC export (#22, #34).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IpIocRow {
+    pub ip: String,
+    pub first_seen: i64,
+    pub last_seen: i64,
+    pub events: i64,
+    pub decoy_ids: Vec<String>,
+    pub catalogue_ids: Vec<String>,
+    /// CVE or FOILED-DEMO ids from hook events this source triggered.
+    pub hook_cves: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DecoyQuery {
     pub state: Option<DecoyState>,
@@ -165,6 +178,9 @@ pub trait Store: Send + Sync {
         bump_generation: bool,
         now: i64,
     ) -> StoreFuture<'_, bool>;
+
+    /// Source IPs seen since `since` (Unix ms), oldest first.
+    fn ip_iocs(&self, tenant_id: &str, since: i64) -> StoreFuture<'_, Vec<IpIocRow>>;
 
     fn record_heartbeat(
         &self,

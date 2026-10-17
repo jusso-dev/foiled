@@ -1,0 +1,23 @@
+# Tier 1 signature for the synthetic FOILED-DEMO-0001 (#12, #22). Describes
+# the request shape only; it is not exploit code.
+id: foiled-demo-0001-upload-traversal
+tier: signature
+cve_ids: [FOILED-DEMO-0001]
+catalogue_ids: [foiled/demo-app/1.0.0]
+channel: application
+auth_requirement: unauth
+all:
+  - field: data.method
+    op: equals
+    value: POST
+  - field: data.path
+    op: prefix
+    value: /api/upload
+  - field: data.path
+    op: contains_any
+    case_insensitive: true
+    values: ["../", "..%2f", "%2e%2e/", "%2e%2e%2f", "..\\", "path=/"]
+description: >-
+  Upload request whose path parameter climbs out of the upload directory or is
+  absolute. A probe can match this too; on its own it supports "we assess as",
+  and the hook (tier 3) is the stronger signal.

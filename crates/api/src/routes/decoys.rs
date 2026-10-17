@@ -442,11 +442,17 @@ pub(crate) fn decoy_params(
         }
         None => None,
     };
+    let image = match &entry.artefact {
+        Some(Artefact::Sandbox(a)) => a.image.clone(),
+        Some(Artefact::Module(a)) => a.image.clone(),
+        _ => None,
+    };
     serde_json::to_value(foiled_core::agent::DecoyParams {
         catalogue_id: entry.id.clone(),
         decoy_kind: entry.decoy_kind,
         generation,
         artefact,
+        image,
         listen_ports: entry.listen_ports.clone(),
         hard_deadline,
     })

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/catalogue/schema/matcher.schema.json",
+  "title": "Foiled matcher (CVE mapping tier 1)",
+  "description": "A curated needle that ties capture events to a CVE (#12). Matchers describe what an exploit attempt looks like on the wire. They never contain working exploit code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "tier", "cve_ids", "catalogue_ids", "channel", "all", "description"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "tier": { "const": "signature" },
+    "cve_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^(CVE-[0-9]{4}-[0-9]{4,}|FOILED-DEMO-[0-9]{4})$" }
+    },
+    "catalogue_ids": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "channel": { "enum": ["application", "network", "hook", "dns", "egress"] },
+    "auth_requirement": { "enum": ["unauth", "auth", "either"] },
+    "all": {
+      "description": "Every condition must hold.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/condition" }
+    },
+    "description": { "type": "string", "minLength": 1 },
+    "references": { "type": "array", "items": { "type": "string", "pattern": "^https://" } }
+  },
+  "$defs": {
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "op"],
+      "properties": {
+        "field": { "type": "string", "pattern": "^(data|hook)\\.[a-z_]+$" },
+        "op": { "enum": ["equals", "prefix", "contains", "contains_any", "regex"] },
+        "value": { "type": ["string", "number"] },
+        "values": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "case_insensitive": { "type": "boolean" }
+      },
+      "oneOf": [
+        { "properties": { "op": { "const": "contains_any" } }, "required": ["values"] },
+        { "properties": { "op": { "enum": ["equals", "prefix", "contains", "regex"] } }, "required": ["value"] }
+      ]
+    }
+  }
+}

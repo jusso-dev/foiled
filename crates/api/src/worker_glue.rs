@@ -26,7 +26,8 @@ use crate::auth::ClientCert;
 use crate::d1_sql as sql;
 use crate::routes::ingest::UploadConfig;
 use crate::store::{
-    AuditQuery, DecoyQuery, IdentityRecord, JobRecord, Store, StoreError, StoreFuture, TokenRecord,
+    AuditQuery, DecoyQuery, IdentityRecord, IpIocRow, JobRecord, Store, StoreError, StoreFuture,
+    TokenRecord,
 };
 use crate::{AppState, router};
 
@@ -696,6 +697,26 @@ impl Store for CfStore {
                 .await
                 .map_err(err)?;
             Ok(())
+        })
+    }
+
+    fn ip_iocs(&self, tenant_id: &str, since: i64) -> StoreFuture<'_, Vec<IpIocRow>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            let rows = foiled_pg::ip_iocs(&client, &t, since).await.map_err(err)?;
+            Ok(rows
+                .into_iter()
+                .map(|r| IpIocRow {
+                    ip: r.ip,
+                    first_seen: r.first_seen,
+                    last_seen: r.last_seen,
+                    events: r.events,
+                    decoy_ids: r.decoy_ids,
+                    catalogue_ids: r.catalogue_ids,
+                    hook_cves: r.hook_cves,
+                })
+                .collect())
         })
     }
 }

@@ -10,7 +10,7 @@ The idea: if you expose "Product X at version Y, which is affected by CVE Z", th
 
 ## Start here
 
-- MVP slice, the first thing we are building: [#22](https://github.com/jusso-dev/foiled/issues/22)
+- MVP slice: [#22](https://github.com/jusso-dev/foiled/issues/22), runnable in a lab today: [docs/mvp-walkthrough.md](docs/mvp-walkthrough.md)
 - Threat model: [docs/threat-model.md](docs/threat-model.md)
 - How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Reporting a vulnerability or sandbox escape: [SECURITY.md](SECURITY.md)

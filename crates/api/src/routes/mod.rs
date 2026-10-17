@@ -3,6 +3,7 @@
 pub mod audit;
 pub mod catalogue;
 pub mod decoys;
+pub mod exports;
 pub mod hosts;
 pub mod ingest;
 

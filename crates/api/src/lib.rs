@@ -119,6 +119,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/v0/audit", routes::audit::router())
         .merge(routes::ingest::router())
         .merge(routes::hosts::router())
+        .merge(routes::exports::router())
         .fallback(|| async { error::ApiError::not_found("route") })
         .with_state(state)
 }

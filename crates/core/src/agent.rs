@@ -89,6 +89,11 @@ pub struct DecoyParams {
     /// `module:<id>/<profile>@sha256:<hex>`. `None` when the catalogue entry
     /// has no pinned artefact yet; the host refuses such a job.
     pub artefact: Option<String>,
+    /// Full image reference pinned by digest (`registry/repo@sha256:<hex>`)
+    /// for sandbox and module decoys, so the runtime can pull exactly the
+    /// allow-listed artefact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     pub listen_ports: Vec<ListenPort>,
     /// Unix ms: the host freezes the decoy at this time even if the control
     /// plane is unreachable (ADR 0002).

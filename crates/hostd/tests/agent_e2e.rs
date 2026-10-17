@@ -94,6 +94,7 @@ fn agent(base: &str, dir: &std::path::Path, allow: &[&str]) -> (Agent, Arc<FakeR
         publicly_exposed: true,
         kvm_present: false,
         state_dir: dir.to_path_buf(),
+        decoys: Default::default(),
     };
     (agent, runtime)
 }

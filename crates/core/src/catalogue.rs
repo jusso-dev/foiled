@@ -158,6 +158,9 @@ pub struct CatalogueEntry {
     pub banner_hints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expected_techniques: Vec<String>,
+    /// Tier 1 signature ids under `catalogue/matchers/` (#12).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub matchers: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instrumentation_hooks: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

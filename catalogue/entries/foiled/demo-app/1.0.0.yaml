@@ -29,6 +29,8 @@ banner_hints:
 expected_techniques:
   - T1190
   - T1505.003
+matchers:
+  - foiled-demo-0001-upload-traversal
 instrumentation_hooks:
   - demo-app.upload-path-traversal
 canary_slots:

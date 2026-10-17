@@ -276,3 +276,72 @@ async fn upload_urls_are_scoped_to_one_object() {
         StatusCode::BAD_REQUEST
     );
 }
+
+#[tokio::test]
+async fn ingested_sources_appear_in_the_ioc_csv() {
+    let h = harness().await;
+    let mut hook = event(&h.decoy, 9);
+    hook["channel"] = json!("hook");
+    hook["severity"] = json!("high");
+    hook["hook"] = json!({
+        "hook_id": "demo-app.upload-path-traversal",
+        "catalogue_id": "foiled/demo-app/1.0.0",
+        "cve_id": "FOILED-DEMO-0001",
+        "stage": "trigger",
+        "sequence_no": 1,
+        "t_offset_ms": 0
+    });
+    let (s, _) = call_as(
+        &h,
+        1,
+        "/v0/ingest/events",
+        json!({"events": [event(&h.decoy, 1), hook]}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+
+    let req = Request::get("/v0/exports/iocs.csv")
+        .header("authorization", format!("Bearer fo_admin1.{SECRET}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = router(h.state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "text/csv; charset=utf-8");
+    let csv =
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    let mut lines = csv.lines();
+    assert!(
+        lines
+            .next()
+            .unwrap()
+            .starts_with("indicator_type,indicator,")
+    );
+    let row = lines.next().unwrap();
+    assert!(row.starts_with("ipv4,203.0.113.7,"), "{row}");
+    assert!(row.contains(",2,"), "two events: {row}");
+    assert!(row.ends_with(",FOILED-DEMO-0001"), "{row}");
+    assert!(lines.next().is_none());
+
+    // Hosts cannot export, and without a bearer token there is no access.
+    let (s, _) = {
+        let mut req = Request::get("/v0/exports/iocs.csv")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ClientCert {
+            verified: true,
+            sha256: cert(1),
+        });
+        let res = router(h.state.clone()).oneshot(req).await.unwrap();
+        (res.status(), ())
+    };
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let res = router(h.state.clone())
+        .oneshot(
+            Request::get("/v0/exports/iocs.csv")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}

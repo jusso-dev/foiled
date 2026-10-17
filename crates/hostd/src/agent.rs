@@ -21,6 +21,8 @@ pub struct Agent {
     pub publicly_exposed: bool,
     pub kvm_present: bool,
     pub state_dir: std::path::PathBuf,
+    /// Run parameters of decoys this agent built, for log capture.
+    pub decoys: std::collections::HashMap<String, foiled_core::agent::DecoyParams>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -39,9 +41,21 @@ impl Agent {
                 Ok(job) => {
                     report.executed += 1;
                     let rt = self.runtime.clone();
-                    tokio::task::spawn_blocking(move || executor::execute(rt.as_ref(), &job))
-                        .await
-                        .map_err(|e| ClientError::Unavailable(e.to_string()))?
+                    let (decoy_id, params) = (job.decoy_id.clone(), job.decoy.clone());
+                    let result =
+                        tokio::task::spawn_blocking(move || executor::execute(rt.as_ref(), &job))
+                            .await
+                            .map_err(|e| ClientError::Unavailable(e.to_string()))?;
+                    match (result.decoy_state, params) {
+                        (Some(foiled_core::decoy::DecoyState::Healthy), Some(p)) => {
+                            self.decoys.insert(decoy_id, p);
+                        }
+                        (Some(foiled_core::decoy::DecoyState::Destroyed), _) => {
+                            self.decoys.remove(&decoy_id);
+                        }
+                        _ => {}
+                    }
+                    result
                 }
                 Err(rejection) => {
                     report.rejected += 1;

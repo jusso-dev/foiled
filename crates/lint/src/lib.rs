@@ -32,6 +32,10 @@ pub const BINDINGS: &[Binding] = &[
         schema: "catalogue/schema/entry.schema.json",
     },
     Binding {
+        data_dir: "catalogue/matchers",
+        schema: "catalogue/schema/matcher.schema.json",
+    },
+    Binding {
         data_dir: "configs/retention.yaml",
         schema: "schemas/retention-config.schema.json",
     },
@@ -262,6 +266,14 @@ fn check_catalogue(root: &Path, report: &mut Report) -> Result<()> {
                 path: rel.clone(),
                 message: problem.to_string(),
             });
+        }
+        for m in &parsed.matchers {
+            if !root.join(format!("catalogue/matchers/{m}.yaml")).exists() {
+                report.findings.push(Finding {
+                    path: rel.clone(),
+                    message: format!("matcher {m} not found in catalogue/matchers/"),
+                });
+            }
         }
         if parsed.status == EntryStatus::Verified {
             let required = match &parsed.artefact {
