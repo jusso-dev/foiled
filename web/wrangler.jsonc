@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Operator console Worker. Calls the API Worker over a Service Binding (ADR 0009).
+  // No account IDs, zone names or routes live in this public file.
+  "name": "foiled-web",
+  "main": "./workers/app.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "services": [{ "binding": "API", "service": "foiled-api" }]
+}
