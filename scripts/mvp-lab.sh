@@ -20,8 +20,18 @@ PIDS=()
 
 log() { printf '\n== %s\n' "$*"; }
 
+diagnose() {
+  echo "---- diagnostics" >&2
+  docker ps -a --filter label=foiled.decoy >&2
+  for c in $(docker ps -aq --filter label=foiled.decoy); do docker logs "$c" 2>&1 | tail -20 >&2; done
+  tail -20 "$WORK/hostd.log" >&2 2>/dev/null
+  tail -5 "$WORK/mock.log" >&2 2>/dev/null
+}
+
 cleanup() {
+  local status=$?
   set +e
+  [ "$status" -ne 0 ] && diagnose
   for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done
   docker ps -aq --filter label=foiled.decoy | xargs -r docker rm -f >/dev/null
   docker rm -f foiled-registry >/dev/null 2>&1
