@@ -240,7 +240,7 @@ Negative and costs:
 
 ## Related decisions
 
-- `docs/adr/0002-sandbox-runtime.md` (#3)
+- [ADR 0002: Sandbox and emulation runtime](0002-sandbox-runtime.md) (#3)
 - `docs/adr/0003-network-isolation.md` (#4)
 - `docs/adr/0004-image-builder.md` (#6)
 - `docs/adr/0005-capture-layer.md` (#9)
