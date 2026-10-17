@@ -64,6 +64,7 @@ Proposed names. The owning issue finalises each one.
 | `foiled-api` | `TOKEN_PEPPER` | #21 | Pepper for hashing API tokens at rest in D1. |
 | `foiled-api` | One secret per enrichment provider | #11 | Provider API keys. Names set in #11. |
 | `foiled-api` | `LLM_PROVIDER_API_KEY` (if an external model is used) | #28 | Key for an external model behind AI Gateway. |
+| `foiled-api` | `SHODAN_API_KEY` (optional) | #18 | Operator-supplied Shodan key for the Honeyscore self-check. Only set it if you enable the check ([fingerprint-resistance.md](../fingerprint-resistance.md)). |
 | `foiled-web` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #14 | Same Access check in the console Worker. |
 
 Postgres credentials are not a Worker secret: they live in the Hyperdrive configuration, set when you create it.

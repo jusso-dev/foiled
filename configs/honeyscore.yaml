@@ -1,0 +1,18 @@
+# Shodan Honeyscore self-check (#18). Runbook: docs/fingerprint-resistance.md.
+# Parsed by foiled_core::honeyscore::HoneyscoreConfig.
+#
+# Off by default. To turn it on, set enabled: true and store your own Shodan key
+# as the API Worker secret named below (wrangler secret put SHODAN_API_KEY).
+# Never put the key in this file, in wrangler.jsonc or in CI.
+
+# The check makes no calls unless this is true.
+enabled: false
+
+# How often each public decoy IP is checked: daily or weekly.
+cadence: daily
+
+# Scores at or above this raise honeyscore_high and rotate the decoy with a new IP.
+threshold: 0.5
+
+# Name of the Worker secret or environment variable that holds the key. Name only.
+api_key_env: SHODAN_API_KEY
