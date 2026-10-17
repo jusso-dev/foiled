@@ -1,0 +1,15 @@
+{
+  "attempt_id": "atm-demo-1",
+  "attack_version": "20.0",
+  "technique_id": "T1059",
+  "subtechnique_id": "T1059.004",
+  "matched_signals": [
+    {
+      "rule_id": "t1059-004-hook-shell",
+      "event_id": "atk-demo-03",
+      "weight": 80,
+      "summary": "Unix shell command ran after the vulnerable path fired"
+    }
+  ],
+  "max_weight": 80
+}

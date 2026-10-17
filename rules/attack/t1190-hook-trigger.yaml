@@ -1,0 +1,12 @@
+id: t1190-hook-trigger
+technique: T1190
+weight: 85
+evidence_summary: Vulnerable-path hook fired on a public-facing decoy
+description: >-
+  A #32 hook only fires when a request reaches the vulnerable code, so a
+  trigger-stage hook event is strong evidence of exploitation of the exposed
+  application.
+channels: [hook]
+all:
+  - field: hook.stage
+    equals: trigger

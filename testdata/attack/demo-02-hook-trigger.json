@@ -1,0 +1,20 @@
+{
+  "event_id": "atk-demo-02",
+  "ts": 1792285323012,
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "decoy_kind": "sandbox",
+  "channel": "hook",
+  "severity": "high",
+  "src": { "ip": "203.0.113.7", "port": 51234 },
+  "attempt_id": "atm-demo-1",
+  "hook": {
+    "hook_id": "demo-app.upload-path-traversal",
+    "catalogue_id": "foiled/demo-app/1.0.0",
+    "cve_id": "FOILED-DEMO-0001",
+    "stage": "trigger",
+    "sequence_no": 1,
+    "t_offset_ms": 12,
+    "file_writes": ["/app/handler.py"]
+  }
+}

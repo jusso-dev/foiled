@@ -1,0 +1,20 @@
+{
+  "event_id": "atk-demo-01",
+  "ts": 1792285323000,
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "decoy_kind": "sandbox",
+  "generation": 1,
+  "channel": "application",
+  "severity": "medium",
+  "src": { "ip": "203.0.113.7", "port": 51234 },
+  "dst": { "ip": "10.85.1.2", "port": 8080 },
+  "attempt_id": "atm-demo-1",
+  "data": {
+    "method": "POST",
+    "path": "/api/upload?path=../../../app/handler.py",
+    "status": 201,
+    "user_agent": "curl/8.0",
+    "matcher_id": "foiled-demo-0001.upload-traversal"
+  }
+}

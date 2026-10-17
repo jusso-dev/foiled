@@ -1,0 +1,25 @@
+id: t1496-001-miner-strings
+technique: T1496.001
+weight: 70
+evidence_summary: Cryptocurrency miner name or mining pool protocol in attacker input
+description: >-
+  xmrig and stratum pool URLs are strong markers of compute hijacking for
+  mining. Matched in hook command lines, emulator command arguments, module
+  shell input and egress hosts.
+any:
+  - field: hook.cmd_lines
+    contains_any: &miner_needles
+      - xmrig
+      - "stratum+tcp://"
+      - "stratum+ssl://"
+      - "stratum2+tcp://"
+    ignore_case: true
+  - field: data.args
+    contains_any: *miner_needles
+    ignore_case: true
+  - field: data.input
+    contains_any: *miner_needles
+    ignore_case: true
+  - field: data.url
+    contains_any: *miner_needles
+    ignore_case: true

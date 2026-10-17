@@ -1,0 +1,13 @@
+{
+  "event_id": "atk-ssh-04",
+  "ts": 1792285409000,
+  "decoy_id": "dcy-cowrie-1",
+  "catalogue_id": "module/cowrie/2.6",
+  "decoy_kind": "emulation",
+  "channel": "application",
+  "severity": "medium",
+  "src": { "ip": "203.0.113.99", "port": 55104 },
+  "dst": { "ip": "10.85.1.20", "port": 22 },
+  "attempt_id": "atm-ssh-1",
+  "data": { "protocol": "ssh", "eventid": "cowrie.command.input", "input": "masscan 10.0.0.0/8 -p6379 --rate 10000" }
+}

@@ -1,0 +1,21 @@
+id: t1505-003-web-root-write
+technique: T1505.003
+weight: 70
+evidence_summary: File written under a web server's served or code directory
+description: >-
+  A write into a directory the web server serves or loads code from is how
+  web shells land. Hook file_writes cover sandboxes with #32 hooks; data.path
+  covers filesystem diffs and emulator virtual FS writes.
+channels: [hook, filesystem]
+any:
+  - field: hook.file_writes
+    prefix_any: &web_roots
+      - /var/www/
+      - /srv/www/
+      - /srv/http/
+      - /usr/share/nginx/html/
+      - /usr/local/tomcat/webapps/
+      - /opt/tomcat/webapps/
+      - /app/
+  - field: data.path
+    prefix_any: *web_roots

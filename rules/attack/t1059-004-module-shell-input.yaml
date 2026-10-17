@@ -1,0 +1,11 @@
+id: t1059-004-module-shell-input
+technique: T1059.004
+weight: 50
+evidence_summary: Command typed into an emulated Unix shell
+description: >-
+  Shell input recorded by the Cowrie module (#30). The shell is emulated, so
+  this shows intent to run shell commands rather than real execution.
+channels: [application]
+all:
+  - field: data.eventid
+    equals: cowrie.command.input

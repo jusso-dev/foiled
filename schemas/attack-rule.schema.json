@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/attack-rule.schema.json",
+  "title": "Foiled ATT&CK mapping rule",
+  "description": "One rule under rules/attack/ that maps capture envelopes (schemas/capture-event.schema.json) to an ATT&CK technique id (#26). Mirrored by foiled_core::attack::AttackRule. See docs/attack-mapping.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "technique", "weight", "evidence_summary"],
+  "anyOf": [{ "required": ["all"] }, { "required": ["any"] }],
+  "properties": {
+    "id": {
+      "description": "Stable rule id. Must equal the file name without .yaml.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*$",
+      "maxLength": 64
+    },
+    "technique": {
+      "description": "Official ATT&CK id from the pinned version, technique or sub-technique. Must exist in data/attack/techniques.json.",
+      "type": "string",
+      "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$"
+    },
+    "weight": {
+      "description": "Signal strength 0-100 handed to the confidence layer (#27). Not a confidence score on its own.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "evidence_summary": {
+      "description": "One line shown in the evidence list and explainability panel.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": { "type": "string" },
+    "channels": {
+      "description": "If set, the event channel must be one of these.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["network", "application", "filesystem", "process", "quarantine", "hook", "dns", "egress"] }
+    },
+    "all": {
+      "description": "Every condition must hold.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/condition" }
+    },
+    "any": {
+      "description": "At least one condition must hold.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/condition" }
+    }
+  },
+  "$defs": {
+    "needle": { "type": "string", "minLength": 1 },
+    "needles": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/needle" }
+    },
+    "condition": {
+      "description": "A test on one envelope field. List fields (hook.cmd_lines, hook.file_writes, array values under data) match when any element matches. A missing field never matches, except exists: false.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "pattern": "^(channel|decoy_kind|catalogue_id|severity|hook\\.(hook_id|catalogue_id|cve_id|stage|cmd_lines|file_writes|implant_refs|notes)|data\\.[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*)$"
+        },
+        "equals": { "type": "string" },
+        "contains": { "$ref": "#/$defs/needle" },
+        "prefix": { "$ref": "#/$defs/needle" },
+        "contains_any": { "$ref": "#/$defs/needles" },
+        "prefix_any": { "$ref": "#/$defs/needles" },
+        "exists": { "type": "boolean" },
+        "ignore_case": {
+          "description": "Compare ASCII case-insensitively.",
+          "type": "boolean"
+        }
+      },
+      "oneOf": [
+        { "required": ["equals"] },
+        { "required": ["contains"] },
+        { "required": ["prefix"] },
+        { "required": ["contains_any"] },
+        { "required": ["prefix_any"] },
+        { "required": ["exists"] }
+      ]
+    }
+  }
+}

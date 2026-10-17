@@ -1,0 +1,12 @@
+id: t1105-egress-download
+technique: T1105
+weight: 60
+evidence_summary: Decoy tried to download a file through the egress proxy
+description: >-
+  Any GET from inside a decoy to the outside, allowed or blocked by the
+  egress proxy (ADR 0003), is a tool or payload transfer attempt. Decoys make
+  no outbound requests of their own.
+channels: [egress]
+all:
+  - field: data.method
+    equals: GET

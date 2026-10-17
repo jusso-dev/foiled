@@ -1,0 +1,12 @@
+id: t1110-001-ssh-login-failed
+technique: T1110.001
+weight: 30
+evidence_summary: Failed password login on an SSH or Telnet decoy
+description: >-
+  One failed login is weak on its own. Repeated failures across the attempt
+  add matched signals to the same link, and the confidence layer (#27) scores
+  the count.
+channels: [application]
+all:
+  - field: data.eventid
+    equals: cowrie.login.failed
