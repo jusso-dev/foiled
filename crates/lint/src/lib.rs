@@ -113,14 +113,29 @@ pub fn run(root: &Path, bindings: &[Binding]) -> Result<Report> {
     for binding in bindings {
         let schema_path = root.join(binding.schema);
         let data_dir = root.join(binding.data_dir);
-        if !schema_path.exists() || !data_dir.exists() {
+        if !data_dir.exists() {
+            continue;
+        }
+        if !schema_path.exists() {
+            report.findings.push(Finding {
+                path: PathBuf::from(binding.data_dir),
+                message: format!("data files exist but schema {} is missing", binding.schema),
+            });
             continue;
         }
         let schema = load(&schema_path)?;
         let validator = match jsonschema::validator_for(&schema) {
             Ok(v) => v,
-            // Already reported by the meta-schema pass.
-            Err(_) => continue,
+            Err(e) => {
+                report.findings.push(Finding {
+                    path: PathBuf::from(binding.schema),
+                    message: format!(
+                        "cannot build validator, {} not checked: {e}",
+                        binding.data_dir
+                    ),
+                });
+                continue;
+            }
         };
         for entry in WalkDir::new(&data_dir).sort_by_file_name() {
             let entry = entry?;
@@ -224,12 +239,40 @@ mod tests {
     }
 
     #[test]
-    fn missing_schema_skips_binding() {
+    fn binding_with_neither_schema_nor_data_is_skipped() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "entries/a.json", r#"{"anything": true}"#);
         let report = run(dir.path(), &binding()).unwrap();
         assert!(report.findings.is_empty());
         assert_eq!(report.files_checked, 0);
+    }
+
+    #[test]
+    fn data_without_schema_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "entries/a.json", r#"{"anything": true}"#);
+        let report = run(dir.path(), &binding()).unwrap();
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        assert!(report.findings[0].message.contains("is missing"));
+    }
+
+    #[test]
+    fn unresolvable_schema_ref_fails_instead_of_skipping() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "schema/entry.schema.json",
+            r#"{"$ref": "https://example.invalid/other.schema.json"}"#,
+        );
+        write(dir.path(), "entries/a.json", r#"{"id":"x"}"#);
+        let report = run(dir.path(), &binding()).unwrap();
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.message.contains("cannot build validator")),
+            "{:?}",
+            report.findings
+        );
     }
 
     #[test]
