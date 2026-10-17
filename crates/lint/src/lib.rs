@@ -1,11 +1,14 @@
 //! Repository lint for Foiled data files.
 //!
-//! Two checks run over the repository root:
+//! Checks run over the repository root:
 //!
 //! 1. Every `*.schema.json` file is valid JSON and a valid JSON Schema.
 //! 2. Every data file in a directory listed in [`BINDINGS`] validates against
 //!    the schema bound to that directory. A binding may also name a single
 //!    file. JSON and YAML are both accepted.
+//! 3. Catalogue entries pass the checks a schema cannot express.
+//! 4. `configs/contribute-back.yaml`, if present, parses as a
+//!    [`SharePolicy`] and has no policy problems (#37).
 //!
 //! A binding whose schema file does not exist yet is skipped, so the lint can
 //! land before the schemas it will police.
@@ -15,10 +18,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use foiled_core::catalogue::{Artefact, CatalogueEntry, EntryStatus};
+use foiled_core::share::SharePolicy;
 use serde_json::Value;
 use walkdir::WalkDir;
 
 const CATALOGUE_ENTRIES: &str = "catalogue/entries";
+const CONTRIBUTE_BACK: &str = "configs/contribute-back.yaml";
 
 /// Data to schema bindings, relative to the repository root.
 pub const BINDINGS: &[Binding] = &[
@@ -174,7 +179,36 @@ pub fn run(root: &Path, bindings: &[Binding]) -> Result<Report> {
     }
 
     check_catalogue(root, &mut report)?;
+    check_contribute_back(root, &mut report);
     Ok(report)
+}
+
+/// The contribute-back policy must parse into the type the API Worker and
+/// agents load, and must pass its own rules (#37).
+fn check_contribute_back(root: &Path, report: &mut Report) {
+    let path = root.join(CONTRIBUTE_BACK);
+    if !path.exists() {
+        return;
+    }
+    report.files_checked += 1;
+    let rel = PathBuf::from(CONTRIBUTE_BACK);
+    let parsed = load(&path).and_then(|v| {
+        serde_json::from_value::<SharePolicy>(v).context("not a contribute-back policy")
+    });
+    match parsed {
+        Err(e) => report.findings.push(Finding {
+            path: rel,
+            message: format!("{e:#}"),
+        }),
+        Ok(policy) => {
+            for problem in policy.problems() {
+                report.findings.push(Finding {
+                    path: rel.clone(),
+                    message: problem,
+                });
+            }
+        }
+    }
 }
 
 /// Catalogue checks the schema cannot express: id matches path, artefact
@@ -427,6 +461,47 @@ mod tests {
         let report = run(dir.path(), &single).unwrap();
         assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
         assert!(report.findings[0].path.ends_with("configs/one.yaml"));
+    }
+
+    #[test]
+    fn shipped_contribute_back_policy_matches_code_defaults() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let value = load(&root.join(CONTRIBUTE_BACK)).unwrap();
+        let policy: SharePolicy = serde_json::from_value(value).unwrap();
+        assert_eq!(policy, SharePolicy::default());
+        assert!(policy.problems().is_empty(), "{:?}", policy.problems());
+    }
+
+    #[test]
+    fn contribute_back_policy_problems_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let shipped = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(CONTRIBUTE_BACK),
+        )
+        .unwrap();
+        write(
+            dir.path(),
+            CONTRIBUTE_BACK,
+            &shipped.replace("edge_sensors_default: off", "edge_sensors_default: on"),
+        );
+        let report = run(dir.path(), &binding()).unwrap();
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        assert!(report.findings[0].message.contains("edge_sensors_default"));
+
+        write(
+            dir.path(),
+            CONTRIBUTE_BACK,
+            &shipped.replace("delay_days: 7", "delay_days: 7\n  include_enrichment: true"),
+        );
+        let report = run(dir.path(), &binding()).unwrap();
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        assert!(
+            report.findings[0]
+                .message
+                .contains("not a contribute-back policy")
+        );
     }
 
     #[test]

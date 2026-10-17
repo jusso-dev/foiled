@@ -1,0 +1,66 @@
+# Foiled contribute-back policy (#37).
+#
+# Design: docs/contribute-back.md
+# Parsed by foiled-core (crates/core/src/share.rs, SharePolicy). foiled-lint
+# checks this file parses and passes SharePolicy::problems().
+#
+# Who reads it:
+#   - The API Worker decides, per sensor and channel, whether data may be
+#     shared (may_share) and when an IOC may be published (public_ioc_release).
+#   - The host agent (#41) and the edge sensor agent (#31) render the Cowrie
+#     dshield output, the CrowdSec engine and SentryPeer settings only for
+#     channels the Worker allows for that sensor.
+#
+# This file never holds credentials. The DShield user id and API key, and the
+# CrowdSec machine credentials, live in host environment variables or the
+# engine's own credential file on the sensor host. See docs/contribute-back.md.
+
+version: 1
+
+# Opt-in state for a sensor with no explicit choice recorded.
+# Research sensors (#7) share by default and can opt out.
+research_sensors_default: on
+# Edge sensors (#31) run on someone else's host. They share nothing until
+# the sensor owner opts in. Only "off" is accepted.
+edge_sensors_default: off
+
+channels:
+  # Cowrie's dshield output plugin on Cowrie module decoys (#30). Not the
+  # DShield sensor installer.
+  dshield:
+    enabled: true
+    # Kinds the channel may run on. Each sensor must also be opted in.
+    sensor_kinds: [research, edge]
+    # Name of the environment variable that holds the contact email DShield
+    # asks for. The name only, never the address and never a credential.
+    contact_email_env: FOILED_DSHIELD_CONTACT_EMAIL
+
+  # CrowdSec Security Engine on the sensor host with unmodified Hub
+  # scenarios. Detection and signal sharing only: no bouncer is installed.
+  crowdsec:
+    enabled: true
+    sensor_kinds: [research, edge]
+
+  # SentryPeer peer-to-peer sharing. Applies only where the SIP module runs
+  # (#30). Off until ADR 0003 (#4) has a scoped network rule for it.
+  sentrypeer:
+    enabled: false
+    sensor_kinds: [research]
+
+# Delayed public IOCs on exploit pages and datasets (#35). Foiled-origin
+# observations only. Every IOC also needs an analyst confirm; that rule is
+# fixed in code and has no knob.
+public_iocs:
+  enabled: true
+  # Edge sensor data is not published, even with an opt-in, unless an
+  # operator adds "edge" here.
+  sensor_kinds: [research]
+  # Days after first_seen before an IOC may be released.
+  delay_days: 7
+  # Lowest confidence band (#27) that may be released: low, medium or high.
+  min_confidence: high
+  # TLP 2.0 label released IOCs carry.
+  #   clear: public exploit pages and open datasets.
+  #   green: the account-gated community dataset only, not public pages.
+  #   amber, amber+strict, red: nothing is released.
+  tlp: clear
