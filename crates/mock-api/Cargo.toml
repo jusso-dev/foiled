@@ -1,0 +1,19 @@
+[package]
+name = "foiled-mock-api"
+description = "Local mock of the Foiled control plane: the real router over the in-memory store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+axum = { workspace = true, features = ["tokio", "http1"] }
+foiled-api = { path = "../api" }
+foiled-core = { path = "../core" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+uuid = { version = "1", features = ["v4"] }
+
+[lints]
+workspace = true

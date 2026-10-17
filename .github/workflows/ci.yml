@@ -20,6 +20,18 @@ jobs:
   rust:
     name: Rust (fmt, clippy, test)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: foiled
+          POSTGRES_PASSWORD: foiled-ci-only
+          POSTGRES_DB: foiled_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U foiled" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      FOILED_TEST_PG_URL: postgres://foiled:foiled-ci-only@localhost:5432/foiled_test
     steps:
       - uses: actions/checkout@v7
         with:
@@ -30,7 +42,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      # --include-ignored runs the Postgres tests against the service above.
+      - run: cargo test --workspace --locked -- --include-ignored
 
   wasm:
     name: Rust (wasm32 Worker build)
@@ -63,6 +76,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm lint:openapi
+        env:
+          REDOCLY_TELEMETRY: "off"
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build

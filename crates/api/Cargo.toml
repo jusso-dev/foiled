@@ -6,22 +6,41 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+build = "build.rs"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 axum.workspace = true
+foiled-core = { path = "../core" }
+hex = "0.4"
 http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
+subtle = "2"
 tower-service = "0.3"
-worker.workspace = true
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+foiled-pg = { path = "../pg" }
+getrandom = { version = "0.4", features = ["wasm_js"] }
+tokio-postgres = { version = "0.7", default-features = false, features = ["js"] }
+uuid = { version = "1", features = ["v4", "js"] }
+worker = { workspace = true, features = ["d1", "tokio-postgres"] }
+
+[build-dependencies]
+serde_json.workspace = true
+serde_yaml_ng = "0.10"
+walkdir = "2"
 
 [dev-dependencies]
+http-body-util = "0.1"
+serde_yaml_ng = "0.10"
+rusqlite = { version = "0.37", features = ["bundled"] }
 tokio.workspace = true
 tower.workspace = true
-http-body-util = "0.1"
 
 [lints]
 workspace = true

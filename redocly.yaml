@@ -1,0 +1,10 @@
+# OpenAPI lint for api/openapi.yaml (run by CI through `pnpm lint:openapi`).
+extends:
+  - recommended
+rules:
+  # One shared path item serves every decoy action (`:stop`, `:rotate`, ...).
+  operation-operationId: off
+  # Placeholder hostnames by design: no real zone names in the public repo.
+  no-server-example.com: off
+  # Planned operations document their status instead of full response schemas.
+  operation-4xx-response: off
