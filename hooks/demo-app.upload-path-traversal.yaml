@@ -1,0 +1,33 @@
+# Vulnerable-path hook for the synthetic demo app (#32). See docs/instrumentation.md.
+# FOILED-DEMO-0001 is a made-up vulnerability id for demos and tests. It is not a real CVE.
+id: demo-app.upload-path-traversal
+catalogue_ids:
+  - foiled/demo-app/1.0.0
+cve_id: FOILED-DEMO-0001
+kind: in_process
+transport: log_channel
+stages:
+  - trigger
+  - post_exploit
+trigger: >-
+  POST /api/upload?path=NAME where os.path.join(upload_root, NAME) resolves outside the
+  upload root (trigger, before the write). If that upload's file name also ends in .sh,
+  a post_exploit line follows the write with file_writes set to the resolved path. The
+  file is never executed.
+fields:
+  - hook_id
+  - catalogue_id
+  - cve_id
+  - stage
+  - sequence_no
+  - t_offset_ms
+  - file_writes
+  - notes
+redaction:
+  # The app writes only the request target (truncated), never the body. The host
+  # agent hashes the slice unless store_payloads is true (#16).
+  request_slice: follow_store_payloads
+  inline_cap_bytes: 4096
+  max_field_chars: 2048
+owner: foiled maintainers
+source: build/recipes/foiled-demo-app/app/server.py

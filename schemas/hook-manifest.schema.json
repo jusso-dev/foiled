@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/hook-manifest.schema.json",
+  "title": "Foiled vulnerable-path hook manifest",
+  "description": "One instrumentation hook (#32), stored as hooks/<id>.yaml and mirrored by foiled_core::hooks::HookManifest. Catalogue entries list hook ids in instrumentation_hooks. See docs/instrumentation.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "catalogue_ids", "kind", "transport", "stages", "trigger", "fields", "redaction", "owner"],
+  "properties": {
+    "id": {
+      "description": "Hook id. Must match the file name and the envelope hook.hook_id.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "catalogue_ids": {
+      "description": "Catalogue entries this hook is baked into.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._+-]*)+$" }
+    },
+    "cve_id": {
+      "description": "The CVE (or synthetic FOILED-DEMO id) whose vulnerable path the hook watches.",
+      "type": "string",
+      "pattern": "^(CVE-[0-9]{4}-[0-9]{4,}|FOILED-DEMO-[0-9]{4})$"
+    },
+    "kind": {
+      "description": "in_process: callback in a sandboxed app. emulator_checkpoint: checkpoint in a Foiled emulator (#30). ebpf_uprobe: host-side uprobe where stable (v0.2+).",
+      "enum": ["in_process", "emulator_checkpoint", "ebpf_uprobe"]
+    },
+    "transport": {
+      "description": "Where the host agent reads hook lines from.",
+      "enum": ["log_channel", "vsock", "emulator_events"]
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["trigger", "post_exploit", "cleanup"] }
+    },
+    "trigger": {
+      "description": "Plain description of the vulnerable condition that fires the hook.",
+      "type": "string",
+      "minLength": 1
+    },
+    "fields": {
+      "description": "Envelope hook fields this hook fills in.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["hook_id", "catalogue_id", "cve_id", "stage", "request_slice_ref", "sequence_no", "t_offset_ms", "cmd_lines", "file_writes", "implant_refs", "notes"]
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_slice", "inline_cap_bytes"],
+      "properties": {
+        "request_slice": {
+          "description": "follow_store_payloads: hash only unless store_payloads is true (#16). hash_only: always hash only.",
+          "enum": ["follow_store_payloads", "hash_only"]
+        },
+        "inline_cap_bytes": {
+          "description": "Largest slice kept inline in the envelope data. Larger slices go to R2 by request_slice_ref.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4096
+        },
+        "max_field_chars": {
+          "description": "Longest string field (paths, notes) the hook writes before truncating.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "owner": {
+      "description": "Who maintains the hook code (a GitHub handle or team).",
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "description": "Repository path of the trusted hook code that is baked into the image or emulator.",
+      "type": "string"
+    }
+  }
+}

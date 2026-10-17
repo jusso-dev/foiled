@@ -29,7 +29,7 @@ Module-backed decoys are `emulation` entries rather than a third kind: from the 
 | `default_credentials` | no | Decoy-only values. Replaced by per-decoy canaries at start (#17). Never real secrets. |
 | `fingerprint_hints`, `banner_hints` | no | Inputs for realism and the fingerprint checklist (#18). |
 | `expected_techniques` | no | ATT&CK ids as priors only (#26). |
-| `instrumentation_hooks` | no | Ids of vulnerable-path hooks (#32). |
+| `instrumentation_hooks` | no | Ids of vulnerable-path hooks (#32). Each needs `hooks/<id>.yaml`, see [instrumentation.md](instrumentation.md). |
 | `canary_slots` | no | Guest paths rewritten with canary values at start (#17). |
 | `sources` | yes | Public advisory, KEV, OSV or NVD links. Links only, never exploit code. |
 | `status` | yes | `draft`, `verified` or `deprecated`. |
@@ -42,7 +42,8 @@ Module-backed decoys are `emulation` entries rather than a third kind: from the 
 - an entry does not validate against the schema, for example a `sandbox` entry whose artefact only has `emulator_id`, or a `verified` entry with no artefact;
 - the entry `id` does not match its file path;
 - the artefact shape does not match `decoy_kind`, or the same port is listed twice;
-- a `verified` custom emulation entry points at a profile that does not exist, or a `verified` module entry has no module manifest.
+- a `verified` custom emulation entry points at a profile that does not exist, or a `verified` module entry has no module manifest;
+- an id in `instrumentation_hooks` has no hook manifest at `hooks/<id>.yaml`.
 
 Draft emulation entries may point at a profile that is still being written. Launching a draft needs an explicit override (#24).
 

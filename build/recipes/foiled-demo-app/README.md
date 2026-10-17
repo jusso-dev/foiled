@@ -5,7 +5,7 @@ Builds the synthetic demo decoy for catalogue entry `foiled/demo-app/1.0.0` (#5,
 What the app does, for the capture layer (#9) and hooks (#32):
 
 - Logs every request as one JSON line on stdout: `ts`, `src`, `method`, `path`, `status`, `bytes`, `user_agent`.
-- When an upload path resolves outside the upload directory, emits a hook line `{"kind": "hook", "hook_id": "demo-app.upload-path-traversal", "cve_id": "FOILED-DEMO-0001", "stage": "trigger", ...}`. The hook fails open: the decoy keeps working if the line cannot be written.
+- When an upload path resolves outside the upload directory, emits a hook line `{"kind": "hook", "hook_id": "demo-app.upload-path-traversal", "cve_id": "FOILED-DEMO-0001", "stage": "trigger", ...}`. If the escaping file name ends in `.sh`, a second line with `"stage": "post_exploit"` and `file_writes` set to the resolved path follows the write; the script is never executed. The hook fails open: the decoy keeps working if the line cannot be written. Manifest: [`hooks/demo-app.upload-path-traversal.yaml`](../../../hooks/demo-app.upload-path-traversal.yaml), wiring in [instrumentation.md](../../../docs/instrumentation.md).
 - Never executes, imports or parses uploaded content. Bodies are capped at 1 MiB.
 - Serves `Server: demo-app/1.0.0`, runs as UID 10001, and only needs `/srv/demo-app` and `/tmp` writable.
 
