@@ -18,6 +18,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [catalogue-sync.md](catalogue-sync.md) | How KEV, OSV and NVD feed draft catalogue entries. |
 | [rotation.md](rotation.md) | Rotation and reset of compromised or aged sandboxes, and the decoy lifecycle. |
 | [fingerprint-resistance.md](fingerprint-resistance.md) | Fingerprint resistance checklist, known remaining tells and the Shodan Honeyscore self-check runbook. |
+| [contribute-back.md](contribute-back.md) | Sharing with DShield, CrowdSec and SentryPeer, delayed public IOCs, opt-in defaults and what is never shared. |
 | [deploy/modes.md](deploy/modes.md) | Deployment modes (research, edge, central) and the MVP topology. |
 | [deploy/vps.md](deploy/vps.md) | Bringing up a research sensor on a VPS. |
 | [privacy-and-retention.md](privacy-and-retention.md) | Personal information in capture data, default TTLs, the purge job and metadata-only mode. |

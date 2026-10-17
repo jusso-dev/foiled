@@ -10,3 +10,4 @@ pub mod catalogue;
 pub mod decoy;
 pub mod honeyscore;
 pub mod retention;
+pub mod share;
