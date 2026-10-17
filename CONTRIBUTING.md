@@ -86,6 +86,7 @@ These apply to docs, UI text, exports, commit messages and issue text.
 
 - Foiled core is MIT licensed. See [LICENSE](LICENSE). By contributing you agree your contribution is released under the same licence.
 - GPL licensed decoy modules (for example Conpot, SNARE and TANNER, Dionaea, Heralding, SentryPeer and ADBHoney) only ever run as separate container images and are never imported, linked or copied into Foiled source. Those images keep their upstream licences.
+- Check the [licence and data-terms register](docs/compliance/licence-register.md) before adding a module, data source or dependency.
 - Threat intel sources used for enrichment (for example GreyNoise, CrowdSec, DShield, Shadowserver and Hunt.io) are enrichment only. Their data is never resold or republished. Respect each source's terms.
 - If you add a dependency, check its licence is compatible with MIT and mention it in the pull request.
 

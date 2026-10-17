@@ -36,4 +36,4 @@ This project deliberately runs vulnerable software. The design treats containmen
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE). Third-party honeypot modules shipped as separate container images keep their own licences; see the landscape doc and the compliance register issue.
+MIT. See [LICENSE](LICENSE). Third-party honeypot modules shipped as separate container images keep their own licences; see the [landscape doc](docs/research/landscape.md) and the [licence and data-terms register](docs/compliance/licence-register.md), which also says what may and may not go into a paid feed.
