@@ -3,11 +3,84 @@
 //! One Axum [`Router`] served from a Cloudflare Worker through workers-rs
 //! (`http` and `axum` features). There is no Tokio runtime on Workers, so the
 //! router is driven by [`tower_service::Service::call`] from the fetch event
-//! rather than `axum::serve`. See ADR 0009.
+//! rather than `axum::serve` (ADR 0009). The router itself has no Worker
+//! dependency: handlers reach storage through [`store::Store`], so the whole
+//! API is tested on the host with [`memory::MemoryStore`].
+//!
+//! The contract is `api/openapi.yaml`. Paths marked `x-foiled-status: planned`
+//! there are not served yet.
+
+use std::sync::Arc;
 
 use axum::{Json, Router, routing::get};
 use serde::Serialize;
-use tower_service::Service;
+
+pub mod auth;
+pub mod catalogue;
+pub mod d1_sql;
+pub mod error;
+pub mod memory;
+pub mod routes;
+pub mod store;
+#[cfg(target_arch = "wasm32")]
+mod worker_glue;
+
+use catalogue::Catalogue;
+use store::Store;
+
+/// Tunable safety limits. Defaults are deliberately tight (#21, #24).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Limits {
+    /// Decoy creates per principal per hour.
+    pub creates_per_hour: u32,
+    /// Destructive actions (stop, rotate, reset, destroy) per principal per hour.
+    pub destructive_per_hour: u32,
+    /// Decoys per tenant that are not destroyed.
+    pub max_live_decoys: u32,
+    pub default_lifetime_secs: i64,
+    pub max_lifetime_secs: i64,
+    /// How long a host agent may take to lease a job before it expires.
+    pub job_ttl_secs: i64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            creates_per_hour: 10,
+            destructive_per_hour: 30,
+            max_live_decoys: 5,
+            default_lifetime_secs: 24 * 3600,
+            max_lifetime_secs: 7 * 24 * 3600,
+            job_ttl_secs: 3600,
+        }
+    }
+}
+
+pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+pub type IdSource = Arc<dyn Fn() -> String + Send + Sync>;
+
+/// Shared state for every handler.
+#[derive(Clone)]
+pub struct AppState {
+    pub store: Arc<dyn Store>,
+    pub catalogue: Arc<Catalogue>,
+    /// Unix time in milliseconds.
+    pub clock: Clock,
+    pub ids: IdSource,
+    pub limits: Limits,
+}
+
+impl AppState {
+    pub fn new(store: Arc<dyn Store>, clock: Clock) -> Self {
+        AppState {
+            store,
+            catalogue: Arc::new(Catalogue::bundled()),
+            clock,
+            ids: Arc::new(|| uuid::Uuid::new_v4().simple().to_string()),
+            limits: Limits::default(),
+        }
+    }
+}
 
 /// Body returned by `GET /healthz`.
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -25,49 +98,16 @@ async fn healthz() -> Json<Health> {
     })
 }
 
-/// Build the API router. Kept free of Worker bindings so it can be tested on
-/// the host with a normal async test runtime.
-pub fn router() -> Router {
-    Router::new().route("/healthz", get(healthz))
-}
-
-#[worker::event(fetch)]
-async fn fetch(
-    req: worker::HttpRequest,
-    _env: worker::Env,
-    _ctx: worker::Context,
-) -> worker::Result<axum::http::Response<axum::body::Body>> {
-    Ok(router().call(req).await?)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::body::Body;
-    use http::{Request, StatusCode};
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
-
-    #[tokio::test]
-    async fn healthz_reports_ok_with_crate_version() {
-        let res = router()
-            .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let body = res.into_body().collect().await.unwrap().to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["status"], "ok");
-        assert_eq!(json["service"], "foiled-api");
-        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
-    }
-
-    #[tokio::test]
-    async fn unknown_route_is_404() {
-        let res = router()
-            .oneshot(Request::get("/nope").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::NOT_FOUND);
-    }
+/// Build the API router.
+pub fn router(state: AppState) -> Router {
+    let decoys = routes::decoys::router();
+    Router::new()
+        .route("/healthz", get(healthz))
+        .nest("/v0/catalogue", routes::catalogue::router())
+        .nest("/v0/decoys", decoys.clone())
+        // Alias kept for agents and docs that say "sandbox" (#24).
+        .nest("/v0/sandboxes", decoys)
+        .nest("/v0/audit", routes::audit::router())
+        .fallback(|| async { error::ApiError::not_found("route") })
+        .with_state(state)
 }

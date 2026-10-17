@@ -8,8 +8,12 @@
   },
   "scripts": {
     "lint": "pnpm -r lint",
+    "lint:openapi": "redocly lint api/openapi.yaml",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "build": "pnpm -r build"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^2.64.1"
   }
 }
