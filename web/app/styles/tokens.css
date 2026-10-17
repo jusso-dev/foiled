@@ -1,0 +1,101 @@
+/*
+ * Foiled design tokens (v3 red threat console).
+ *
+ * Source of truth: docs/design/design-direction.md (v3 palette table) and
+ * docs/ui/design-system.md. Plain CSS custom properties so any front end
+ * (the React Router console, the Astro public pages) can use them.
+ * A unit test checks the palette below against the design-direction table.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Palette: names and values match the v3 table exactly. */
+  --bg: #07080a;
+  --side: #0b0c0f;
+  --panel: #101216;
+  --panel-2: #14171c;
+  --line: #1f232a;
+  --line-2: #2a2f37;
+  --text: #e6e8eb;
+  --muted: #8a9099;
+  --dim: #5b616b;
+  --red: #e5252a;
+  --red-bright: #ff3b3f;
+  --red-deep: #3a0d0f;
+  --amber: #f2a93b;
+  --blue: #4c8df6;
+  --green: #3fb68b;
+
+  /* Supporting values named in the v3 table or used by the mockup. */
+  --blue-text: #7fc4f0; /* probable chip text, from the v3 table */
+  --map-land: #1a1d22; /* v3 table: map-land fill */
+  --map-dot: #3a3f48; /* v3 table: map-land dots */
+  --map-sea: #0b0d10;
+  --text-2: #c9cdd3; /* table body text in mockup-v3 */
+  --nav-text: #b7bcc4; /* inactive nav text in mockup-v3 */
+  --bar-from: #7a1114; /* bar ramp start, ends at --red */
+  --hotspot: #ff2a2f;
+  --hotspot-ring: #ff6b6e;
+  --hotspot-core: #ffd6d7;
+  --chip-fill: #1d2128;
+  --red-line: #5a1a1c; /* border of the active region selector */
+
+  /* Confidence levels. Assessed amber, probable blue, confirmed green. */
+  --conf-assessed: var(--amber);
+  --conf-assessed-fill: rgb(242 169 59 / 0.12);
+  --conf-assessed-line: rgb(242 169 59 / 0.35);
+  --conf-probable: var(--blue-text);
+  --conf-probable-fill: rgb(76 141 246 / 0.12);
+  --conf-probable-line: rgb(76 141 246 / 0.35);
+  --conf-confirmed: var(--green);
+  --conf-confirmed-fill: rgb(63 182 139 / 0.12);
+  --conf-confirmed-line: rgb(63 182 139 / 0.35);
+
+  /* Typography. Fonts are self-hosted from @fontsource (OFL-1.1). */
+  --font-ui: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  --font-wordmark: "Rajdhani", var(--font-ui); /* wordmark only, weight 700 */
+
+  --text-xs: 10px; /* table headers, chips */
+  --text-sm: 12px; /* table body, secondary */
+  --text-md: 13px; /* base UI */
+  --text-lg: 15px; /* map panel title */
+  --text-kpi: 30px; /* KPI values, Inter 600 */
+  --text-wordmark: 26px;
+  --tracking-title: 0.1em; /* uppercase panel titles */
+  --tracking-wordmark: 0.14em;
+  --leading: 1.35;
+
+  /* Spacing scale (px). */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 14px;
+  --space-7: 16px;
+  --space-8: 18px;
+  --space-9: 24px;
+  --space-10: 32px;
+
+  /* Radius. */
+  --radius-xs: 3px; /* country code chips */
+  --radius-sm: 4px; /* confidence chips */
+  --radius-md: 8px; /* controls, nav items */
+  --radius-lg: 10px; /* cards */
+  --radius-pill: 999px; /* badges */
+
+  /* Layout. */
+  --sidebar-width: 232px;
+  --rail-width: 300px;
+  --control-height: 40px;
+  --gap: 14px;
+
+  /* Focus: visible on the dark palette (5.3:1 against --panel). */
+  --focus-ring: 2px solid var(--red-bright);
+  --focus-offset: 2px;
+
+  /* Glow: only the live indicator and map hotspots may use these. */
+  --glow-live: 0 0 8px 2px rgb(255 59 63 / 0.7);
+}

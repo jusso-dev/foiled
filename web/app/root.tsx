@@ -7,6 +7,19 @@ import {
   ScrollRestoration,
 } from "react-router";
 import type { Route } from "./+types/root";
+// Self-hosted fonts (OFL-1.1, see docs/compliance/licence-register.md). Latin subset only.
+import "@fontsource/inter/latin-400.css";
+import "@fontsource/inter/latin-500.css";
+import "@fontsource/inter/latin-600.css";
+import "@fontsource/inter/latin-700.css";
+import "@fontsource/jetbrains-mono/latin-400.css";
+import "@fontsource/jetbrains-mono/latin-500.css";
+import "@fontsource/jetbrains-mono/latin-600.css";
+import "@fontsource/rajdhani/latin-700.css";
+// Design system: tokens first, then base elements, then components.
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/components.css";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
