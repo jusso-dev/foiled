@@ -15,7 +15,7 @@ A stable id computed over a normalised sequence of attacker steps or vulnerable-
 A cluster of attempts across the decoy fleet that share infrastructure, payloads or behaviour, suggesting one operator or tool (#33).
 
 **Canary**
-A planted value, such as a fake credential or token inside a decoy, that has no use except as a tripwire. If it is used outside the sandbox, that is a high-confidence signal that data was stolen. Canaries are never real credentials for anything that matters (#17).
+A planted value, such as a fake credential or token inside a decoy, that has no use except as a tripwire. If it is used outside the sandbox, that is a high-confidence signal that data was stolen. Canaries are never real credentials for anything that matters (#17, [canaries.md](canaries.md)).
 
 **Capture envelope**
 The common event shape every capture source emits: event id, timestamp, decoy id, catalogue id, `decoy_kind`, channel, severity, source, `payload_ref` and an optional attempt id. Emulators and sandboxes use the same envelope so attempts look uniform (#9).

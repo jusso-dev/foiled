@@ -24,6 +24,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [Emulator profile](../schemas/emulator-profile.schema.json) and [module manifest](../schemas/module-manifest.schema.json) schemas | Formats for `emulators/<id>/profiles/*.yaml` and `modules/<id>/manifest.yaml`, checked by `foiled-lint`. |
 | [catalogue-sync.md](catalogue-sync.md) | How KEV, OSV and NVD feed draft catalogue entries. |
 | [rotation.md](rotation.md) | Rotation and reset of compromised or aged sandboxes, and the decoy lifecycle. |
+| [canaries.md](canaries.md) | Canary credentials in decoys: types and placement, generation and hash-only storage, egress proxy and beacon detection, Canarytokens as a separate service, and the `canary_used` alert. |
 | [fingerprint-resistance.md](fingerprint-resistance.md) | Fingerprint resistance checklist, known remaining tells and the Shodan Honeyscore self-check runbook. |
 | [contribute-back.md](contribute-back.md) | Sharing with DShield, CrowdSec and SentryPeer, delayed public IOCs, opt-in defaults and what is never shared. |
 | [deploy/modes.md](deploy/modes.md) | Deployment modes (research, edge, central) and the MVP topology. |

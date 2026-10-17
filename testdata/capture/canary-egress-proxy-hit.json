@@ -1,0 +1,23 @@
+{
+  "event_id": "evt-0011",
+  "ts": 1792285340000,
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "decoy_kind": "sandbox",
+  "generation": 3,
+  "channel": "egress",
+  "severity": "critical",
+  "src": { "ip": "10.85.1.2", "port": 44120 },
+  "dst": { "ip": "192.0.2.80", "port": 80 },
+  "data": {
+    "detector": "egress_proxy",
+    "verdict": "blocked",
+    "canary_id": "cn_5b0e9d2a71c4f836",
+    "canary_kind": "api_key",
+    "canary_generation": 3,
+    "matched_in": ["body"],
+    "host": "drop.example.invalid",
+    "method": "POST",
+    "path": "/up"
+  }
+}
