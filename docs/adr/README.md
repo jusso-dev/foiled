@@ -7,7 +7,7 @@ Each ADR lives in `docs/adr/NNNN-slug.md` and has the sections Status, Context, 
 | [0001](0001-architecture.md) | [Architecture](0001-architecture.md) | Accepted (17 Oct 2026) | #1 |
 | [0002](0002-sandbox-runtime.md) | [Sandbox runtime](0002-sandbox-runtime.md) | Accepted (18 Oct 2026) | #3 |
 | [0003](0003-network-isolation.md) | [Network isolation](0003-network-isolation.md) | Accepted (17 Oct 2026) | #4 |
-| 0004 | Image builder | Planned | #6 |
+| [0004](0004-image-builder.md) | [Image builder](0004-image-builder.md) | Accepted (18 Oct 2026) | #6 |
 | 0005 | Capture layer | Planned | #9 |
 | 0006 | Emulation plug-ins | Planned | #30 |
 | 0007 | Edge ingest | Planned | #31 |

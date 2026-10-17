@@ -1,0 +1,12 @@
+# sources.lock for the foiled-demo-app recipe (#6).
+#
+# The demo app is in-repo MIT code, so there are no upstream URLs to fetch. This
+# file instead pins the sha256 of every application source that is copied into
+# the image. build.sh verifies these hashes before it builds, so a tampered or
+# accidentally edited source fails the build loudly.
+#
+# Format is `shasum -a 256 -c` compatible: "<sha256>  <path>", paths relative to
+# this recipe directory. Regenerate with:
+#   shasum -a 256 app/server.py > sources.lock.new   (then review and update)
+e38694fcffb57a02bde7cba311b963d5231021b7288369dd5cfed28cc485686c  app/server.py
+0e4fad64a3bfbf643c36ffd8cc4dc7c364b7a5eeecd7c6b2b581b1b6306b99dc  app/test_app.py

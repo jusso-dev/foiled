@@ -96,6 +96,8 @@ jobs:
           key: lint
       - name: Validate JSON Schemas and catalogue entries
         run: cargo run -p foiled-lint --locked -- .
+      - name: Demo app unit tests
+        run: python3 -m unittest discover -s build/recipes/foiled-demo-app/app -v
       - name: Check nftables ruleset syntax
         run: |
           sudo apt-get update -qq
@@ -106,3 +108,27 @@ jobs:
         with:
           args: --offline --no-progress --include-fragments './**/*.md'
           fail: true
+
+  demo-image:
+    name: Demo image (reproducible build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4
+      - name: Build twice and compare digests
+        run: |
+          set -euo pipefail
+          recipe=build/recipes/foiled-demo-app
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          "$recipe/build.sh"
+          first="$(cat build/output/foiled-demo-app.digest)"
+          rm -rf build/output
+          docker buildx prune --all --force >/dev/null
+          "$recipe/build.sh"
+          second="$(cat build/output/foiled-demo-app.digest)"
+          echo "first:  $first"
+          echo "second: $second"
+          test -n "$first"
+          test "$first" = "$second"

@@ -30,7 +30,7 @@ These docs do not exist yet. Each is owned by the issue listed.
 
 | Path | What it will cover | Issue |
 | --- | --- | --- |
-| Remaining ADRs | One file per decision under `docs/adr/` (`NNNN-slug.md`). | #6, #9, #28, #30, #31, #41 |
+| Remaining ADRs | One file per decision under `docs/adr/` (`NNNN-slug.md`). | #9, #28, #30, #31, #41 |
 | `docs/deploy/edge-sensor.md` | Enrolling and running an edge sensor. | #31 |
 | `docs/agent/protocol.md` | Protocol between the control plane and the sandbox host agent. | #41 |
 | `docs/radar.md` | Radar feed, review queue and research write-ups. | #35 |

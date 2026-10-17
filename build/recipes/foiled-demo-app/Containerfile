@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1
+#
+# Foiled demo decoy image (#6). Builds the synthetic FOILED-DEMO-0001 victim app.
+# Standard-library-only Python, so there is no dependency fetch step and the
+# whole build runs with --network=none (see build.sh). Base image is pinned by
+# the linux/amd64 manifest digest for reproducibility; update it with build.sh
+# help or `cf`/registry tooling, never to a floating tag.
+#
+# The base digest below is the linux/amd64 manifest of python:3.13-slim
+# (python 3.13.16), resolved from registry-1.docker.io on 2026-10-18.
+FROM python:3.13-slim@sha256:8fb4cfa1a2616d7b8e0c2175cc6ad68f5729c34ea8488c0b360d2934b7be9024
+
+# Static, human-readable image metadata. Provenance labels that vary per build
+# (revision, catalogue id, CVEs) are added by build.sh at build time.
+LABEL org.opencontainers.image.title="foiled-demo-app" \
+      org.opencontainers.image.description="Foiled synthetic demo decoy (FOILED-DEMO-0001)" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="Foiled project"
+
+# Non-root runtime user. UID/GID are fixed so file ownership is reproducible.
+RUN set -eux; \
+    groupadd --gid 10001 demo; \
+    useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin demo; \
+    mkdir -p /srv/demo-app/uploads; \
+    # Canary slot referenced by the catalogue entry (#17). Shipped empty; the
+    # host writes a per-decoy canary value here at start.
+    : > /srv/demo-app/.env; \
+    chown -R 10001:10001 /srv/demo-app; \
+    chmod -R 0770 /srv/demo-app
+
+COPY --chown=10001:10001 app/server.py /app/server.py
+
+ENV DEMO_APP_HOST=0.0.0.0 \
+    DEMO_APP_PORT=8080 \
+    DEMO_APP_UPLOAD_ROOT=/srv/demo-app/uploads \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+USER 10001:10001
+EXPOSE 8080
+
+# The image is read-only friendly: only /srv/demo-app (uploads + canary) and
+# /tmp need to be writable. Run with `--read-only --tmpfs /tmp` and a writable
+# mount or tmpfs for /srv/demo-app/uploads.
+ENTRYPOINT ["python3", "-I", "/app/server.py"]
