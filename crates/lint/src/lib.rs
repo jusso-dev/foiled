@@ -250,7 +250,11 @@ fn check_catalogue(root: &Path, report: &mut Report) -> Result<()> {
                     a.emulator_id, a.emulator_profile
                 )),
                 Some(Artefact::Module(a)) => Some(format!("modules/{}/manifest.yaml", a.module_id)),
-                _ => None,
+                Some(Artefact::Sandbox(a)) => a
+                    .recipe_id
+                    .as_ref()
+                    .map(|r| format!("build/recipes/{r}/Containerfile")),
+                None => None,
             };
             if let Some(required) = required
                 && !root.join(&required).exists()
@@ -502,6 +506,34 @@ mod tests {
                 .message
                 .contains("not a contribute-back policy")
         );
+    }
+
+    #[test]
+    fn verified_sandbox_recipe_must_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "catalogue/schema/entry.schema.json",
+            MINIMAL_ENTRY_SCHEMA,
+        );
+        let body = r#"{"id":"foiled/demo/1","product":"p","vendor":"v","version":"1","decoy_kind":"sandbox",
+            "artefact":{"recipe_id":"demo"},"cves":[],"listen_ports":[{"port":1,"protocol":"tcp","service":"x"}],
+            "sources":["https://example.com"],"status":"verified","risk_notes":"r"}"#;
+        write(dir.path(), "catalogue/entries/foiled/demo/1.json", body);
+        let report = run(dir.path(), BINDINGS).unwrap();
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        assert!(
+            report.findings[0]
+                .message
+                .contains("build/recipes/demo/Containerfile")
+        );
+        write(
+            dir.path(),
+            "build/recipes/demo/Containerfile",
+            "FROM scratch\n",
+        );
+        let report = run(dir.path(), BINDINGS).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
     }
 
     #[test]
