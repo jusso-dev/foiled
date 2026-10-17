@@ -125,7 +125,7 @@ wait_for "decoy healthy" 90 healthy
 wait_for "demo app answering" 30 curl -sf http://127.0.0.1:8080/
 
 log "7. Exploit FOILED-DEMO-0001 (harmless marker file)"
-curl -sS -X POST "http://127.0.0.1:8080/api/upload?path=../../tmp/foiled-lab-marker.txt" \
+curl -sS -X POST "http://127.0.0.1:8080/api/upload?path=../../../tmp/foiled-lab-marker.txt" \
   -H 'user-agent: foiled-mvp-lab' --data 'lab marker, not a payload'
 echo
 

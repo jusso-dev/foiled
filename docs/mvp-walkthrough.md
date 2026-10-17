@@ -61,7 +61,7 @@ What it does, step by step:
 7. **Exploit FOILED-DEMO-0001** with a harmless marker:
 
    ```sh
-   curl -X POST 'http://127.0.0.1:8080/api/upload?path=../../tmp/foiled-lab-marker.txt' --data 'lab marker'
+   curl -X POST 'http://127.0.0.1:8080/api/upload?path=../../../tmp/foiled-lab-marker.txt' --data 'lab marker'
    ```
 
    The demo app logs the request and fires the `demo-app.upload-path-traversal` hook. The agent turns both lines into capture envelopes, buffers them and sends them to `/v0/ingest/events`.
