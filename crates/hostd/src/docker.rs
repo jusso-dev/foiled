@@ -114,7 +114,8 @@ pub fn run_args(cfg: &DockerConfig, spec: &DecoySpec) -> Result<Vec<String>, Run
     .collect();
     for path in &cfg.writable {
         a.push("--tmpfs".into());
-        a.push(format!("{path}:rw,noexec,nosuid,size=64m"));
+        // Sticky world-writable like /tmp: images run as a non-root user.
+        a.push(format!("{path}:rw,noexec,nosuid,size=64m,mode=1777"));
     }
     for p in &spec.params.listen_ports {
         let proto = match p.protocol {
@@ -177,17 +178,22 @@ impl Runtime for DockerRuntime {
     }
 
     fn start(&self, decoy_id: &str) -> RtResult<()> {
-        let state = self.docker(&[
-            "inspect".into(),
-            "--format".into(),
-            "{{.State.Running}}".into(),
-            container_name(decoy_id),
-        ])?;
-        if state == "true" {
-            Ok(())
-        } else {
-            Err(RuntimeError("container is not running".into()))
+        // `docker run --detach` already started it. Report healthy only if
+        // the container is still running a few seconds later, so a decoy
+        // that crashes on start is reported as failed.
+        for _ in 0..3 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let state = self.docker(&[
+                "inspect".into(),
+                "--format".into(),
+                "{{.State.Running}}".into(),
+                container_name(decoy_id),
+            ])?;
+            if state != "true" {
+                return Err(RuntimeError("container exited during start".into()));
+            }
         }
+        Ok(())
     }
 
     fn stop(&self, decoy_id: &str) -> RtResult<()> {
@@ -280,7 +286,7 @@ mod tests {
             "--network foiled-lab",
             "--restart no",
             "--publish 127.0.0.1:8080:8080/tcp",
-            "--tmpfs /srv/demo-app:rw,noexec,nosuid,size=64m",
+            "--tmpfs /srv/demo-app:rw,noexec,nosuid,size=64m,mode=1777",
             "--label foiled.generation=3",
         ] {
             assert!(joined.contains(flag), "missing {flag}: {joined}");
