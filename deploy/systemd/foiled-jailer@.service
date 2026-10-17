@@ -1,0 +1,78 @@
+# Foiled decoy micro-VM (#3) on a research sensor (#7): the Firecracker jailer
+# followed by Firecracker. Suggested template, to be tightened once the #3
+# runtime spike settles flags, cgroup placement and the capability list.
+#
+# Instance name is the short decoy ID (at most 12 characters), for example
+# foiled-jailer@web01.service. Started and stopped only by foiled-hostd.
+#
+# Why root: the jailer must start as root to build the chroot, create device
+# nodes, join the network namespace and set cgroup limits. It then drops to a
+# per-VM UID (group foiled-decoy) before it runs Firecracker, so the guest's
+# VMM never runs as root.
+#
+# foiled-hostd writes the job spec and jailer.env for the decoy. foiled-vmctl
+# (planned, #41 with #4) runs as root and refuses anything outside fixed policy:
+#   - FOILED_VM_UID inside the reserved range, FOILED_DECOY_GID equal to the
+#     foiled-decoy group
+#   - image digest on the local allow-list in /etc/foiled/allowlist (#5, #6)
+#   - guest address inside 10.85.0.0/16
+#   - published ports taken from the catalogue entry, never a management port
+#   - no egress rule is ever opened (egress goes through the #4 proxy only)
+# It then stages the image into the chroot, creates the netns, the host-side
+# interface fc-<id> and the DNAT rules.
+
+[Unit]
+Description=Foiled decoy micro-VM %i
+Documentation=https://github.com/jusso-dev/foiled/blob/main/docs/deploy/vps.md
+After=network-online.target nftables.service
+Requires=nftables.service
+RequiresMountsFor=/var/lib/foiled/guests /srv/jailer
+
+[Service]
+Type=exec
+EnvironmentFile=/var/lib/foiled/guests/decoys/%i/jailer.env
+ExecStartPre=/usr/local/lib/foiled/foiled-vmctl prepare %i
+ExecStart=/usr/local/lib/foiled/jailer \
+    --id %i \
+    --exec-file /usr/local/lib/foiled/firecracker \
+    --uid ${FOILED_VM_UID} \
+    --gid ${FOILED_DECOY_GID} \
+    --chroot-base-dir /srv/jailer \
+    --netns /run/netns/fc-%i \
+    --cgroup-version 2 \
+    -- \
+    --config-file vm.json \
+    --no-api
+# Removes DNAT, interface, netns and chroot. Keeps the writable overlay for
+# forensics until rotation (#8) wipes it.
+ExecStopPost=/usr/local/lib/foiled/foiled-vmctl cleanup %i
+
+# Never restart a guest on its own. A guest that died may be compromised, and
+# a compromised guest is rebuilt from its catalogue digest, never rebooted
+# from its current disk (threat model C4, #8).
+Restart=no
+TimeoutStopSec=30s
+
+NoNewPrivileges=yes
+# Capabilities the jailer and foiled-vmctl need while they are still root.
+# Firecracker itself runs with none after the jailer drops privileges.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_CHROOT CAP_MKNOD CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID CAP_NET_ADMIN CAP_SYS_RESOURCE
+
+ProtectSystem=strict
+ReadWritePaths=/srv/jailer /var/lib/foiled/guests/decoys/%i /run/netns
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+
+# Only the devices a micro-VM needs.
+DevicePolicy=closed
+DeviceAllow=/dev/kvm rwm
+DeviceAllow=/dev/net/tun rwm
+
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+SystemCallArchitectures=native

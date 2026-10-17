@@ -1,0 +1,86 @@
+# Foiled sandbox host agent (#41) for a research sensor (#7).
+# Suggested template. See docs/deploy/vps.md for the users, paths and firewall it assumes.
+#
+# The agent dials out to the control plane over HTTPS with an mTLS client
+# certificate. It never listens on a TCP or UDP port. It starts and stops
+# foiled-jailer@ and foiled-capture@ units over D-Bus, allowed by the polkit
+# rule in docs/deploy/vps.md, and holds no other privilege.
+
+[Unit]
+Description=Foiled sandbox host agent
+Documentation=https://github.com/jusso-dev/foiled/blob/main/docs/deploy/vps.md
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target nftables.service
+RequiresMountsFor=/var/lib/foiled /var/lib/foiled/guests
+
+[Service]
+Type=exec
+User=foiled-agent
+Group=foiled-agent
+ExecStart=/usr/local/bin/foiled-hostd --config /etc/foiled/hostd.toml
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+
+# Writable paths. Everything else is read-only (ProtectSystem=strict).
+# /var/lib/foiled holds state, the offline buffer, guest job specs and the
+# capture volume. The agent never writes to /etc, /usr or /srv/jailer.
+ReadWritePaths=/var/lib/foiled
+RuntimeDirectory=foiled-hostd
+RuntimeDirectoryMode=0750
+
+# Privileges.
+NoNewPrivileges=yes
+# No capabilities at all. CAP_NET_ADMIN would be needed to create taps and edit
+# nftables, but it would also let a compromised agent flush the sandbox egress
+# rules (#4). Network setup runs instead in the root-run foiled-vmctl step of
+# each foiled-jailer@ unit, which applies only fixed, validated policy.
+# If ADR 0008 (#41) moves network setup into the agent, replace the two empty
+# lines below with:
+#   CapabilityBoundingSet=CAP_NET_ADMIN
+#   AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+
+# File system and kernel.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# The agent does not need /dev/kvm; the jailer does. KVM presence for the
+# heartbeat is read from /sys/module (kvm_intel or kvm_amd).
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+
+# Network. Unix sockets for D-Bus and the local status socket, IPv4 and IPv6
+# for outbound HTTPS. No netlink, no packet sockets.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Block link-local (including cloud instance metadata at 169.254.169.254) and
+# multicast. Localhost stays open for the systemd-resolved stub resolver.
+IPAddressDeny=link-local multicast
+
+# System calls.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+# Resource limits (starting points).
+LimitNOFILE=65536
+TasksMax=512
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
