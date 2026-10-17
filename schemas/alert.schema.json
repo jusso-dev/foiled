@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/alert.schema.json",
+  "title": "Foiled alert payload",
+  "description": "Body of every alert delivered to a webhook route and written to the log sink (#15). See docs/alerting.md. Mirrors Alert in crates/core/src/alerting.rs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["alert_id", "ts", "severity", "type", "decoy_id", "attempt_id", "summary", "links"],
+  "properties": {
+    "alert_id": {
+      "type": "string",
+      "description": "Deterministic id. Receivers use it to drop repeats after a retry.",
+      "pattern": "^alr_[0-9a-f]{24}$"
+    },
+    "ts": { "type": "integer", "description": "Unix milliseconds of the event that raised the alert." },
+    "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+    "type": {
+      "enum": [
+        "vuln_path_hook_fired",
+        "cve_assessed",
+        "predisclosure_spike",
+        "campaign_updated",
+        "edge_sensor_offline",
+        "review_queue_item",
+        "decoy_compromised",
+        "canary_used",
+        "yara_match",
+        "honeyscore_high",
+        "capture_disk_pressure",
+        "rotation_failed",
+        "host_offline",
+        "rotation_storm",
+        "decoy_burnt",
+        "decoy_rotated"
+      ]
+    },
+    "decoy_id": { "type": ["string", "null"], "minLength": 1 },
+    "attempt_id": { "type": ["string", "null"], "minLength": 1 },
+    "campaign_id": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "href"],
+        "properties": {
+          "kind": { "enum": ["attempt", "queue_item", "decoy", "campaign", "host", "sensor", "docs"] },
+          "href": {
+            "type": "string",
+            "description": "Console path, made absolute with console_base_url on delivery.",
+            "pattern": "^/"
+          }
+        }
+      }
+    },
+    "src_ip": { "type": "string", "description": "Attacker source IP when the alert is about one source." },
+    "cve_id": { "type": "string" },
+    "subject": {
+      "type": "string",
+      "description": "Host id, sensor id, public IP, CVE id or queue item id for alerts not about one decoy."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "severity": { "const": "critical" } } },
+      "then": {
+        "properties": {
+          "links": {
+            "contains": { "properties": { "kind": { "enum": ["attempt", "queue_item"] } } }
+          }
+        }
+      }
+    }
+  ]
+}

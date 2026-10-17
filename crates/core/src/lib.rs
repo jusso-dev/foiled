@@ -5,6 +5,7 @@
 //! system access (ADR 0009).
 
 pub mod agent;
+pub mod alerting;
 pub mod attack;
 pub mod attempt;
 pub mod audit;

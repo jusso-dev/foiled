@@ -1,0 +1,16 @@
+{
+  "alert_id": "alr_21aa912786f23bb5d0022e90",
+  "ts": 1792292523000,
+  "severity": "high",
+  "type": "edge_sensor_offline",
+  "decoy_id": null,
+  "attempt_id": null,
+  "summary": "Edge sensor sns-demo-1 has not forwarded for 15 min, offline buffer at 12 %",
+  "links": [
+    {
+      "kind": "sensor",
+      "href": "/sensors/sns-demo-1"
+    }
+  ],
+  "subject": "sns-demo-1"
+}

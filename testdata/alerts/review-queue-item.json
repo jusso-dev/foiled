@@ -1,0 +1,16 @@
+{
+  "alert_id": "alr_5e67ff282abc271337dcee25",
+  "ts": 1792287123000,
+  "severity": "low",
+  "type": "review_queue_item",
+  "decoy_id": null,
+  "attempt_id": null,
+  "summary": "New review queue item rq_5e6f7a8b: predisclosure candidate on foiled/demo-app/1.0.0",
+  "links": [
+    {
+      "kind": "queue_item",
+      "href": "/review-queue/rq_5e6f7a8b"
+    }
+  ],
+  "subject": "rq_5e6f7a8b"
+}

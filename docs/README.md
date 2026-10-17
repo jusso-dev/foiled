@@ -29,6 +29,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [instrumentation.md](instrumentation.md) | Vulnerable-path hooks: kinds, manifest, event fields, sandbox and emulator wiring, post-exploit capture and redaction. |
 | [attack-mapping.md](attack-mapping.md) | MITRE ATT&CK mapping: the pinned version and update process, mapping rules, the technique link object, and how links feed confidence, STIX export and the console. |
 | [enrichment.md](enrichment.md) | Enrichment providers, the Fact schema, the async `foiled-enrich` pipeline and D1 cache, YARA on quarantine, and the never-resell rule. |
+| [alerting.md](alerting.md) | Alert event types and severities, routes, dedupe and rate limits, the payload, webhook signing and the delivery worker. |
 | [privacy-and-retention.md](privacy-and-retention.md) | Personal information in capture data, default TTLs, the purge job and metadata-only mode. |
 | [deploy/workers.md](deploy/workers.md), [deploy/cloudflare.md](deploy/cloudflare.md), [deploy/cloud-sketch.md](deploy/cloud-sketch.md) | The control plane on Workers, Cloudflare-in-front trade-offs, multi-region sketch. |
 

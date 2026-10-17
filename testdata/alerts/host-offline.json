@@ -1,0 +1,16 @@
+{
+  "alert_id": "alr_ec25855b4a96380d65f268b6",
+  "ts": 1792292523000,
+  "severity": "high",
+  "type": "host_offline",
+  "decoy_id": null,
+  "attempt_id": null,
+  "summary": "Host host-demo-syd1 missed 3 heartbeats (last seen 180 s ago), 4 decoys affected",
+  "links": [
+    {
+      "kind": "host",
+      "href": "/hosts/host-demo-syd1"
+    }
+  ],
+  "subject": "host-demo-syd1"
+}

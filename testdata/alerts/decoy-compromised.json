@@ -1,0 +1,20 @@
+{
+  "alert_id": "alr_f292a062e4e28eef8787f0a9",
+  "ts": 1792285325000,
+  "severity": "high",
+  "type": "decoy_compromised",
+  "decoy_id": "dcy-demo-1",
+  "attempt_id": "att_5d0c1e8a2b7f40c19e63aa01",
+  "summary": "Decoy dcy-demo-1 reached post-exploitation from 203.0.113.7 (signal: HookPostExploit, catalogue foiled/demo-app/1.0.0)",
+  "links": [
+    {
+      "kind": "attempt",
+      "href": "/attempts/att_5d0c1e8a2b7f40c19e63aa01"
+    },
+    {
+      "kind": "decoy",
+      "href": "/decoys/dcy-demo-1"
+    }
+  ],
+  "src_ip": "203.0.113.7"
+}

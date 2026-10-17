@@ -555,7 +555,7 @@ Console views (#14): time-to-rotate p50/p95 per catalogue entry, rotations per e
 
 ## Alert events
 
-Defined here, routed and rate-limited by #15:
+Defined here, routed and rate-limited by #15 ([alerting.md](alerting.md)):
 
 | Event | Default severity | When |
 | --- | --- | --- |

@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/alerting-config.schema.json",
+  "title": "Foiled alerting config",
+  "description": "Alert routes, severity overrides, dedupe windows, rate limits and the review queue fallback (#15). See docs/alerting.md. Mirrors AlertingConfig in crates/core/src/alerting.rs. Secrets are referenced by environment variable or Worker secret name only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "console_base_url", "routes"],
+  "$defs": {
+    "alert_type": {
+      "enum": [
+        "vuln_path_hook_fired",
+        "cve_assessed",
+        "predisclosure_spike",
+        "campaign_updated",
+        "edge_sensor_offline",
+        "review_queue_item",
+        "decoy_compromised",
+        "canary_used",
+        "yara_match",
+        "honeyscore_high",
+        "capture_disk_pressure",
+        "rotation_failed",
+        "host_offline",
+        "rotation_storm",
+        "decoy_burnt",
+        "decoy_rotated"
+      ]
+    },
+    "severity": {
+      "enum": ["info", "low", "medium", "high", "critical"]
+    },
+    "env_name": {
+      "type": "string",
+      "description": "Name of a Worker secret or environment variable. Never the value.",
+      "pattern": "^[A-Z_][A-Z0-9_]*$"
+    },
+    "rate_limit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["burst", "per_hour"],
+      "properties": {
+        "burst": { "type": "integer", "minimum": 1 },
+        "per_hour": { "type": "integer", "minimum": 0, "description": "Refill rate. 0 means the bucket never refills." }
+      }
+    }
+  },
+  "properties": {
+    "version": { "const": 1 },
+    "console_base_url": {
+      "type": "string",
+      "description": "Console origin used to make alert link paths absolute.",
+      "pattern": "^https://[^@?#\\s]+$"
+    },
+    "review_queue_for_medium": {
+      "type": "boolean",
+      "description": "Send medium alerts to the review queue (#35) instead of routes."
+    },
+    "routes": {
+      "type": "array",
+      "minItems": 1,
+      "contains": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+          "kind": { "const": "log" },
+          "enabled": { "const": true }
+        }
+      },
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "min_severity"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+          "kind": { "enum": ["webhook", "slack_webhook", "email", "log"] },
+          "enabled": { "type": "boolean", "default": true },
+          "min_severity": { "$ref": "#/$defs/severity" },
+          "types": {
+            "type": "array",
+            "description": "Only these types. Omit for every type.",
+            "items": { "$ref": "#/$defs/alert_type" },
+            "uniqueItems": true
+          },
+          "url_env": { "$ref": "#/$defs/env_name" },
+          "signing_secret_env": { "$ref": "#/$defs/env_name" },
+          "smtp_relay_env": { "$ref": "#/$defs/env_name" },
+          "to_env": { "$ref": "#/$defs/env_name" },
+          "rate_limit": { "$ref": "#/$defs/rate_limit" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "kind": { "const": "webhook" } } },
+            "then": { "required": ["url_env", "signing_secret_env"] }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "slack_webhook" } } },
+            "then": { "required": ["url_env"] }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "email" } } },
+            "then": {
+              "required": ["smtp_relay_env", "to_env", "enabled"],
+              "properties": { "enabled": { "const": false, "description": "Email delivery is documented but not implemented yet." } }
+            }
+          }
+        ]
+      }
+    },
+    "severity_overrides": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/alert_type" },
+      "additionalProperties": { "$ref": "#/$defs/severity" }
+    },
+    "dedupe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_keys": { "type": "integer", "minimum": 1 },
+        "windows": {
+          "type": "object",
+          "description": "Dedupe window in seconds per alert type.",
+          "propertyNames": { "$ref": "#/$defs/alert_type" },
+          "additionalProperties": { "type": "integer", "minimum": 60 }
+        }
+      }
+    },
+    "type_limits": {
+      "type": "object",
+      "description": "Per-type token bucket caps. Critical alerts are not rate limited.",
+      "propertyNames": { "$ref": "#/$defs/alert_type" },
+      "additionalProperties": { "$ref": "#/$defs/rate_limit" }
+    }
+  }
+}

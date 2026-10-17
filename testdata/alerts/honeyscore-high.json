@@ -1,0 +1,24 @@
+{
+  "alert_id": "alr_ac323699d6ace673b5071f6d",
+  "ts": 1792371723000,
+  "severity": "medium",
+  "type": "honeyscore_high",
+  "decoy_id": null,
+  "attempt_id": null,
+  "summary": "Honeyscore 0.8 for 203.0.113.20 (threshold 0.5), 2 decoys on this IP",
+  "links": [
+    {
+      "kind": "decoy",
+      "href": "/decoys/dcy-demo-2"
+    },
+    {
+      "kind": "decoy",
+      "href": "/decoys/dcy-demo-3"
+    },
+    {
+      "kind": "docs",
+      "href": "/docs/fingerprint-resistance#response-to-honeyscore_high"
+    }
+  ],
+  "subject": "203.0.113.20"
+}
