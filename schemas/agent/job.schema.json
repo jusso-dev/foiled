@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/agent/job.schema.json",
+  "title": "Foiled host agent job body",
+  "description": "The signed part of a job (docs/agent/protocol.md). On the wire it is a JSON string inside a signed-job envelope, so the signature covers its exact bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["job_id", "host_id", "tenant_id", "decoy_id", "kind", "idempotency_key", "issued_at", "expires_at"],
+  "properties": {
+    "job_id": { "type": "string", "minLength": 1 },
+    "host_id": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "decoy_id": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["decoy.create", "decoy.start", "decoy.stop", "decoy.rotate", "decoy.reset", "decoy.mark_compromised", "decoy.destroy", "decoy.snapshot", "capture.flush", "host.drain"] },
+    "reason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "text"],
+      "properties": {
+        "code": { "enum": ["max_lifetime", "idle", "reverse_shell", "egress_blocked", "yara_match", "canary_used", "honeyscore_high", "health_failed", "operator_manual"] },
+        "text": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "decoy": { "$ref": "#/$defs/decoy_params" },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "issued_at": { "type": "integer" },
+    "expires_at": { "type": "integer" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "enum": ["decoy.stop", "decoy.rotate", "decoy.reset", "decoy.mark_compromised", "decoy.destroy", "decoy.snapshot", "host.drain"] } } },
+      "then": { "required": ["reason"] }
+    },
+    {
+      "if": { "properties": { "kind": { "enum": ["decoy.create", "decoy.rotate", "decoy.reset"] } } },
+      "then": { "required": ["decoy"] }
+    }
+  ],
+  "$defs": {
+    "decoy_params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catalogue_id", "decoy_kind", "generation", "artefact", "listen_ports", "hard_deadline"],
+      "properties": {
+        "catalogue_id": { "type": "string" },
+        "decoy_kind": { "enum": ["sandbox", "emulation"] },
+        "generation": { "type": "integer", "minimum": 1 },
+        "artefact": {
+          "description": "sha256:<hex> image digest, emulator:<id>/<profile>, or module:<id>/<profile>[@sha256:<hex>]. null when the catalogue entry has no pinned artefact; hosts refuse such jobs.",
+          "type": ["string", "null"],
+          "pattern": "^(sha256:[a-f0-9]{64}|emulator:[a-z0-9_-]+/[a-z0-9._-]+|module:[a-z0-9_-]+/[a-z0-9._-]+(@sha256:[a-f0-9]{64})?)$"
+        },
+        "listen_ports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["port", "protocol", "service"],
+            "properties": {
+              "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+              "protocol": { "enum": ["tcp", "udp"] },
+              "service": { "type": "string" },
+              "tls": { "type": "boolean" }
+            }
+          }
+        },
+        "hard_deadline": { "type": "integer", "description": "Unix ms after which the host freezes the decoy even without the control plane." }
+      }
+    }
+  }
+}

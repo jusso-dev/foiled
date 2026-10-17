@@ -6,6 +6,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use foiled_core::agent::JobSigner;
 use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, parse_scopes};
 use foiled_core::capture::CaptureEvent;
@@ -45,11 +46,20 @@ async fn fetch(
     };
     let mut state = AppState::new(Arc::new(store), Arc::new(now_ms));
     state.uploads = upload_config(&env);
+    state.job_signer = job_signer(&env).map(Arc::new);
     Ok(router(state).call(req).await?)
 }
 
 fn now_ms() -> i64 {
     worker::Date::now().as_millis() as i64
+}
+
+/// Job signing key: a 32-byte Ed25519 seed (hex) as the Worker secret
+/// `JOB_SIGNING_KEY`, named by the var `JOB_SIGNING_KEY_ID`.
+fn job_signer(env: &Env) -> Option<JobSigner> {
+    let seed = env.secret("JOB_SIGNING_KEY").ok()?.to_string();
+    let id = env.var("JOB_SIGNING_KEY_ID").ok()?.to_string();
+    JobSigner::from_seed_hex(&id, &seed)
 }
 
 /// Upload signing needs an R2 S3 API token (Worker secrets) and the
@@ -242,6 +252,14 @@ struct JobRow {
     created_at: f64,
     expires_at: f64,
     status: String,
+    params: Option<String>,
+    leased_until: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct IdRow {
+    #[allow(dead_code)]
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -273,7 +291,29 @@ fn job_args(j: &JobRecord) -> Vec<JsValue> {
         n(j.created_at),
         n(j.expires_at),
         s(&j.status),
+        opt(j.params.as_ref().map(|p| p.to_string()).as_deref()),
+        j.leased_until.map(n).unwrap_or(JsValue::NULL),
     ]
+}
+
+impl JobRow {
+    fn into_record(self) -> JobRecord {
+        JobRecord {
+            id: self.id,
+            tenant_id: self.tenant_id,
+            decoy_id: self.decoy_id,
+            host_id: self.host_id,
+            kind: self.kind,
+            reason_code: self.reason_code,
+            reason_text: self.reason_text,
+            idempotency_key: self.idempotency_key,
+            created_at: self.created_at as i64,
+            expires_at: self.expires_at as i64,
+            status: self.status,
+            params: self.params.and_then(|p| serde_json::from_str(&p).ok()),
+            leased_until: self.leased_until.map(|v| v as i64),
+        }
+    }
 }
 
 impl CfStore {
@@ -470,25 +510,13 @@ impl Store for CfStore {
         wrap(async move {
             let row: Option<JobRow> = self
                 .db
-                .prepare(sql::JOB_BY_IDEMPOTENCY_KEY)
+                .prepare(sql::job_by_idempotency_key())
                 .bind(&[s(&t), s(&k)])
                 .map_err(err)?
                 .first(None)
                 .await
                 .map_err(err)?;
-            Ok(row.map(|r| JobRecord {
-                id: r.id,
-                tenant_id: r.tenant_id,
-                decoy_id: r.decoy_id,
-                host_id: r.host_id,
-                kind: r.kind,
-                reason_code: r.reason_code,
-                reason_text: r.reason_text,
-                idempotency_key: r.idempotency_key,
-                created_at: r.created_at as i64,
-                expires_at: r.expires_at as i64,
-                status: r.status,
-            }))
+            Ok(row.map(JobRow::into_record))
         })
     }
 
@@ -553,6 +581,120 @@ impl Store for CfStore {
             if !chunk.is_empty() {
                 queue.send_batch(chunk).await.map_err(err)?;
             }
+            Ok(())
+        })
+    }
+
+    fn lease_jobs(
+        &self,
+        tenant_id: &str,
+        host_id: &str,
+        now: i64,
+        lease_ms: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<JobRecord>> {
+        let (t, h) = (tenant_id.to_string(), host_id.to_string());
+        wrap(async move {
+            let mut rows = self
+                .db
+                .prepare(sql::lease_jobs())
+                .bind(&[s(&t), s(&h), n(now), n(lease_ms), n(limit as i64)])
+                .map_err(err)?
+                .all()
+                .await
+                .map_err(err)?
+                .results::<JobRow>()
+                .map_err(err)?;
+            self.db
+                .prepare(sql::PLACE_DECOYS)
+                .bind(&[s(&t), s(&h)])
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
+            rows.sort_by(|a, b| {
+                a.created_at
+                    .total_cmp(&b.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+            Ok(rows.into_iter().map(JobRow::into_record).collect())
+        })
+    }
+
+    fn finish_job(
+        &self,
+        tenant_id: &str,
+        host_id: &str,
+        job_id: &str,
+        status: &str,
+    ) -> StoreFuture<'_, Option<JobRecord>> {
+        let args = [s(tenant_id), s(host_id), s(job_id), s(status)];
+        wrap(async move {
+            let row: Option<JobRow> = self
+                .db
+                .prepare(sql::finish_job())
+                .bind(&args)
+                .map_err(err)?
+                .first(None)
+                .await
+                .map_err(err)?;
+            Ok(row.map(JobRow::into_record))
+        })
+    }
+
+    fn set_decoy_state(
+        &self,
+        tenant_id: &str,
+        decoy_id: &str,
+        from: DecoyState,
+        to: DecoyState,
+        bump_generation: bool,
+        now: i64,
+    ) -> StoreFuture<'_, bool> {
+        let args = [
+            s(tenant_id),
+            s(decoy_id),
+            s(from.as_str()),
+            s(to.as_str()),
+            n(i64::from(bump_generation)),
+            n(now),
+        ];
+        wrap(async move {
+            let row: Option<IdRow> = self
+                .db
+                .prepare(sql::SET_DECOY_STATE)
+                .bind(&args)
+                .map_err(err)?
+                .first(None)
+                .await
+                .map_err(err)?;
+            Ok(row.is_some())
+        })
+    }
+
+    fn record_heartbeat(
+        &self,
+        tenant_id: &str,
+        host_id: &str,
+        heartbeat: serde_json::Value,
+        clock_skew_ms: i64,
+        now: i64,
+    ) -> StoreFuture<'_, ()> {
+        let args = [
+            s(tenant_id),
+            s(host_id),
+            s(&heartbeat.to_string()),
+            n(clock_skew_ms),
+            n(now),
+        ];
+        wrap(async move {
+            self.db
+                .prepare(sql::UPSERT_HEARTBEAT)
+                .bind(&args)
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
             Ok(())
         })
     }

@@ -4,6 +4,7 @@
 //! Worker (`crates/api`) depends on it. No Tokio, threads, sockets or file
 //! system access (ADR 0009).
 
+pub mod agent;
 pub mod audit;
 pub mod auth;
 pub mod capture;

@@ -42,13 +42,13 @@ Bearer tokens are `fo_<id>.<secret>`. D1 stores only the SHA-256 of the secret, 
 
 ## What is served today
 
-`GET /healthz`, `GET /v0/catalogue/entries`, `GET /v0/catalogue/entries/{id}`, `GET`/`POST /v0/decoys` (alias `/v0/sandboxes`), `GET /v0/decoys/{id}`, the five decoy actions, and `GET /v0/audit`. Everything else in the spec is `planned` with its owning issue. Mapping to consumers:
+`GET /healthz`, `GET /v0/catalogue/entries`, `GET /v0/catalogue/entries/{id}`, `GET`/`POST /v0/decoys` (alias `/v0/sandboxes`), `GET /v0/decoys/{id}`, the five decoy actions, `GET /v0/audit`, evidence ingest and upload URLs (#9), and the host agent channel: job lease, ack and heartbeat (#41, [protocol](../agent/protocol.md)). Everything else in the spec is `planned` with its owning issue. Mapping to consumers:
 
 | Consumer | Needs | Status |
 | --- | --- | --- |
 | Dashboard (#14) | Catalogue, decoys, attempts, links, review queue, campaigns, IOCs, exports, events | Catalogue and decoys served; the rest planned with owners |
 | MCP (#24) | Create, list, get, reset, destroy, query attempts, events, audit | Decoy tools served; attempts and events planned |
-| Sensors (#31) and hosts (#41) | Heartbeat, job lease and ack, uploads, ingest | Planned (#41, #9, #31) |
+| Sensors (#31) and hosts (#41) | Heartbeat, job lease and ack, uploads, ingest | Served for hosts; sensor enrolment planned (#31) |
 | Campaigns (#33), IOCs (#34), radar and review queue (#35) | Their resources | Planned |
 
 ## Local mock server

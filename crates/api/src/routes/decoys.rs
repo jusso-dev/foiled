@@ -221,6 +221,8 @@ async fn create(
         created_at: now,
         expires_at: now + state.limits.job_ttl_secs * 1000,
         status: "queued".into(),
+        params: Some(decoy_params(entry, decoy.generation, decoy.expires_at)),
+        leased_until: None,
     };
     state.store.create_decoy(decoy.clone(), job.clone()).await?;
 
@@ -383,6 +385,11 @@ async fn action(
         created_at: now,
         expires_at: now + state.limits.job_ttl_secs * 1000,
         status: "queued".into(),
+        params: state
+            .catalogue
+            .get(&decoy.catalogue_id)
+            .map(|e| decoy_params(e, decoy.generation, decoy.expires_at)),
+        leased_until: None,
     };
     state.store.insert_job(job.clone()).await?;
 
@@ -408,4 +415,40 @@ fn reason_code_str(r: &Reason) -> String {
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default()
+}
+
+/// What the host agent runs for a catalogue entry. The artefact string is
+/// what the host's allow-list is checked against; entries without a pinned
+/// artefact produce `None`, and the host refuses the job.
+pub(crate) fn decoy_params(
+    entry: &foiled_core::catalogue::CatalogueEntry,
+    generation: u32,
+    hard_deadline: i64,
+) -> serde_json::Value {
+    let artefact = match &entry.artefact {
+        Some(Artefact::Sandbox(a)) => a
+            .image
+            .as_deref()
+            .and_then(|i| i.split_once('@'))
+            .map(|(_, d)| d.to_string()),
+        Some(Artefact::Emulator(a)) => {
+            Some(format!("emulator:{}/{}", a.emulator_id, a.emulator_profile))
+        }
+        Some(Artefact::Module(a)) => {
+            Some(match a.image.as_deref().and_then(|i| i.split_once('@')) {
+                Some((_, d)) => format!("module:{}/{}@{d}", a.module_id, a.module_profile),
+                None => format!("module:{}/{}", a.module_id, a.module_profile),
+            })
+        }
+        None => None,
+    };
+    serde_json::to_value(foiled_core::agent::DecoyParams {
+        catalogue_id: entry.id.clone(),
+        decoy_kind: entry.decoy_kind,
+        generation,
+        artefact,
+        listen_ports: entry.listen_ports.clone(),
+        hard_deadline,
+    })
+    .expect("decoy params serialise")
 }

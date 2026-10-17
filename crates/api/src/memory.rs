@@ -20,6 +20,7 @@ struct Inner {
     rate: HashMap<(String, i64), u32>,
     audit: Vec<AuditRecord>,
     events: Vec<CaptureEvent>,
+    heartbeats: HashMap<(String, String), (serde_json::Value, i64)>,
 }
 
 #[derive(Default)]
@@ -51,6 +52,18 @@ impl MemoryStore {
     /// Events put on the ingest queue, in order.
     pub fn queued_events(&self) -> Vec<CaptureEvent> {
         self.lock().events.clone()
+    }
+
+    /// Last heartbeat and clock skew recorded for a host.
+    pub fn heartbeat(&self, tenant_id: &str, host_id: &str) -> Option<(serde_json::Value, i64)> {
+        self.lock()
+            .heartbeats
+            .get(&(tenant_id.to_string(), host_id.to_string()))
+            .cloned()
+    }
+
+    pub fn decoy(&self, id: &str) -> Option<Decoy> {
+        self.lock().decoys.iter().find(|d| d.id == id).cloned()
     }
 
     /// Test helper: assign a decoy to a host, as the scheduler would.
@@ -203,6 +216,111 @@ impl Store for MemoryStore {
 
     fn enqueue_events(&self, events: Vec<CaptureEvent>) -> StoreFuture<'_, ()> {
         self.lock().events.extend(events);
+        ready(Ok(()))
+    }
+
+    fn lease_jobs(
+        &self,
+        tenant_id: &str,
+        host_id: &str,
+        now: i64,
+        lease_ms: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<JobRecord>> {
+        let mut g = self.lock();
+        let mut leased = Vec::new();
+        let mut placed = Vec::new();
+        let mut order: Vec<usize> = (0..g.jobs.len()).collect();
+        order.sort_by_key(|&i| (g.jobs[i].created_at, g.jobs[i].id.clone()));
+        for i in order {
+            if leased.len() >= limit {
+                break;
+            }
+            let j = &mut g.jobs[i];
+            let mine = j.host_id.as_deref().is_none_or(|h| h == host_id);
+            let available = j.status == "queued"
+                || (j.status == "leased" && j.leased_until.is_some_and(|t| t <= now));
+            if j.tenant_id != tenant_id || !mine || !available || j.expires_at <= now {
+                continue;
+            }
+            if j.host_id.is_none() {
+                placed.push(j.decoy_id.clone());
+            }
+            j.host_id = Some(host_id.to_string());
+            j.status = "leased".into();
+            j.leased_until = Some(now + lease_ms);
+            leased.push(j.clone());
+        }
+        for d in g.decoys.iter_mut() {
+            if d.tenant_id == tenant_id && d.host_id.is_none() && placed.contains(&d.id) {
+                d.host_id = Some(host_id.to_string());
+            }
+        }
+        ready(Ok(leased))
+    }
+
+    fn finish_job(
+        &self,
+        tenant_id: &str,
+        host_id: &str,
+        job_id: &str,
+        status: &str,
+    ) -> StoreFuture<'_, Option<JobRecord>> {
+        let mut g = self.lock();
+        let found = g.jobs.iter_mut().find(|j| {
+            j.tenant_id == tenant_id
+                && j.id == job_id
+                && j.host_id.as_deref() == Some(host_id)
+                && j.status == "leased"
+        });
+        let out = found.map(|j| {
+            j.status = status.to_string();
+            j.leased_until = None;
+            j.clone()
+        });
+        ready(Ok(out))
+    }
+
+    fn set_decoy_state(
+        &self,
+        tenant_id: &str,
+        decoy_id: &str,
+        from: DecoyState,
+        to: DecoyState,
+        bump_generation: bool,
+        now: i64,
+    ) -> StoreFuture<'_, bool> {
+        let mut g = self.lock();
+        let d = g
+            .decoys
+            .iter_mut()
+            .find(|d| d.tenant_id == tenant_id && d.id == decoy_id && d.state == from);
+        let ok = match d {
+            Some(d) => {
+                d.state = to;
+                d.updated_at = now;
+                if bump_generation {
+                    d.generation += 1;
+                }
+                true
+            }
+            None => false,
+        };
+        ready(Ok(ok))
+    }
+
+    fn record_heartbeat(
+        &self,
+        tenant_id: &str,
+        host_id: &str,
+        heartbeat: serde_json::Value,
+        clock_skew_ms: i64,
+        _now: i64,
+    ) -> StoreFuture<'_, ()> {
+        self.lock().heartbeats.insert(
+            (tenant_id.to_string(), host_id.to_string()),
+            (heartbeat, clock_skew_ms),
+        );
         ready(Ok(()))
     }
 }

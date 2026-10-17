@@ -1,0 +1,1 @@
+{"host_id":"host-1","agent_version":"0.1.0","kvm_present":true,"publicly_exposed":true,"free_disk_bytes":64000000000,"running_decoys":["dcy-demo-1"],"host_time":1800000000250,"buffered_events":0,"dropped_events":0}

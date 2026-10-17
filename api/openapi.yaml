@@ -231,10 +231,9 @@ paths:
       tags: [hosts]
       operationId: hostHeartbeat
       summary: Sandbox host health report
-      description: Host health, KVM present, free disk, running decoys, agent version and clock skew (#41).
+      description: Host health, KVM present, public exposure, free disk, running decoys, agent version and buffer counters. The control plane records clock skew from `host_time` (#41).
       security: [{ mtls: [] }]
-      x-foiled-status: planned
-      x-foiled-issue: 41
+      x-foiled-status: implemented
       x-foiled-store: d1
       x-foiled-scopes: [host:report]
       parameters:
@@ -243,9 +242,10 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema: { $ref: "../schemas/agent/heartbeat.schema.json" }
       responses:
         "204": { description: "Recorded." }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
@@ -255,33 +255,52 @@ paths:
       operationId: leaseJobs
       summary: Lease signed jobs for this host
       description: |
-        Long-poll. Returns jobs signed by the control plane, each with an
-        idempotency key, `reason` and expiry. A host certificate can only
-        lease its own jobs (#41).
+        Returns up to `max` jobs placed on this host (or not yet placed, which
+        this lease places here), each signed with the control plane's Ed25519
+        key and carrying an idempotency key, `reason` and expiry. Leases last
+        5 minutes; a lapsed lease can be taken again by the same host. A host
+        certificate can only lease its own jobs (#41).
       security: [{ mtls: [] }]
-      x-foiled-status: planned
-      x-foiled-issue: 41
+      x-foiled-status: implemented
       x-foiled-store: d1
       x-foiled-scopes: [host:lease]
       parameters:
         - $ref: "#/components/parameters/HostId"
+        - { name: max, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 10 } }
       responses:
         "200":
           description: Zero or more signed jobs.
           content:
             application/json:
-              schema: { type: object }
+              schema:
+                type: object
+                required: [jobs, lease_expires_at]
+                properties:
+                  jobs:
+                    type: array
+                    items: { $ref: "../schemas/agent/signed-job.schema.json" }
+                  lease_expires_at: { type: integer }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: Job signing is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /v0/hosts/{host_id}/jobs/{job_id}:ack:
     post:
       tags: [hosts]
       operationId: ackJob
       summary: Report a job result
+      description: |
+        Closes a job leased by this host. A reported `decoy_state` is applied
+        by walking the allowed transitions (`docs/rotation.md`); a successful
+        rotate or reset always passes through `rotating` and bumps the
+        generation. Impossible states are refused with 409. Audited as
+        `job.ack`.
       security: [{ mtls: [] }]
-      x-foiled-status: planned
-      x-foiled-issue: 41
+      x-foiled-status: implemented
       x-foiled-store: d1
       x-foiled-scopes: [host:report]
       parameters:
@@ -291,11 +310,13 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema: { $ref: "../schemas/agent/job-result.schema.json" }
       responses:
         "204": { description: "Recorded." }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /v0/uploads:
     post:

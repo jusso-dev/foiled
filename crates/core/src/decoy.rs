@@ -71,6 +71,44 @@ impl DecoyState {
         }
     }
 
+    /// Shortest sequence of allowed moves from `self` to `target`, not
+    /// including `self`. `None` when the target cannot be reached. Hosts
+    /// report the state a job ended in; the control plane walks this path so
+    /// every intermediate move is still checked.
+    pub fn path_to(self, target: DecoyState) -> Option<Vec<DecoyState>> {
+        if self == target {
+            return Some(Vec::new());
+        }
+        let mut prev: [Option<DecoyState>; 8] = [None; 8];
+        let idx = |s: DecoyState| Self::ALL.iter().position(|x| *x == s).unwrap_or(0);
+        let mut queue = std::collections::VecDeque::from([self]);
+        let mut seen = [false; 8];
+        seen[idx(self)] = true;
+        while let Some(cur) = queue.pop_front() {
+            for next in Self::ALL {
+                if !seen[idx(next)] && cur.can_transition_to(next) {
+                    seen[idx(next)] = true;
+                    prev[idx(next)] = Some(cur);
+                    if next == target {
+                        let mut path = vec![next];
+                        let mut at = next;
+                        while let Some(p) = prev[idx(at)] {
+                            if p == self {
+                                break;
+                            }
+                            path.push(p);
+                            at = p;
+                        }
+                        path.reverse();
+                        return Some(path);
+                    }
+                    queue.push_back(next);
+                }
+            }
+        }
+        None
+    }
+
     /// The decoy accepts attacker traffic only in this state.
     pub fn is_published(self) -> bool {
         self == DecoyState::Healthy
@@ -197,6 +235,31 @@ mod tests {
         assert!(!Rotating.is_published());
         assert!(!Pending.can_transition_to(Healthy));
         assert!(!Healthy.can_transition_to(Healthy));
+    }
+
+    #[test]
+    fn paths_walk_through_allowed_moves_only() {
+        assert_eq!(Pending.path_to(Healthy), Some(vec![Starting, Healthy]));
+        assert_eq!(Rotating.path_to(Healthy), Some(vec![Starting, Healthy]));
+        assert_eq!(Healthy.path_to(Healthy), Some(vec![]));
+        // A quarantined guest only comes back through a rebuild.
+        assert_eq!(
+            Quarantined.path_to(Healthy),
+            Some(vec![Rotating, Starting, Healthy])
+        );
+        assert_eq!(Destroyed.path_to(Healthy), None);
+        for from in DecoyState::ALL {
+            for to in DecoyState::ALL {
+                if let Some(path) = from.path_to(to) {
+                    let mut cur = from;
+                    for s in path {
+                        assert!(cur.can_transition_to(s), "{cur:?} -> {s:?}");
+                        cur = s;
+                    }
+                    assert_eq!(cur, to);
+                }
+            }
+        }
     }
 
     #[test]

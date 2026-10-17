@@ -37,6 +37,8 @@
   "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "foiled-evidence" }],
   "vars": {
     "EVIDENCE_BUCKET": "foiled-evidence",
+    // Names the Ed25519 job signing key; the seed is the secret JOB_SIGNING_KEY (#41).
+    "JOB_SIGNING_KEY_ID": "k1",
     "R2_S3_HOST": "<account-id>.r2.cloudflarestorage.com"
   },
   // Radar counters (#35).

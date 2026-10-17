@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/agent/job-result.schema.json",
+  "title": "Foiled job result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["job_id", "outcome"],
+  "properties": {
+    "job_id": { "type": "string", "minLength": 1 },
+    "outcome": { "enum": ["succeeded", "failed", "rejected"] },
+    "decoy_state": { "enum": ["pending", "starting", "healthy", "rotating", "stopped", "quarantined", "failed", "destroyed"] },
+    "detail": { "type": "string", "maxLength": 2000 }
+  }
+}

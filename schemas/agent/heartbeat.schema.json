@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/agent/heartbeat.schema.json",
+  "title": "Foiled host heartbeat",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["host_id", "agent_version", "kvm_present", "publicly_exposed", "free_disk_bytes", "running_decoys", "host_time", "buffered_events", "dropped_events"],
+  "properties": {
+    "host_id": { "type": "string" },
+    "agent_version": { "type": "string" },
+    "kvm_present": { "type": "boolean" },
+    "publicly_exposed": { "type": "boolean" },
+    "free_disk_bytes": { "type": "integer", "minimum": 0 },
+    "running_decoys": { "type": "array", "items": { "type": "string" } },
+    "host_time": { "type": "integer", "description": "Host clock, Unix ms. The control plane derives clock skew." },
+    "buffered_events": { "type": "integer", "minimum": 0 },
+    "dropped_events": { "type": "integer", "minimum": 0 }
+  }
+}

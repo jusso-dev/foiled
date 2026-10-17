@@ -11,6 +11,6 @@ Each ADR lives in `docs/adr/NNNN-slug.md` and has the sections Status, Context, 
 | [0005](0005-capture-layer.md) | [Capture layer](0005-capture-layer.md) | Accepted (18 Oct 2026) | #9 |
 | 0006 | Emulation plug-ins | Planned | #30 |
 | 0007 | Edge ingest | Planned | #31 |
-| 0008 | Sandbox host agent | Planned | #41 |
+| [0008](0008-sandbox-host-agent.md) | [Sandbox host agent](0008-sandbox-host-agent.md) | Accepted (18 Oct 2026) | #41 |
 | [0009](0009-axum-workers-and-front-end.md) | [Axum on Workers and front end](0009-axum-workers-and-front-end.md) | Accepted (17 Oct 2026) | #40 |
 | 0010 | LLM provider and AI Gateway | Planned | #28 |

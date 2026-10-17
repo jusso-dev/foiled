@@ -1,0 +1,1 @@
+{"job_id":"job-3","host_id":"host-1","tenant_id":"t1","decoy_id":"dcy-demo-1","kind":"decoy.destroy","reason":{"code":"operator_manual","text":"end of demo"},"idempotency_key":"idem-3","issued_at":1800000000000,"expires_at":1800003600000}

@@ -1,0 +1,29 @@
+# Example /etc/foiled/hostd.toml for foiled-hostd (#41). Copy and edit.
+# No database credentials, Cloudflare tokens or R2 keys ever go here.
+
+host_id = "host-example-1"
+# The mTLS ingest hostname. Placeholder: never commit real zone names.
+api_base = "https://ingest.example.invalid"
+client_cert = "/etc/foiled/host.crt"
+client_key = "/etc/foiled/host.key"
+state_dir = "/var/lib/foiled"
+
+# Assume public exposure unless this is a lab box with no public address.
+publicly_exposed = true
+sandbox_runtime = "firecracker"
+
+# Only these artefacts may run here.
+allowlist = [
+  "emulator:redis/redis-7.0",
+  # "sha256:<digest of foiled-demo-app built with build/recipes/foiled-demo-app/build.sh>",
+]
+
+buffer_max_bytes = 1073741824
+heartbeat_secs = 30
+poll_secs = 5
+
+# The control plane's job signing public key(s). Add the next key before
+# rotating, remove the old one after.
+[[trusted_keys]]
+id = "k1"
+public_key = "<hex Ed25519 public key>"

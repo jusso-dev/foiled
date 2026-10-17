@@ -14,6 +14,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [threat-model.md](threat-model.md) | Containment, egress, breakout and Australian legal and ethical limits. |
 | [adr/README.md](adr/README.md) | Architecture Decision Records index, including [ADR 0002](adr/0002-sandbox-runtime.md) on the sandbox and emulation runtime and [ADR 0009](adr/0009-axum-workers-and-front-end.md) on Axum and Workers. |
 | [api/control-plane.md](api/control-plane.md) | Control plane API: clients, auth, rules, stores, the OpenAPI contract and the local mock server. |
+| [agent/protocol.md](agent/protocol.md) | Host agent protocol: signed jobs, leases, results, heartbeats, evidence and outage behaviour. |
 | [catalogue.md](catalogue.md) | Catalogue entry fields, decoy kinds and CI rules. |
 | [catalogue-sync.md](catalogue-sync.md) | How KEV, OSV and NVD feed draft catalogue entries. |
 | [rotation.md](rotation.md) | Rotation and reset of compromised or aged sandboxes, and the decoy lifecycle. |
@@ -30,8 +31,7 @@ These docs do not exist yet. Each is owned by the issue listed.
 
 | Path | What it will cover | Issue |
 | --- | --- | --- |
-| Remaining ADRs | One file per decision under `docs/adr/` (`NNNN-slug.md`). | #28, #30, #31, #41 |
+| Remaining ADRs | One file per decision under `docs/adr/` (`NNNN-slug.md`). | #28, #30, #31 |
 | `docs/deploy/edge-sensor.md` | Enrolling and running an edge sensor. | #31 |
-| `docs/agent/protocol.md` | Protocol between the control plane and the sandbox host agent. | #41 |
 | `docs/radar.md` | Radar feed, review queue and research write-ups. | #35 |
 | `docs/compliance/licence-register.md` | Licence and data-terms compliance register. | #38 |
