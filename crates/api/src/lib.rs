@@ -120,6 +120,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::ingest::router())
         .merge(routes::hosts::router())
         .merge(routes::exports::router())
+        .merge(routes::attempts::router())
         .fallback(|| async { error::ApiError::not_found("route") })
         .with_state(state)
 }

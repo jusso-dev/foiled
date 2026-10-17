@@ -1,0 +1,39 @@
+{
+  "attempt_id": "att_e577d0c8f6797007085f6c23",
+  "tenant_id": "t1",
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "decoy_kind": "sandbox",
+  "sensor_id": null,
+  "src": "198.51.100.23",
+  "first_seen": 1792285323000,
+  "last_seen": 1792285323000,
+  "state": "probe",
+  "state_history": [
+    {
+      "state": "probe",
+      "at": 1792285323000,
+      "signal": "first_contact",
+      "event_id": "s1"
+    }
+  ],
+  "event_ids": [
+    "s1"
+  ],
+  "payload_refs": [],
+  "ioc_refs": [],
+  "hook_hits": [],
+  "campaign_id": null,
+  "labels": {},
+  "noise": {
+    "score": 40,
+    "band": "mixed",
+    "hits": 2,
+    "decoy_types_touched": 2,
+    "decoys_touched": 2,
+    "fleet_scope": "tenant",
+    "evidence": [
+      "touched 2 catalogue product(s)"
+    ]
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/attempt.schema.json",
+  "title": "Foiled exploit attempt",
+  "description": "Capture events from one source against one decoy, grouped by idle gap, with a monotonic state and a noise score (#25, docs/attempts.md).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["attempt_id", "tenant_id", "decoy_id", "catalogue_id", "decoy_kind", "src", "first_seen", "last_seen", "state", "state_history", "event_ids", "payload_refs", "ioc_refs", "hook_hits", "labels"],
+  "properties": {
+    "attempt_id": { "type": "string", "pattern": "^att_[a-f0-9]{24}$" },
+    "tenant_id": { "type": "string" },
+    "decoy_id": { "type": "string", "minLength": 1 },
+    "catalogue_id": { "type": "string", "minLength": 1 },
+    "decoy_kind": { "enum": ["sandbox", "emulation"] },
+    "sensor_id": { "type": ["string", "null"] },
+    "src": { "type": "string", "minLength": 1 },
+    "first_seen": { "type": "integer" },
+    "last_seen": { "type": "integer" },
+    "state": { "$ref": "#/$defs/state" },
+    "state_history": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state", "at", "signal", "event_id"],
+        "properties": {
+          "state": { "$ref": "#/$defs/state" },
+          "at": { "type": "integer" },
+          "signal": { "enum": ["first_contact", "matcher", "hook_trigger", "hook_post_exploit", "egress", "file_write", "process_exec", "yara", "canary"] },
+          "event_id": { "type": "string" }
+        }
+      }
+    },
+    "event_ids": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "payload_refs": { "type": "array", "items": { "type": "string", "pattern": "^r2://" } },
+    "ioc_refs": { "type": "array", "items": { "type": "string" } },
+    "hook_hits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hook_id", "cve_id", "stage", "event_id", "ts"],
+        "properties": {
+          "hook_id": { "type": "string" },
+          "cve_id": { "type": ["string", "null"] },
+          "stage": { "enum": ["trigger", "post_exploit", "cleanup"] },
+          "event_id": { "type": "string" },
+          "ts": { "type": "integer" }
+        }
+      }
+    },
+    "campaign_id": { "type": ["string", "null"] },
+    "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+    "noise": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["score", "band", "hits", "decoy_types_touched", "decoys_touched", "fleet_scope", "evidence"],
+      "properties": {
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "band": { "enum": ["targeted", "mixed", "mass"] },
+        "hits": { "type": "integer", "minimum": 0 },
+        "decoy_types_touched": { "type": "integer", "minimum": 0 },
+        "decoys_touched": { "type": "integer", "minimum": 0 },
+        "fleet_scope": { "type": "string" },
+        "evidence": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "state": { "enum": ["probe", "exploit", "post-exploitation"] }
+  }
+}

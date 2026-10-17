@@ -1,0 +1,188 @@
+{
+ "events": [
+  {
+   "event_id": "s1",
+   "ts": 1792285323000,
+   "decoy_id": "dcy-demo-1",
+   "catalogue_id": "foiled/demo-app/1.0.0",
+   "decoy_kind": "sandbox",
+   "channel": "application",
+   "severity": "info",
+   "src": {
+    "ip": "198.51.100.23"
+   },
+   "tenant_id": "t1",
+   "source": {
+    "kind": "host",
+    "id": "host-1"
+   },
+   "data": {
+    "method": "GET",
+    "path": "/"
+   }
+  },
+  {
+   "event_id": "s2",
+   "ts": 1792285328000,
+   "decoy_id": "dcy-redis-1",
+   "catalogue_id": "emulator/redis/7.0",
+   "decoy_kind": "emulation",
+   "channel": "application",
+   "severity": "info",
+   "src": {
+    "ip": "198.51.100.23"
+   },
+   "tenant_id": "t1",
+   "source": {
+    "kind": "host",
+    "id": "host-1"
+   },
+   "data": {
+    "command": "INFO"
+   }
+  },
+  {
+   "event_id": "x1",
+   "ts": 1792285383000,
+   "decoy_id": "dcy-demo-1",
+   "catalogue_id": "foiled/demo-app/1.0.0",
+   "decoy_kind": "sandbox",
+   "channel": "application",
+   "severity": "info",
+   "src": {
+    "ip": "203.0.113.7"
+   },
+   "tenant_id": "t1",
+   "source": {
+    "kind": "host",
+    "id": "host-1"
+   },
+   "data": {
+    "method": "GET",
+    "path": "/admin"
+   }
+  },
+  {
+   "event_id": "x2",
+   "ts": 1792285384000,
+   "decoy_id": "dcy-demo-1",
+   "catalogue_id": "foiled/demo-app/1.0.0",
+   "decoy_kind": "sandbox",
+   "channel": "application",
+   "severity": "info",
+   "src": {
+    "ip": "203.0.113.7"
+   },
+   "tenant_id": "t1",
+   "source": {
+    "kind": "host",
+    "id": "host-1"
+   },
+   "data": {
+    "method": "POST",
+    "path": "/api/upload?path=../../tmp/x.sh"
+   }
+  },
+  {
+   "event_id": "x3",
+   "ts": 1792285384010,
+   "decoy_id": "dcy-demo-1",
+   "catalogue_id": "foiled/demo-app/1.0.0",
+   "decoy_kind": "sandbox",
+   "channel": "hook",
+   "severity": "high",
+   "src": {
+    "ip": "203.0.113.7"
+   },
+   "tenant_id": "t1",
+   "source": {
+    "kind": "host",
+    "id": "host-1"
+   },
+   "data": {},
+   "hook": {
+    "hook_id": "demo-app.upload-path-traversal",
+    "catalogue_id": "foiled/demo-app/1.0.0",
+    "cve_id": "FOILED-DEMO-0001",
+    "stage": "trigger",
+    "sequence_no": 1,
+    "t_offset_ms": 0
+   }
+  },
+  {
+   "event_id": "x4",
+   "ts": 1792285384020,
+   "decoy_id": "dcy-demo-1",
+   "catalogue_id": "foiled/demo-app/1.0.0",
+   "decoy_kind": "sandbox",
+   "channel": "hook",
+   "severity": "high",
+   "src": {
+    "ip": "203.0.113.7"
+   },
+   "tenant_id": "t1",
+   "source": {
+    "kind": "host",
+    "id": "host-1"
+   },
+   "data": {},
+   "hook": {
+    "hook_id": "demo-app.upload-path-traversal",
+    "catalogue_id": "foiled/demo-app/1.0.0",
+    "cve_id": "FOILED-DEMO-0001",
+    "stage": "post_exploit",
+    "sequence_no": 1,
+    "t_offset_ms": 0
+   }
+  },
+  {
+   "event_id": "x5",
+   "ts": 1792285385000,
+   "decoy_id": "dcy-demo-1",
+   "catalogue_id": "foiled/demo-app/1.0.0",
+   "decoy_kind": "sandbox",
+   "channel": "egress",
+   "severity": "info",
+   "src": {
+    "ip": "10.85.1.2"
+   },
+   "tenant_id": "t1",
+   "source": {
+    "kind": "host",
+    "id": "host-1"
+   },
+   "data": {
+    "verdict": "blocked"
+   },
+   "dst": {
+    "ip": "192.0.2.80",
+    "port": 80
+   }
+  },
+  {
+   "event_id": "r1",
+   "ts": 1792285443000,
+   "decoy_id": "dcy-redis-1",
+   "catalogue_id": "emulator/redis/7.0",
+   "decoy_kind": "emulation",
+   "channel": "application",
+   "severity": "info",
+   "src": {
+    "ip": "192.0.2.44"
+   },
+   "tenant_id": "t1",
+   "source": {
+    "kind": "host",
+    "id": "host-1"
+   },
+   "data": {
+    "command": "CONFIG",
+    "args": [
+     "SET",
+     "dir",
+     "/var/spool/cron"
+    ]
+   }
+  }
+ ]
+}

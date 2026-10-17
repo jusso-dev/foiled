@@ -179,6 +179,16 @@ pub trait Store: Send + Sync {
         now: i64,
     ) -> StoreFuture<'_, bool>;
 
+    /// Stamped capture events for a tenant with `since <= ts < until`,
+    /// oldest first, at most `limit`. Attempts are built from these (#25).
+    fn events_between(
+        &self,
+        tenant_id: &str,
+        since: i64,
+        until: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<CaptureEvent>>;
+
     /// Source IPs seen since `since` (Unix ms), oldest first.
     fn ip_iocs(&self, tenant_id: &str, since: i64) -> StoreFuture<'_, Vec<IpIocRow>>;
 

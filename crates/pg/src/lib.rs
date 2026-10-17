@@ -312,3 +312,24 @@ pub async fn ip_iocs(client: &Client, tenant_id: &str, since: i64) -> Result<Vec
         })
         .collect())
 }
+
+/// Stamped events for a tenant in `[since, until)`, oldest first.
+pub async fn events_between(
+    client: &Client,
+    tenant_id: &str,
+    since: i64,
+    until: i64,
+    limit: i64,
+) -> Result<Vec<CaptureEvent>, Error> {
+    let rows = client
+        .query(
+            "SELECT body FROM capture_events WHERE tenant_id = $1 AND ts >= $2 AND ts < $3
+             ORDER BY ts, event_id LIMIT $4",
+            &[&tenant_id, &since, &until, &limit],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .filter_map(|r| serde_json::from_value(r.get("body")).ok())
+        .collect())
+}

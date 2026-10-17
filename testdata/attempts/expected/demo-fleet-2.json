@@ -1,0 +1,70 @@
+{
+  "attempt_id": "att_43065706a9ac936e970054e5",
+  "tenant_id": "t1",
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "decoy_kind": "sandbox",
+  "sensor_id": null,
+  "src": "203.0.113.7",
+  "first_seen": 1792285383000,
+  "last_seen": 1792285385000,
+  "state": "post-exploitation",
+  "state_history": [
+    {
+      "state": "probe",
+      "at": 1792285383000,
+      "signal": "first_contact",
+      "event_id": "x1"
+    },
+    {
+      "state": "exploit",
+      "at": 1792285384010,
+      "signal": "hook_trigger",
+      "event_id": "x3"
+    },
+    {
+      "state": "post-exploitation",
+      "at": 1792285384020,
+      "signal": "hook_post_exploit",
+      "event_id": "x4"
+    }
+  ],
+  "event_ids": [
+    "x1",
+    "x2",
+    "x3",
+    "x4",
+    "x5"
+  ],
+  "payload_refs": [],
+  "ioc_refs": [],
+  "hook_hits": [
+    {
+      "hook_id": "demo-app.upload-path-traversal",
+      "cve_id": "FOILED-DEMO-0001",
+      "stage": "trigger",
+      "event_id": "x3",
+      "ts": 1792285384010
+    },
+    {
+      "hook_id": "demo-app.upload-path-traversal",
+      "cve_id": "FOILED-DEMO-0001",
+      "stage": "post_exploit",
+      "event_id": "x4",
+      "ts": 1792285384020
+    }
+  ],
+  "campaign_id": null,
+  "labels": {},
+  "noise": {
+    "score": 10,
+    "band": "targeted",
+    "hits": 4,
+    "decoy_types_touched": 1,
+    "decoys_touched": 1,
+    "fleet_scope": "tenant",
+    "evidence": [
+      "touched 1 catalogue product(s)"
+    ]
+  }
+}

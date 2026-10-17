@@ -418,39 +418,61 @@ paths:
       tags: [attempts]
       operationId: listAttempts
       summary: List exploit attempts
+      description: |
+        Built on request from the capture events in a window (default the
+        last 7 days, at most 31 days and 20,000 events) with the
+        deterministic grouping in `docs/attempts.md`. Newest activity first.
+        `truncated` is true when the window held more events than the cap.
       parameters:
-        - { name: campaign_id, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: integer }, description: "Unix ms, inclusive." }
+        - { name: until, in: query, schema: { type: integer }, description: "Unix ms, exclusive." }
+        - { name: decoy_id, in: query, schema: { type: string } }
         - { name: decoy_kind, in: query, schema: { $ref: "#/components/schemas/DecoyKind" } }
         - { name: sensor_id, in: query, schema: { type: string } }
-        - { name: decoy_id, in: query, schema: { type: string } }
         - { name: src, in: query, schema: { type: string } }
         - { name: state, in: query, schema: { type: string, enum: [probe, exploit, post-exploitation] } }
-        - { name: cve, in: query, schema: { type: string } }
-        - { name: technique, in: query, schema: { type: string } }
-        - { name: tier, in: query, schema: { type: string } }
-        - { name: min_confidence, in: query, schema: { type: integer, minimum: 0, maximum: 100 } }
-        - { name: since, in: query, schema: { type: integer }, description: "Unix ms." }
-        - { name: until, in: query, schema: { type: integer }, description: "Unix ms." }
+        - { name: cve, in: query, schema: { type: string }, description: "Case-insensitive CVE id from hook hits; CVE links (#12, #27) extend this." }
+        - { name: campaign_id, in: query, schema: { type: string } }
         - { $ref: "#/components/parameters/Limit" }
-      x-foiled-status: planned
-      x-foiled-issue: 25
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [attempts:read]
       responses:
-        "200": { description: "Attempts, newest first." }
+        "200":
+          description: Attempts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, truncated]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/attempt.schema.json" }
+                  truncated: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /v0/attempts/{attempt_id}:
     get:
       tags: [attempts]
       operationId: getAttempt
       summary: Get one attempt
-      x-foiled-status: planned
-      x-foiled-issue: 25
+      description: Attempt ids are stable for the same evidence. Pass the same `since` and `until` as the list call for attempts older than 7 days.
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [attempts:read]
-      parameters: [{ $ref: "#/components/parameters/AttemptId" }]
+      parameters:
+        - { $ref: "#/components/parameters/AttemptId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
       responses:
-        "200": { description: "The attempt." }
+        "200":
+          description: The attempt.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/attempt.schema.json" }
         "404": { $ref: "#/components/responses/NotFound" }
     patch:
       tags: [attempts]
