@@ -1,0 +1,260 @@
+# Redis 7.0.11 persona for the redis emulator plug-in (#30, docs/adr/0006-emulation-plugins.md).
+# An unauthenticated Redis on a Debian 12 server, as the Debian package installs it, with
+# bind and protected mode opened up by its operator. Schema: schemas/emulator-profile.schema.json.
+#
+# CVE-2099-0001 is a placeholder id used to show how a claim is wired to a hook. It is not a
+# real CVE and no real Redis vulnerability is asserted here.
+# Values below are synthetic. Canary values (#17) are rendered in per decoy at start.
+schema_version: 1
+id: redis-7.0
+emulator_id: redis
+plugin: redis
+description: >-
+  Redis 7.0.11 standalone on Debian 12 (bookworm), no password, protected configs and the
+  MODULE command enabled. Answers a small command subset with Redis 7.0 reply text.
+catalogue_ids:
+  - emulator/redis/7.0
+listen:
+  - port: 6379
+    protocol: tcp
+    service: redis
+tls: none
+jitter:
+  min_ms: 1
+  max_ms: 12
+claimed_cves:
+  - cve_id: CVE-2099-0001
+    claim: illustrative
+    hook: redis.config-set-persistence
+    notes: >-
+      Illustrative only. Stands for the unauthenticated persistence-path rewrite pattern
+      (CONFIG SET dir/dbfilename, then SET and SAVE). Not tied to a matcher or harness.
+hooks:
+  - id: redis.config-set-persistence
+    stage: trigger
+    cve_id: CVE-2099-0001
+    severity: high
+    on:
+      command: CONFIG SET
+      arg: dir|dbfilename
+    description: Persistence path rewrite, the first step of the cron line or SSH key write technique.
+  - id: redis.module-load
+    stage: trigger
+    severity: high
+    on:
+      command: MODULE LOAD
+    description: Attempt to load a shared object. Always refused; nothing is loaded.
+  - id: redis.replicaof
+    stage: trigger
+    severity: high
+    on:
+      command: SLAVEOF|REPLICAOF
+    description: Rogue master replication, used to push a module file. Logged; no connection is made.
+canaries:
+  - name: billing_api_key
+    kind: api_key
+    description: An API key left in the cache by the billing worker.
+fingerprint_checks:
+  - item: FR-01
+    result: pass
+    note: No hostname in INFO; no tool, project or honeypot words in any reply. Asserted by tests.
+  - item: FR-05
+    result: pass
+    note: INFO redis_version matches the catalogue entry's banner_hints exactly. Asserted by tests.
+  - item: FR-06
+    result: pass
+    note: >-
+      os, gcc_version, executable and config_file match the Debian 12 redis-server package, the
+      same release as the Cowrie debian-openssh persona. Asserted by tests.
+  - item: FR-07
+    result: accepted_tell
+    note: The emulator serves one port. Publish it next to an SSH decoy; the service mix is a placement choice.
+  - item: FR-08
+    result: pass
+    note: Linux persona on the host's Linux TCP/IP stack.
+  - item: FR-10
+    result: pass
+    note: >-
+      Redis analogue of the error page check: unknown command, wrong arity, NOAUTH, WRONGPASS,
+      protocol errors and MODULE LOAD failures use Redis 7.0 wording. Asserted by tests.
+  - item: FR-11
+    result: pass
+    note: Uptime starts 2 to 40 days in and moves with the clock; server_time_usec is the host clock. Asserted by tests.
+  - item: FR-17
+    result: pass
+    note: Replies wait 1 to 12 ms. Pipelined commands share one delay per read.
+  - item: FR-19
+    result: pass
+    note: REPLICAOF is acknowledged and INFO shows master_link_status:down, as a firewalled replica would.
+redis:
+  version: 7.0.11
+  commands:
+    - AUTH
+    - BGSAVE
+    - COMMAND
+    - CONFIG
+    - DBSIZE
+    - ECHO
+    - FLUSHALL
+    - GET
+    - INFO
+    - KEYS
+    - MODULE
+    - PING
+    - QUIT
+    - REPLICAOF
+    - SAVE
+    - SELECT
+    - SET
+    - SLAVEOF
+  uptime_offset_s:
+    min: 172800
+    max: 3456000
+  idle_timeout_s: 300
+  info:
+    - section: Server
+      fields:
+        - "redis_version:7.0.11"
+        - "redis_git_sha1:00000000"
+        - "redis_git_dirty:0"
+        - "redis_build_id:6a2b4c7d9e1f3a5b"
+        - "redis_mode:standalone"
+        - "os:Linux 6.1.0-18-amd64 x86_64"
+        - "arch_bits:64"
+        - "monotonic_clock:POSIX clock_gettime"
+        - "multiplexing_api:epoll"
+        - "atomicvar_api:c11-builtin"
+        - "gcc_version:12.2.0"
+        - "process_id:{process_id}"
+        - "process_supervised:systemd"
+        - "run_id:{run_id}"
+        - "tcp_port:{tcp_port}"
+        - "server_time_usec:{server_time_usec}"
+        - "uptime_in_seconds:{uptime_in_seconds}"
+        - "uptime_in_days:{uptime_in_days}"
+        - "hz:10"
+        - "configured_hz:10"
+        - "lru_clock:{lru_clock}"
+        - "executable:/usr/bin/redis-server"
+        - "config_file:/etc/redis/redis.conf"
+        - "io_threads_active:0"
+    - section: Clients
+      fields:
+        - "connected_clients:{connected_clients}"
+        - "cluster_connections:0"
+        - "maxclients:10000"
+        - "client_recent_max_input_buffer:20480"
+        - "client_recent_max_output_buffer:0"
+        - "blocked_clients:0"
+        - "tracking_clients:0"
+        - "clients_in_timeout_table:0"
+    - section: Memory
+      fields:
+        - "used_memory:{used_memory}"
+        - "used_memory_human:{used_memory_human}"
+        - "used_memory_rss:9437184"
+        - "used_memory_rss_human:9.00M"
+        - "used_memory_peak:1153024"
+        - "used_memory_peak_human:1.10M"
+        - "used_memory_lua:31744"
+        - "used_memory_lua_human:31.00K"
+        - "maxmemory:0"
+        - "maxmemory_human:0B"
+        - "maxmemory_policy:noeviction"
+        - "mem_allocator:jemalloc-5.3.0"
+        - "lazyfree_pending_objects:0"
+    - section: Persistence
+      fields:
+        - "loading:0"
+        - "async_loading:0"
+        - "current_cow_peak:0"
+        - "current_cow_size:0"
+        - "current_cow_size_age:0"
+        - "current_fork_perc:0.00"
+        - "current_save_keys_processed:0"
+        - "current_save_keys_total:0"
+        - "rdb_changes_since_last_save:{rdb_changes_since_last_save}"
+        - "rdb_bgsave_in_progress:0"
+        - "rdb_last_save_time:{rdb_last_save_time}"
+        - "rdb_last_bgsave_status:ok"
+        - "rdb_last_bgsave_time_sec:0"
+        - "rdb_current_bgsave_time_sec:-1"
+        - "rdb_last_cow_size:0"
+        - "aof_enabled:0"
+        - "aof_rewrite_in_progress:0"
+        - "aof_rewrite_scheduled:0"
+        - "aof_last_rewrite_time_sec:-1"
+        - "aof_current_rewrite_time_sec:-1"
+        - "aof_last_bgrewrite_status:ok"
+        - "aof_rewrites:0"
+        - "aof_last_write_status:ok"
+        - "aof_last_cow_size:0"
+        - "module_fork_in_progress:0"
+        - "module_fork_last_cow_size:0"
+    - section: Stats
+      fields:
+        - "total_connections_received:{total_connections_received}"
+        - "total_commands_processed:{total_commands_processed}"
+        - "instantaneous_ops_per_sec:0"
+        - "rejected_connections:0"
+        - "sync_full:0"
+        - "sync_partial_ok:0"
+        - "sync_partial_err:0"
+        - "expired_keys:0"
+        - "evicted_keys:0"
+        - "pubsub_channels:0"
+        - "pubsub_patterns:0"
+        - "latest_fork_usec:412"
+        - "migrate_cached_sockets:0"
+    - section: Replication
+    - section: CPU
+      fields:
+        - "used_cpu_sys:12.481022"
+        - "used_cpu_user:9.817352"
+        - "used_cpu_sys_children:0.004120"
+        - "used_cpu_user_children:0.001820"
+    - section: Modules
+    - section: Errorstats
+    - section: Cluster
+      fields:
+        - "cluster_enabled:0"
+    - section: Keyspace
+  config:
+    appendfilename: appendonly.aof
+    appendonly: "no"
+    bind: "0.0.0.0"
+    daemonize: "yes"
+    databases: "16"
+    dbfilename: dump.rdb
+    dir: /var/lib/redis
+    enable-debug-command: "no"
+    enable-module-command: "yes"
+    enable-protected-configs: "yes"
+    hz: "10"
+    logfile: /var/log/redis/redis-server.log
+    loglevel: notice
+    masterauth: ""
+    maxclients: "10000"
+    maxmemory: "0"
+    maxmemory-policy: noeviction
+    pidfile: /run/redis/redis-server.pid
+    port: "6379"
+    protected-mode: "no"
+    replica-read-only: "yes"
+    requirepass: ""
+    save: "3600 1 300 100 60 10000"
+    supervised: auto
+    tcp-keepalive: "300"
+    timeout: "0"
+  protected_config:
+    - dir
+    - dbfilename
+  allow_protected_config_set: true
+  suspicious_config:
+    - dir
+    - dbfilename
+  keys:
+    "session:7f3a91c2": '{"user":"svc-reports","role":"viewer","exp":1793000000}'
+    "queue:mail:pending": "0"
+    "cache:home:v3": "<ul><li>Q3 summary</li><li>Rota</li></ul>"
+    "billing:worker:api_key": "{{canary.billing_api_key}}"

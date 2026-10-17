@@ -1,0 +1,38 @@
+# Draft emulation entry. Profile: emulators/ssl-vpn/profiles/portal-generic.yaml (#30).
+# "Gateway Portal" is a fictional product: no vendor is named or imitated.
+# CVE-2099-0002 is a placeholder id used to exercise the schema. It is not a real CVE.
+id: emulator/ssl-vpn/portal-generic
+product: Gateway Portal (generic SSL VPN web portal)
+vendor: Fictional
+version: generic
+decoy_kind: emulation
+artefact:
+  emulator_id: ssl-vpn
+  emulator_profile: portal-generic
+cves:
+  - cve_id: CVE-2099-0002
+    severity: critical
+    sources: [synthetic]
+    auth_requirement: unauth
+    notes: Illustrative claim only. Stands for a pre-authentication command injection in a diagnostics endpoint.
+listen_ports:
+  - port: 443
+    protocol: tcp
+    service: https
+    tls: true
+banner_hints:
+  - "Server: nginx"
+  - "<title>Gateway Portal</title>"
+fingerprint_hints:
+  - nginx header order and default nginx error pages for 400, 404, 405, 413 and 414.
+  - Failed logins take 180 to 450 ms, like a password hash check.
+expected_techniques:
+  - T1190
+  - T1110
+sources:
+  - https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+status: draft
+risk_notes: >-
+  Edge VPN and remote access portals are a frequent initial access target. The emulator serves
+  static pages, hashes request bodies and never executes anything. TLS is terminated in front of
+  it with an operator certificate.

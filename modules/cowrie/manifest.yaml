@@ -1,0 +1,144 @@
+# Cowrie decoy module manifest (#30, docs/adr/0006-emulation-plugins.md).
+# Schema: schemas/module-manifest.schema.json.
+#
+# Cowrie (BSD-3-Clause) runs as its own container. Foiled never imports, links or vendors
+# Cowrie code: the host agent starts the pinned image and reads the JSON log it writes,
+# mapped below from Cowrie's documented event ids (ADR 0002). Images we build keep the
+# upstream licence file.
+#
+# NOT PINNED YET: image.digest is an all-zero placeholder and image.pinned is false.
+# Replace it with the digest of a reviewed image before any catalogue entry that uses this
+# module moves from draft to verified.
+schema_version: 1
+module_id: cowrie
+name: Cowrie
+upstream: https://github.com/cowrie/cowrie
+version: "2.6"
+licence: BSD-3-Clause
+distribution: separate_container
+source_offer: false
+licence_files:
+  - LICENSE.rst
+image:
+  reference: docker.io/cowrie/cowrie
+  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  pinned: false
+isolation: runc
+protocols:
+  - ssh
+  - telnet
+catalogue_ids:
+  - module/cowrie/2.6
+personas:
+  - id: debian-openssh
+    description: >-
+      Debian 12 server with OpenSSH 9.2p1. SSH only: no Telnet listener, because this persona
+      would not run one (FR-05).
+    hostname: identity_store
+    banners:
+      - "SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3"
+    ports:
+      - 22
+    settings:
+      ssh.version: "SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3"
+      telnet.enabled: "false"
+      honeypot.kernel_version: "6.1.0-18-amd64"
+      honeypot.kernel_build_string: "#1 SMP PREEMPT_DYNAMIC Debian 6.1.76-1 (2024-02-01)"
+      honeypot.hardware_platform: x86_64
+      honeypot.operating_system: GNU/Linux
+      output_jsonlog.enabled: "true"
+ports:
+  - port: 22
+    container_port: 2222
+    protocol: tcp
+    service: ssh
+  - port: 23
+    container_port: 2223
+    protocol: tcp
+    service: telnet
+health:
+  kind: banner
+  container_port: 2222
+  expect: "SSH-2.0-OpenSSH_9.2p1"
+  interval_s: 30
+  failures: 3
+log:
+  path: cowrie/cowrie.json
+  format: jsonl
+  max_line_bytes: 65536
+event_mapping:
+  id: cowrie-json-v1
+  fields:
+    event: eventid
+    timestamp: timestamp
+    src_ip: src_ip
+    src_port: src_port
+    session: session
+  unmapped: drop_and_count
+  events:
+    - event: cowrie.session.connect
+      channel: network
+      severity: info
+      data:
+        - { from: protocol, to: protocol }
+        - { from: dst_port, to: decoy_port }
+    - event: cowrie.client.version
+      channel: application
+      severity: info
+      data:
+        - { from: version, to: client_version }
+    - event: cowrie.client.kex
+      channel: application
+      severity: info
+      data:
+        - { from: hassh, to: hassh }
+    - event: cowrie.login.failed
+      channel: application
+      severity: low
+      data:
+        - { from: username, to: username }
+        - { from: password, to: password_sha256, transform: sha256 }
+    - event: cowrie.login.success
+      channel: application
+      severity: medium
+      data:
+        - { from: username, to: username }
+        - { from: password, to: password_sha256, transform: sha256 }
+    - event: cowrie.command.input
+      channel: application
+      severity: medium
+      data:
+        - { from: input, to: command }
+    - event: cowrie.command.failed
+      channel: application
+      severity: low
+      data:
+        - { from: input, to: command }
+    - event: cowrie.session.file_download
+      channel: quarantine
+      severity: high
+      data:
+        - { from: url, to: url }
+        - { from: shasum, to: sha256 }
+    - event: cowrie.session.file_download.failed
+      channel: application
+      severity: medium
+      data:
+        - { from: url, to: url }
+    - event: cowrie.session.file_upload
+      channel: quarantine
+      severity: high
+      data:
+        - { from: filename, to: filename }
+        - { from: shasum, to: sha256 }
+    - event: cowrie.direct-tcpip.request
+      channel: egress
+      severity: medium
+      data:
+        - { from: dst_ip, to: target_ip }
+        - { from: dst_port, to: target_port }
+    - event: cowrie.session.closed
+      channel: network
+      severity: info
+      data:
+        - { from: duration, to: duration_s }

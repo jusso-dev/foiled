@@ -89,6 +89,14 @@ pub const BINDINGS: &[Binding] = &[
         data_dir: "hooks",
         schema: "schemas/hook-manifest.schema.json",
     },
+    Binding {
+        data_dir: "emulators",
+        schema: "schemas/emulator-profile.schema.json",
+    },
+    Binding {
+        data_dir: "modules",
+        schema: "schemas/module-manifest.schema.json",
+    },
 ];
 
 /// Directories never scanned for schema files.
@@ -514,7 +522,14 @@ mod tests {
             "emulators/redis/profiles/redis-7.0.yaml",
             "id: redis-7.0\n",
         );
-        let report = run(dir.path(), BINDINGS).unwrap();
+        // This checks file existence only; the stub profile is not meant to
+        // pass the profile schema, which this temp tree does not carry.
+        let bindings: Vec<Binding> = BINDINGS
+            .iter()
+            .filter(|b| b.data_dir != "emulators")
+            .copied()
+            .collect();
+        let report = run(dir.path(), &bindings).unwrap();
         assert!(report.findings.is_empty(), "{:?}", report.findings);
     }
 

@@ -8,7 +8,7 @@
 
 Accepted (18 Oct 2026).
 
-This ADR decides how decoys run on a sandbox host: which isolation each kind of decoy gets, how the host agent supervises them, and the one `Runtime` interface that covers both `decoy_kind` values. Network plumbing is in [ADR 0003](0003-network-isolation.md). The rotation sequence and its rules are in [rotation.md](../rotation.md). The host agent's job protocol belongs to ADR 0008 (#41, `docs/adr/0008-sandbox-host-agent.md`), and the emulator plug-in interface to ADR 0006 (#30, `docs/adr/0006-emulation-plugins.md`).
+This ADR decides how decoys run on a sandbox host: which isolation each kind of decoy gets, how the host agent supervises them, and the one `Runtime` interface that covers both `decoy_kind` values. Network plumbing is in [ADR 0003](0003-network-isolation.md). The rotation sequence and its rules are in [rotation.md](../rotation.md). The host agent's job protocol belongs to ADR 0008 (#41, `docs/adr/0008-sandbox-host-agent.md`), and the emulator plug-in interface to [ADR 0006](0006-emulation-plugins.md) (#30).
 
 ## Context
 
@@ -427,7 +427,7 @@ Negative and costs:
 - [ADR 0003: Network isolation](0003-network-isolation.md) (#4)
 - `docs/adr/0004-image-builder.md` (#6)
 - `docs/adr/0005-capture-layer.md` (#9)
-- `docs/adr/0006-emulation-plugins.md` (#30)
+- [ADR 0006: Emulation plug-ins and decoy modules](0006-emulation-plugins.md) (#30)
 - `docs/adr/0008-sandbox-host-agent.md` (#41)
 - [ADR 0009: Axum on Workers and front end](0009-axum-workers-and-front-end.md) (#40)
 - [Rotation and reset](../rotation.md) (#8)
