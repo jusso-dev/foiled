@@ -1,0 +1,10 @@
+# Tier 5 advisory fields for the synthetic FOILED-DEMO-0001 (#12). The
+# advisory is made up for demos and tests; the reference is a placeholder.
+cve_id: FOILED-DEMO-0001
+catalogue_ids: [foiled/demo-app/1.0.0]
+endpoint: /api/upload
+auth_requirement: unauth
+published_at: 1792800000000
+post_exploit_notes: Written files land wherever the path parameter points; expect a dropped file under /tmp or the web root.
+references:
+  - https://github.com/jusso-dev/foiled/tree/main/build/recipes/foiled-demo-app

@@ -1,0 +1,13 @@
+{
+  "id": "wl-demo-upload",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "pattern": [
+    { "field": "data.method", "op": "equals", "value": "POST" },
+    { "field": "data.path", "op": "prefix", "value": "/api/upload" }
+  ],
+  "first_seen": 1792285323000,
+  "last_seen": 1792371723000,
+  "hits": 42,
+  "distinct_sources": 3,
+  "notes": "Consistent POSTs to the upload endpoint from three sources before any advisory existed. Example data only."
+}

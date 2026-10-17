@@ -101,6 +101,10 @@ async fn gets_one_attempt_by_its_stable_id() {
     assert_eq!(st, StatusCode::OK);
     assert_eq!(a["event_ids"].as_array().unwrap().len(), 5);
     assert_eq!(a["hook_hits"][0]["cve_id"], "FOILED-DEMO-0001");
+    // The tier 1 signature on the upload moved it to exploit (#12, #25).
+    assert_eq!(a["state_history"][1]["state"], "exploit", "{a}");
+    assert_eq!(a["state_history"][1]["signal"], "matcher", "{a}");
+    assert_eq!(a["state_history"][1]["event_id"], "x2", "{a}");
     let (st, _) = get(&s, "analyst", "/v0/attempts/att_000000000000000000000000").await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 }
@@ -169,11 +173,24 @@ async fn links_explain_cve_and_technique_confidence() {
     assert!(sources.contains(&"vuln_path_hook"));
     assert!(sources.contains(&"catalogue_prior"));
     assert!(sources.contains(&"noise_score"));
+    // CVE mapping tiers 1 and 2 (#12): the signature and the ordered chain.
+    assert!(sources.contains(&"rule"), "{cve}");
+    assert!(sources.contains(&"sequence"), "{cve}");
+    assert_eq!(cve["band"], "high", "{cve}");
+    let t1190 = items
+        .iter()
+        .find(|l| l["kind"] == "attempt_technique" && l["target"] == "T1190")
+        .expect("ATT&CK rules map the hook trigger to T1190");
     assert!(
-        items
+        t1190["evidence"]
+            .as_array()
+            .unwrap()
             .iter()
-            .any(|l| l["kind"] == "attempt_technique" && l["target"] == "T1190"),
-        "ATT&CK rules map the hook trigger to T1190"
+            .any(|e| e["signal_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("attack:t1190-matcher-hit")),
+        "the signature match reaches ATT&CK as data.matcher_id: {t1190}"
     );
 
     // A probe-only attempt gets no CVE link from the catalogue prior alone.

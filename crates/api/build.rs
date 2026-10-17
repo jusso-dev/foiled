@@ -1,6 +1,8 @@
 //! Bundle reviewed repository data into the Worker as JSON:
 //! - `catalogue/entries/**` (#5) as `catalogue.json`, sorted by id;
-//! - `rules/attack/*.yaml` (#26) as `attack_rules.json`, sorted by id.
+//! - `rules/attack/*.yaml` (#26) as `attack_rules.json`, sorted by id;
+//! - `catalogue/{matchers,sequences,advisories}` (#12) as `matchers.json`,
+//!   `sequences.json` and `advisories.json`.
 //!
 //! Each deploy serves exactly what was merged. `foiled-lint` validates the
 //! files in CI; this script only converts YAML to JSON.
@@ -39,4 +41,7 @@ fn bundle(rel: &str, out_name: &str) {
 fn main() {
     bundle("catalogue/entries", "catalogue.json");
     bundle("rules/attack", "attack_rules.json");
+    bundle("catalogue/matchers", "matchers.json");
+    bundle("catalogue/sequences", "sequences.json");
+    bundle("catalogue/advisories", "advisories.json");
 }

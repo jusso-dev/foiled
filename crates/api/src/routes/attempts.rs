@@ -10,7 +10,7 @@
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use foiled_core::attempt::{Attempt, AttemptState, DEFAULT_IDLE_GAP_MS, ExtraSignals, build};
+use foiled_core::attempt::{Attempt, AttemptState, DEFAULT_IDLE_GAP_MS, build};
 use foiled_core::auth::Scope;
 use foiled_core::catalogue::DecoyKind;
 use serde::{Deserialize, Serialize};
@@ -84,7 +84,8 @@ pub(crate) async fn attempts_and_events(
     let truncated = events.len() > MAX_WINDOW_EVENTS;
     let mut events = events;
     events.truncate(MAX_WINDOW_EVENTS);
-    let attempts = build(&events, DEFAULT_IDLE_GAP_MS, &ExtraSignals::new());
+    let signals = crate::links::matcher_signals(&events);
+    let attempts = build(&events, DEFAULT_IDLE_GAP_MS, &signals);
     Ok((attempts, events, truncated))
 }
 
