@@ -4,7 +4,7 @@ Each ADR lives in `docs/adr/NNNN-slug.md` and has the sections Status, Context, 
 
 | ADR | Title | Status | Issue |
 | --- | --- | --- | --- |
-| 0001 | Architecture | Planned | #1 |
+| [0001](0001-architecture.md) | [Architecture](0001-architecture.md) | Accepted (17 Oct 2026) | #1 |
 | 0002 | Sandbox runtime | Planned | #3 |
 | 0003 | Network isolation | Planned | #4 |
 | 0004 | Image builder | Planned | #6 |
