@@ -1,0 +1,32 @@
+{
+  "name": "@foiled/web",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "react-router dev",
+    "build": "react-router build",
+    "cf-typegen": "wrangler types",
+    "typecheck": "wrangler types && react-router typegen && tsc -b",
+    "lint": "biome check .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "isbot": "^5.2.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router": "^8.4.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@cloudflare/vite-plugin": "^1.64.0",
+    "@react-router/dev": "^8.4.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.151.1"
+  }
+}
