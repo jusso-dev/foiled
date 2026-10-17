@@ -15,6 +15,7 @@ use std::pin::Pin;
 
 use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, Scope};
+use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState};
 use serde::{Deserialize, Serialize};
 
@@ -122,4 +123,8 @@ pub trait Store: Send + Sync {
 
     /// Newest first, for one tenant.
     fn list_audit(&self, tenant_id: &str, q: AuditQuery) -> StoreFuture<'_, Vec<AuditRecord>>;
+
+    /// Put validated, identity-stamped capture envelopes on the ingest Queue
+    /// (#9). The Queue consumer writes them to Postgres.
+    fn enqueue_events(&self, events: Vec<CaptureEvent>) -> StoreFuture<'_, ()>;
 }

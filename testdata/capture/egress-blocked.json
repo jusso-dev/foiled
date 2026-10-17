@@ -1,0 +1,12 @@
+{
+  "event_id": "evt-0004",
+  "ts": 1792285331000,
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "decoy_kind": "sandbox",
+  "channel": "egress",
+  "severity": "high",
+  "src": { "ip": "10.85.1.2", "port": 44110 },
+  "dst": { "ip": "192.0.2.80", "port": 80 },
+  "data": { "verdict": "blocked", "host": "stage2.example.invalid", "method": "GET", "path": "/x.sh" }
+}

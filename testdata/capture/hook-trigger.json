@@ -1,0 +1,20 @@
+{
+  "event_id": "evt-0002",
+  "ts": 1792285323012,
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "decoy_kind": "sandbox",
+  "channel": "hook",
+  "severity": "high",
+  "src": { "ip": "203.0.113.7", "port": 51234 },
+  "hook": {
+    "hook_id": "demo-app.upload-path-traversal",
+    "catalogue_id": "foiled/demo-app/1.0.0",
+    "cve_id": "FOILED-DEMO-0001",
+    "stage": "trigger",
+    "request_slice_ref": "r2://foiled-evidence/t1/dcy-demo-1/_/hook/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "sequence_no": 1,
+    "t_offset_ms": 12,
+    "file_writes": ["/tmp/x.sh"]
+  }
+}

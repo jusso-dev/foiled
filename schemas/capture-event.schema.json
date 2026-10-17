@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/capture-event.schema.json",
+  "title": "Foiled capture envelope",
+  "description": "One capture event from a sandbox host (#41), emulator or module (#30) or edge sensor (#31). See docs/adr/0005-capture-layer.md. Large bodies go to R2 and are referenced by payload_ref.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "ts", "decoy_id", "catalogue_id", "decoy_kind", "channel", "severity", "src"],
+  "properties": {
+    "event_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "ts": { "type": "integer", "description": "Unix milliseconds on the host." },
+    "decoy_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "catalogue_id": { "type": "string", "minLength": 1 },
+    "decoy_kind": { "enum": ["sandbox", "emulation"] },
+    "generation": { "type": "integer", "minimum": 1 },
+    "channel": { "enum": ["network", "application", "filesystem", "process", "quarantine", "hook", "dns", "egress"] },
+    "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+    "src": { "$ref": "#/$defs/endpoint" },
+    "dst": { "$ref": "#/$defs/endpoint" },
+    "payload_ref": { "$ref": "#/$defs/payload_ref" },
+    "attempt_id": { "type": "string", "minLength": 1 },
+    "source": {
+      "description": "Set by ingest from the client certificate. Any value the sender supplies is replaced.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["host", "sensor"] },
+        "id": { "type": "string" }
+      }
+    },
+    "tenant_id": { "type": "string", "description": "Set by ingest from the client certificate." },
+    "hook": { "$ref": "#/$defs/hook" },
+    "data": {
+      "type": "object",
+      "description": "Channel-specific detail, for example method, path, status and user_agent for HTTP. Request bodies are hashed or referenced, never inline beyond the size cap (#16)."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "channel": { "const": "hook" } } },
+      "then": { "required": ["hook"] },
+      "else": { "not": { "required": ["hook"] } }
+    }
+  ],
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ip"],
+      "properties": {
+        "ip": { "type": "string", "anyOf": [{ "format": "ipv4" }, { "format": "ipv6" }] },
+        "port": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      }
+    },
+    "payload_ref": {
+      "description": "r2://<bucket>/<tenant>/<decoy-id>/<attempt-id or _>/<channel>/<sha256>",
+      "type": "string",
+      "pattern": "^r2://[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/(network|application|filesystem|process|quarantine|hook|dns|egress)/[a-f0-9]{64}$"
+    },
+    "hook": {
+      "description": "Vulnerable-path instrumentation fields (#32).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hook_id", "catalogue_id", "stage", "sequence_no", "t_offset_ms"],
+      "properties": {
+        "hook_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "catalogue_id": { "type": "string" },
+        "cve_id": { "type": "string", "pattern": "^(CVE-[0-9]{4}-[0-9]{4,}|FOILED-DEMO-[0-9]{4})$" },
+        "stage": { "enum": ["trigger", "post_exploit", "cleanup"] },
+        "request_slice_ref": { "$ref": "#/$defs/payload_ref" },
+        "sequence_no": { "type": "integer", "minimum": 0 },
+        "t_offset_ms": { "type": "integer", "minimum": 0 },
+        "cmd_lines": { "type": "array", "items": { "type": "string" } },
+        "file_writes": { "type": "array", "items": { "type": "string" } },
+        "implant_refs": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

@@ -3,6 +3,7 @@
 pub mod audit;
 pub mod catalogue;
 pub mod decoys;
+pub mod ingest;
 
 use foiled_core::audit::{AuditRecord, Outcome};
 use foiled_core::auth::Principal;

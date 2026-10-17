@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/quarantine-meta.schema.json",
+  "title": "Foiled quarantine metadata",
+  "description": "meta.json stored beside each quarantined payload (#9). The payload itself is never executed and never served publicly.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sha256", "size", "first_seen", "decoy_id", "catalogue_id", "capture_channel", "payload_ref", "executed"],
+  "properties": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha1": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "md5": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+    "size": { "type": "integer", "minimum": 0 },
+    "mime_guess": { "type": "string" },
+    "first_seen": { "type": "integer" },
+    "last_seen": { "type": "integer" },
+    "decoy_id": { "type": "string" },
+    "catalogue_id": { "type": "string" },
+    "attempt_id": { "type": "string" },
+    "capture_channel": { "enum": ["filesystem", "application", "network", "hook"] },
+    "guest_path": { "type": "string" },
+    "src": { "type": "string" },
+    "payload_ref": { "type": "string", "pattern": "^r2://" },
+    "executed": { "const": false, "description": "Always false. Quarantined files are never run." },
+    "yara_matches": { "type": "array", "items": { "type": "string" } }
+  }
+}

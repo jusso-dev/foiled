@@ -6,8 +6,10 @@
 
 pub mod audit;
 pub mod auth;
+pub mod capture;
 pub mod catalogue;
 pub mod decoy;
 pub mod honeyscore;
 pub mod retention;
 pub mod share;
+pub mod sigv4;
