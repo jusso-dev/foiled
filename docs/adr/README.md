@@ -1,0 +1,16 @@
+# Architecture decision records
+
+Each ADR lives in `docs/adr/NNNN-slug.md` and has the sections Status, Context, Decision, Consequences and Alternatives considered. Planned ADRs are listed with their tracking issue and are linked here once the file exists.
+
+| ADR | Title | Status | Issue |
+| --- | --- | --- | --- |
+| 0001 | Architecture | Planned | #1 |
+| 0002 | Sandbox runtime | Planned | #3 |
+| 0003 | Network isolation | Planned | #4 |
+| 0004 | Image builder | Planned | #6 |
+| 0005 | Capture layer | Planned | #9 |
+| 0006 | Emulation plug-ins | Planned | #30 |
+| 0007 | Edge ingest | Planned | #31 |
+| 0008 | Sandbox host agent | Planned | #41 |
+| [0009](0009-axum-workers-and-front-end.md) | [Axum on Workers and front end](0009-axum-workers-and-front-end.md) | Accepted (17 Oct 2026) | #40 |
+| 0010 | LLM provider and AI Gateway | Planned | #28 |
