@@ -1,0 +1,68 @@
+# Foiled packet capture for one decoy (#9) on a research sensor (#7).
+# Suggested template. Instance name is the short decoy ID (at most 12
+# characters), for example foiled-capture@web01.service. It captures on the
+# host-side interface of that decoy, fc-<id>, as ADR 0003 (#4) defines it.
+#
+# Started and stopped by foiled-hostd. Stops when the decoy's VM unit stops.
+# Disk caps: 20 files of 100 MB (about 2 GB) per decoy, ring overwrite.
+# foiled-hostd uploads closed files to R2 and deletes them locally.
+#
+# Ubuntu ships an AppArmor profile for tcpdump that limits which file names it
+# may write. If the ring fails to write, check `aa-status` and the profile.
+
+[Unit]
+Description=Foiled packet capture for decoy %i
+Documentation=https://github.com/jusso-dev/foiled/blob/main/docs/deploy/vps.md
+BindsTo=foiled-jailer@%i.service
+After=foiled-jailer@%i.service
+# Never write to the state volume underneath a locked or missing capture volume.
+RequiresMountsFor=/var/lib/foiled/capture
+
+[Service]
+Type=exec
+User=foiled-agent
+Group=foiled-agent
+UMask=0077
+ExecStartPre=/usr/bin/mkdir -p /var/lib/foiled/capture/%i
+ExecStart=/usr/bin/tcpdump -i fc-%i -n -U -C 100 -W 20 -w /var/lib/foiled/capture/%i/ring.pcap
+Restart=on-failure
+RestartSec=2s
+
+ReadWritePaths=/var/lib/foiled/capture
+
+# Privileges. Capture needs raw packet sockets and nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+
+# Packet sockets for capture, netlink for interface lookup. No IP sockets:
+# capture never talks to the network.
+RestrictAddressFamilies=AF_PACKET AF_NETLINK AF_UNIX
+IPAddressDeny=any
+
+SystemCallArchitectures=native
+# tcpdump drops its own capabilities after opening the interface, so the
+# privileged set (which includes capset) is not filtered here.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+MemoryMax=256M
+TasksMax=16

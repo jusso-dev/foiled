@@ -27,6 +27,7 @@ Early build. The Rust workspace, the front-end Worker and CI are in place; featu
 - Research landscape: [docs/research/landscape.md](docs/research/landscape.md)
 - Lessons from commercial platforms: [docs/research/lessons.md](docs/research/lessons.md)
 - Design direction: [docs/design/design-direction.md](docs/design/design-direction.md)
+- Deployment modes and the MVP topology: [docs/deploy/modes.md](docs/deploy/modes.md)
 - Dashboard target (v3, chosen): [docs/design/mockup-v3.png](docs/design/mockup-v3.png) ([HTML](docs/design/mockup-v3.html)). Earlier explorations: [v1](docs/design/mockup.png), [v2](docs/design/mockup-v2.png)
 
 ## Safety
