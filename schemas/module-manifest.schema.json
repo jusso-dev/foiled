@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/module-manifest.schema.json",
+  "title": "Foiled decoy module manifest",
+  "description": "A reused open source honeypot run as its own container (#30), under modules/<module_id>/manifest.yaml. Records protocol, personas, ports, upstream licence, image digest and the event schema mapping to capture envelopes (#9). See docs/adr/0006-emulation-plugins.md and ADR 0002. Mirrors foiled_emulators::manifest::ModuleManifest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "module_id", "name", "upstream", "version", "licence", "distribution", "source_offer", "licence_files", "image", "isolation", "protocols", "catalogue_ids", "personas", "ports", "health", "log", "event_mapping"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "module_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+    "name": { "type": "string", "minLength": 1 },
+    "upstream": { "type": "string", "pattern": "^https://" },
+    "version": { "type": "string", "minLength": 1 },
+    "licence": {
+      "description": "Upstream SPDX licence id. Must match the catalogue entry and docs/compliance/licence-register.md.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9.+-]+( (OR|AND) [A-Za-z0-9.+-]+)*$"
+    },
+    "distribution": {
+      "const": "separate_container",
+      "description": "Module code is never imported, linked or vendored into Foiled source."
+    },
+    "source_offer": { "type": "boolean", "description": "Images we distribute offer corresponding source. Required for GPL modules." },
+    "licence_files": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "digest", "pinned"],
+      "properties": {
+        "reference": { "type": "string", "pattern": "^[^@\\s]+$" },
+        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "pinned": { "type": "boolean", "description": "False while digest is a placeholder. Entries using the module cannot be verified until it is true." }
+      },
+      "if": { "properties": { "pinned": { "const": true } } },
+      "then": { "properties": { "digest": { "not": { "const": "sha256:0000000000000000000000000000000000000000000000000000000000000000" } } } }
+    },
+    "isolation": { "enum": ["runc", "runsc"] },
+    "protocols": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "catalogue_ids": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._+-]*)+$" } },
+    "personas": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "hostname", "banners", "ports"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "description": { "type": "string", "minLength": 1 },
+          "hostname": { "const": "identity_store", "description": "Per-decoy hostname from the host's identity store (FR-01), never an upstream default." },
+          "banners": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+          "ports": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
+          "settings": { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+      }
+    },
+    "ports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["port", "container_port", "protocol", "service"],
+        "properties": {
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "container_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "protocol": { "const": "tcp" },
+          "service": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "container_port", "interval_s", "failures"],
+      "properties": {
+        "kind": { "enum": ["tcp", "banner", "http"] },
+        "container_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "expect": { "type": "string" },
+        "interval_s": { "type": "integer", "minimum": 1 },
+        "failures": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "log": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "format", "max_line_bytes"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^[^/]", "description": "Relative to the per-generation log directory." },
+        "format": { "const": "jsonl" },
+        "max_line_bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+      }
+    },
+    "event_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "fields", "events", "unmapped"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["event", "timestamp", "src_ip"],
+          "properties": {
+            "event": { "type": "string", "minLength": 1 },
+            "timestamp": { "type": "string", "minLength": 1 },
+            "src_ip": { "type": "string", "minLength": 1 },
+            "src_port": { "type": "string", "minLength": 1 },
+            "session": { "type": "string", "minLength": 1 }
+          }
+        },
+        "unmapped": { "const": "drop_and_count" },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event", "channel", "severity"],
+            "properties": {
+              "event": { "type": "string", "minLength": 1 },
+              "channel": { "enum": ["network", "application", "filesystem", "process", "quarantine", "dns", "egress"] },
+              "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+              "data": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["from", "to"],
+                  "properties": {
+                    "from": { "type": "string", "minLength": 1 },
+                    "to": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+                    "transform": { "enum": ["copy", "sha256"] }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "licence": { "pattern": "GPL" } } },
+      "then": { "properties": { "source_offer": { "const": true } } }
+    }
+  ]
+}

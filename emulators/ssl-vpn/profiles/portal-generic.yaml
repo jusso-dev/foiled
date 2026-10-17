@@ -1,0 +1,234 @@
+# Generic SSL VPN web portal persona for the http_portal emulator plug-in (#30,
+# docs/adr/0006-emulation-plugins.md). Schema: schemas/emulator-profile.schema.json.
+#
+# "Gateway Portal" is a fictional product name. No vendor names, logos, assets or
+# vendor-specific paths are used; every path below is invented and neutral.
+# CVE-2099-0002 is a placeholder id that shows how a claim is wired to a hook. It is not a
+# real CVE. Values are synthetic; canary values (#17) are rendered in per decoy at start.
+schema_version: 1
+id: portal-generic
+emulator_id: ssl-vpn
+plugin: http_portal
+description: >-
+  A remote access portal behind nginx: a plain login page, a JSON API that wants a session,
+  an admin area that refuses, and a diagnostics endpoint. Serves static text only.
+catalogue_ids:
+  - emulator/ssl-vpn/portal-generic
+listen:
+  - port: 443
+    protocol: tcp
+    service: https
+    tls: true
+tls: operator_cert
+jitter:
+  min_ms: 3
+  max_ms: 20
+claimed_cves:
+  - cve_id: CVE-2099-0002
+    claim: illustrative
+    hook: portal.diagnostics-exec
+    notes: >-
+      Illustrative only. Stands for a pre-authentication command injection in a diagnostics
+      endpoint, a common shape for edge portal bugs. Not tied to a matcher or harness.
+hooks:
+  - id: portal.diagnostics-exec
+    stage: trigger
+    cve_id: CVE-2099-0002
+    severity: high
+    on:
+      method: POST
+      path: /portal/cgi-bin/diagnostics
+    description: A request reached the diagnostics handler. Nothing is executed; the body is hashed.
+canaries:
+  - name: portal_api_key
+    kind: api_key
+    description: Telemetry key in a settings backup left in the static directory.
+fingerprint_checks:
+  - item: FR-01
+    result: pass
+    note: Page title and text say "Gateway Portal"; no tool, project or honeypot words. Asserted by tests.
+  - item: FR-04
+    result: pass
+    note: TLS is terminated with an operator-supplied certificate for a name the operator controls.
+  - item: FR-05
+    result: pass
+    note: The Server header and page title are in the catalogue entry's banner_hints. Asserted by tests.
+  - item: FR-10
+    result: pass
+    note: >-
+      nginx header order (Server, Date, Content-Type, Content-Length, Connection), nginx reason
+      phrases and nginx error pages for 400, 404, 405, 413 and 414. Asserted by tests.
+  - item: FR-17
+    result: pass
+    note: Replies wait 3 to 20 ms; a failed login waits another 180 to 450 ms, like a password hash check.
+http:
+  server_header: nginx
+  keepalive_timeout_s: 75
+  max_body_bytes: 65536
+  routes:
+    - path: /
+      methods: [GET]
+      status: 302
+      content_type: text/html
+      headers:
+        - name: Location
+          value: /portal/login
+      body: "<html>\r\n<head><title>302 Found</title></head>\r\n<body>\r\n<center><h1>302 Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+    - path: /portal/login
+      methods: [GET]
+      status: 200
+      content_type: text/html; charset=utf-8
+      headers:
+        - name: Cache-Control
+          value: no-store
+        - name: X-Frame-Options
+          value: SAMEORIGIN
+      body: |
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Gateway Portal</title>
+        <link rel="stylesheet" href="/portal/static/css/portal.css">
+        </head>
+        <body>
+        <main class="box">
+        <h1>Gateway Portal</h1>
+        <p>Sign in to continue.</p>
+        <form method="post" action="/portal/login" autocomplete="off">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" required>
+        <button type="submit">Sign in</button>
+        </form>
+        <p class="small">Authorised users only. Activity may be monitored.</p>
+        </main>
+        </body>
+        </html>
+    - path: /portal/login
+      methods: [POST]
+      status: 200
+      content_type: text/html; charset=utf-8
+      severity: low
+      tags: [credential]
+      capture:
+        username_field: username
+        password_field: password
+      delay_ms:
+        min_ms: 180
+        max_ms: 450
+      headers:
+        - name: Cache-Control
+          value: no-store
+        - name: X-Frame-Options
+          value: SAMEORIGIN
+      body: |
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Gateway Portal</title>
+        <link rel="stylesheet" href="/portal/static/css/portal.css">
+        </head>
+        <body>
+        <main class="box">
+        <h1>Gateway Portal</h1>
+        <p class="error">Invalid username or password.</p>
+        <form method="post" action="/portal/login" autocomplete="off">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" required>
+        <button type="submit">Sign in</button>
+        </form>
+        <p class="small">Authorised users only. Activity may be monitored.</p>
+        </main>
+        </body>
+        </html>
+    - path: /portal/logout
+      methods: [GET]
+      status: 302
+      content_type: text/html
+      headers:
+        - name: Location
+          value: /portal/login
+      body: "<html>\r\n<head><title>302 Found</title></head>\r\n<body>\r\n<center><h1>302 Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+    - path: /portal/api/v2/session
+      methods: [GET]
+      status: 401
+      content_type: application/json
+      severity: low
+      tags: [api]
+      body: '{"error":"unauthorized","code":401}'
+    - path: /portal/api/v2/system/config
+      methods: [GET, PUT]
+      status: 401
+      content_type: application/json
+      severity: medium
+      tags: [api, sensitive]
+      body: '{"error":"unauthorized","code":401}'
+    - path: /portal/cgi-bin/diagnostics
+      methods: [POST]
+      status: 200
+      content_type: application/json
+      severity: high
+      tags: [sensitive, claimed-cve]
+      body: '{"status":"ok","result":""}'
+    - path: /portal/admin/
+      prefix: true
+      methods: [GET, POST]
+      status: 403
+      content_type: text/html
+      severity: medium
+      tags: [sensitive]
+      body: "<html>\r\n<head><title>403 Forbidden</title></head>\r\n<body>\r\n<center><h1>403 Forbidden</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+    - path: /portal/static/js/portal-settings.js.bak
+      methods: [GET]
+      status: 200
+      content_type: application/octet-stream
+      severity: high
+      tags: [canary, sensitive]
+      body: |
+        // portal settings (backup before upgrade)
+        var PORTAL_SETTINGS = {
+          apiBase: "/portal/api/v2",
+          telemetryKey: "{{canary.portal_api_key}}",
+          sessionTimeout: 1800
+        };
+    - path: /portal/static/css/portal.css
+      methods: [GET]
+      status: 200
+      content_type: text/css
+      body: |
+        body{font-family:Arial,Helvetica,sans-serif;background:#eef1f4;margin:0}
+        .box{max-width:340px;margin:12vh auto;background:#fff;padding:24px;border:1px solid #cfd6dd}
+        label,input,button{display:block;width:100%;box-sizing:border-box;margin:6px 0}
+        input{padding:8px}button{padding:9px;background:#2d5a88;color:#fff;border:0}
+        .error{color:#a40000}.small{font-size:12px;color:#5b6670}
+    - path: /robots.txt
+      methods: [GET]
+      status: 200
+      content_type: text/plain
+      body: "User-agent: *\nDisallow: /\n"
+  errors:
+    - status: 400
+      content_type: text/html
+      body: "<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body>\r\n<center><h1>400 Bad Request</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+    - status: 404
+      content_type: text/html
+      body: "<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+    - status: 405
+      content_type: text/html
+      body: "<html>\r\n<head><title>405 Not Allowed</title></head>\r\n<body>\r\n<center><h1>405 Not Allowed</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+    - status: 413
+      content_type: text/html
+      body: "<html>\r\n<head><title>413 Request Entity Too Large</title></head>\r\n<body>\r\n<center><h1>413 Request Entity Too Large</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+    - status: 414
+      content_type: text/html
+      body: "<html>\r\n<head><title>414 Request-URI Too Large</title></head>\r\n<body>\r\n<center><h1>414 Request-URI Too Large</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+    - status: 500
+      content_type: text/html
+      body: "<html>\r\n<head><title>500 Internal Server Error</title></head>\r\n<body>\r\n<center><h1>500 Internal Server Error</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"

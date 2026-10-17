@@ -18,6 +18,8 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [api/control-plane.md](api/control-plane.md) | Control plane API: clients, auth, rules, stores, the OpenAPI contract and the local mock server. |
 | [agent/protocol.md](agent/protocol.md) | Host agent protocol: signed jobs, leases, results, heartbeats, evidence and outage behaviour. |
 | [catalogue.md](catalogue.md) | Catalogue entry fields, decoy kinds and CI rules. |
+| [adr/0006-emulation-plugins.md](adr/0006-emulation-plugins.md) | Emulation plug-ins and decoy modules: the plug-in trait, profiles, hooks, canaries, fingerprint realism and module manifests. |
+| [Emulator profile](../schemas/emulator-profile.schema.json) and [module manifest](../schemas/module-manifest.schema.json) schemas | Formats for `emulators/<id>/profiles/*.yaml` and `modules/<id>/manifest.yaml`, checked by `foiled-lint`. |
 | [catalogue-sync.md](catalogue-sync.md) | How KEV, OSV and NVD feed draft catalogue entries. |
 | [rotation.md](rotation.md) | Rotation and reset of compromised or aged sandboxes, and the decoy lifecycle. |
 | [fingerprint-resistance.md](fingerprint-resistance.md) | Fingerprint resistance checklist, known remaining tells and the Shodan Honeyscore self-check runbook. |
@@ -36,7 +38,7 @@ These docs do not exist yet. Each is owned by the issue listed.
 
 | Path | What it will cover | Issue |
 | --- | --- | --- |
-| Remaining ADRs | One file per decision under `docs/adr/` (`NNNN-slug.md`). | #28, #30, #31 |
+| Remaining ADRs | One file per decision under `docs/adr/` (`NNNN-slug.md`). | #28, #31 |
 | `docs/deploy/edge-sensor.md` | Enrolling and running an edge sensor. | #31 |
 | `docs/radar.md` | Radar feed, review queue and research write-ups. | #35 |
 | `docs/compliance/licence-register.md` | Licence and data-terms compliance register. | #38 |

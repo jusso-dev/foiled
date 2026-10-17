@@ -1,4 +1,5 @@
-# Draft emulation entry. The profile lands with the emulator plug-ins (#30).
+# Draft emulation entry. Profile: emulators/redis/profiles/redis-7.0.yaml (#30). Stays draft
+# until the emulator host is packaged and the staging audit in docs/fingerprint-resistance.md passes.
 # CVE-2099-0001 is a placeholder id used to exercise the schema. It is not a real CVE.
 id: emulator/redis/7.0
 product: Redis
