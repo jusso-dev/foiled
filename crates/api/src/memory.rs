@@ -8,8 +8,8 @@ use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState};
 
 use crate::store::{
-    AuditQuery, DecoyQuery, IdentityRecord, IpIocRow, JobRecord, Store, StoreError, StoreFuture,
-    TokenRecord,
+    AuditQuery, DecoyQuery, IdentityRecord, IpIocRow, JobRecord, LinkOverride, Store, StoreError,
+    StoreFuture, TokenRecord,
 };
 
 #[derive(Default)]
@@ -22,6 +22,7 @@ struct Inner {
     audit: Vec<AuditRecord>,
     events: Vec<CaptureEvent>,
     heartbeats: HashMap<(String, String), (serde_json::Value, i64)>,
+    overrides: Vec<(String, LinkOverride)>,
 }
 
 #[derive(Default)]
@@ -385,5 +386,32 @@ impl Store for MemoryStore {
         out.dedup_by(|a, b| a.event_id == b.event_id);
         out.truncate(limit);
         ready(Ok(out))
+    }
+
+    fn link_overrides(
+        &self,
+        tenant_id: &str,
+        attempt_id: &str,
+    ) -> StoreFuture<'_, Vec<LinkOverride>> {
+        let out = self
+            .lock()
+            .overrides
+            .iter()
+            .filter(|(t, o)| t == tenant_id && o.attempt_id == attempt_id)
+            .map(|(_, o)| o.clone())
+            .collect();
+        ready(Ok(out))
+    }
+
+    fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        g.overrides.retain(|(t, x)| {
+            !(t == tenant_id
+                && x.attempt_id == o.attempt_id
+                && x.kind == o.kind
+                && x.target == o.target)
+        });
+        g.overrides.push((tenant_id.to_string(), o));
+        ready(Ok(()))
     }
 }

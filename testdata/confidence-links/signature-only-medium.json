@@ -1,0 +1,43 @@
+{
+  "kind": "attempt_cve",
+  "attempt_id": "att_000000000000000000000002",
+  "target": "FOILED-DEMO-0001",
+  "score": 40,
+  "band": "medium",
+  "wording": "we assess as",
+  "evidence": [
+    {
+      "signal_id": "matcher:foiled-demo-0001-upload-traversal",
+      "source": "rule",
+      "weight": 100,
+      "summary": "request shape matched"
+    },
+    {
+      "signal_id": "catalogue:foiled/demo-app/1.0.0",
+      "source": "catalogue_prior",
+      "weight": 100,
+      "summary": "decoy stood up for this CVE"
+    }
+  ],
+  "contributions": [
+    {
+      "source": "rule",
+      "points": 30,
+      "signal_ids": [
+        "matcher:foiled-demo-0001-upload-traversal"
+      ]
+    },
+    {
+      "source": "catalogue_prior",
+      "points": 10,
+      "signal_ids": [
+        "catalogue:foiled/demo-app/1.0.0"
+      ]
+    }
+  ],
+  "caps_applied": [],
+  "publishable": false,
+  "ui_highlight": false,
+  "auto_state_promote": false,
+  "radar_queue": true
+}

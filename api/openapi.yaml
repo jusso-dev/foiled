@@ -508,30 +508,64 @@ paths:
     get:
       tags: [attempts]
       operationId: getAttemptLinks
-      summary: CVE, ATT&CK, actor and campaign links with confidence and evidence
-      x-foiled-status: planned
-      x-foiled-issue: 27
+      summary: CVE and ATT&CK links with confidence, evidence and wording
+      description: |
+        Scored with the confidence layer (`docs/confidence.md`): every
+        evidence item, every contribution and every cap is listed. Wording is
+        "we assess as" until an analyst confirms. Actor and campaign links
+        arrive with #29 and #33.
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [attempts:read]
-      parameters: [{ $ref: "#/components/parameters/AttemptId" }]
+      parameters:
+        - { $ref: "#/components/parameters/AttemptId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
       responses:
-        "200": { description: "Links with evidence." }
+        "200":
+          description: Links.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/confidence-link.schema.json" }
+        "404": { $ref: "#/components/responses/NotFound" }
     post:
       tags: [attempts]
       operationId: overrideAttemptLink
       summary: Analyst override or feedback on a link (audited)
-      x-foiled-status: planned
-      x-foiled-issue: 27
+      description: "`true_positive` confirms (score 100, wording confirmed), `false_positive` suppresses, `unsure` records feedback without changing the score. Written to the audit log as `link.override`."
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [attempts:write]
-      parameters: [{ $ref: "#/components/parameters/AttemptId" }]
+      parameters:
+        - { $ref: "#/components/parameters/AttemptId" }
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              additionalProperties: false
+              required: [kind, target, feedback, note]
+              properties:
+                kind: { type: string, enum: [attempt_cve, attempt_technique, attempt_actor, attempt_campaign] }
+                target: { type: string }
+                feedback: { type: string, enum: [true_positive, false_positive, unsure] }
+                note: { type: string, maxLength: 1000 }
       responses:
-        "200": { description: "Recorded." }
+        "200":
+          description: The link as it now scores.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/confidence-link.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /v0/campaigns:
     get:

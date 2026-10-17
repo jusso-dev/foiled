@@ -23,6 +23,11 @@ async fn harness() -> AppState {
         ("analyst", "t1", vec![Scope::AttemptsRead]),
         ("other", "t2", vec![Scope::AttemptsRead]),
         ("nobody", "t1", vec![Scope::DecoysRead]),
+        (
+            "lead",
+            "t1",
+            vec![Scope::AttemptsRead, Scope::AttemptsWrite, Scope::AuditRead],
+        ),
     ] {
         store.add_token(TokenRecord {
             id: id.into(),
@@ -120,4 +125,92 @@ async fn tenants_scopes_and_windows_are_enforced() {
         1,
         "only the Redis config probe"
     );
+}
+
+async fn post(state: &AppState, tok: &str, path: &str, body: Value) -> (StatusCode, Value) {
+    let req = Request::post(path)
+        .header("authorization", format!("Bearer fo_{tok}.{SECRET}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+async fn exploit_attempt(s: &AppState) -> String {
+    let (_, b) = get(s, "analyst", "/v0/attempts?state=post-exploitation").await;
+    b["items"][0]["attempt_id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn links_explain_cve_and_technique_confidence() {
+    let s = harness().await;
+    let id = exploit_attempt(&s).await;
+    let (st, b) = get(&s, "analyst", &format!("/v0/attempts/{id}/links")).await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    let items = b["items"].as_array().unwrap();
+    let cve = items
+        .iter()
+        .find(|l| l["kind"] == "attempt_cve" && l["target"] == "FOILED-DEMO-0001")
+        .expect("CVE link from the hook hits");
+    assert_eq!(cve["wording"], "we assess as");
+    assert!(cve["score"].as_u64().unwrap() >= 60, "{cve}");
+    let sources: Vec<&str> = cve["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["source"].as_str().unwrap())
+        .collect();
+    assert!(sources.contains(&"vuln_path_hook"));
+    assert!(sources.contains(&"catalogue_prior"));
+    assert!(sources.contains(&"noise_score"));
+    assert!(
+        items
+            .iter()
+            .any(|l| l["kind"] == "attempt_technique" && l["target"] == "T1190"),
+        "ATT&CK rules map the hook trigger to T1190"
+    );
+
+    // A probe-only attempt gets no CVE link from the catalogue prior alone.
+    let (_, b) = get(&s, "analyst", "/v0/attempts?src=192.0.2.44").await;
+    let probe = b["items"][0]["attempt_id"].as_str().unwrap();
+    let (_, b) = get(&s, "analyst", &format!("/v0/attempts/{probe}/links")).await;
+    assert!(
+        b["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|l| l["kind"] != "attempt_cve")
+    );
+}
+
+#[tokio::test]
+async fn analyst_overrides_are_scored_and_audited() {
+    let s = harness().await;
+    let id = exploit_attempt(&s).await;
+    let path = format!("/v0/attempts/{id}/links");
+    let body = serde_json::json!({
+        "kind": "attempt_cve", "target": "FOILED-DEMO-0001",
+        "feedback": "true_positive", "note": "write landed in /tmp"
+    });
+    let (st, _) = post(&s, "analyst", &path, body.clone()).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "needs attempts:write");
+    let (st, link) = post(&s, "lead", &path, body).await;
+    assert_eq!(st, StatusCode::OK, "{link}");
+    assert_eq!(link["score"], 100);
+    assert_eq!(link["wording"], "confirmed");
+    assert_eq!(link["override"]["analyst_id"], "lead");
+    let (_, audit) = get(&s, "lead", "/v0/audit?action=link.override").await;
+    assert_eq!(audit["items"][0]["detail"]["feedback"], "true_positive");
+
+    let unknown = serde_json::json!({
+        "kind": "attempt_cve", "target": "CVE-2099-9999", "feedback": "false_positive", "note": ""
+    });
+    let (st, _) = post(&s, "lead", &path, unknown).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
 }

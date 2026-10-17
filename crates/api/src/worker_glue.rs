@@ -26,8 +26,8 @@ use crate::auth::ClientCert;
 use crate::d1_sql as sql;
 use crate::routes::ingest::UploadConfig;
 use crate::store::{
-    AuditQuery, DecoyQuery, IdentityRecord, IpIocRow, JobRecord, Store, StoreError, StoreFuture,
-    TokenRecord,
+    AuditQuery, DecoyQuery, IdentityRecord, IpIocRow, JobRecord, LinkOverride, Store, StoreError,
+    StoreFuture, TokenRecord,
 };
 use crate::{AppState, router};
 
@@ -731,6 +731,59 @@ impl Store for CfStore {
         wrap(async move {
             let client = self.pg().await?;
             foiled_pg::events_between(&client, &t, since, until, limit as i64)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn link_overrides(
+        &self,
+        tenant_id: &str,
+        attempt_id: &str,
+    ) -> StoreFuture<'_, Vec<LinkOverride>> {
+        let (t, a) = (tenant_id.to_string(), attempt_id.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            let rows = foiled_pg::link_overrides(&client, &t, &a)
+                .await
+                .map_err(err)?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|r| {
+                    let kind = serde_json::from_value(serde_json::Value::String(r.kind)).ok()?;
+                    let feedback =
+                        serde_json::from_value(serde_json::Value::String(r.feedback)).ok()?;
+                    Some(LinkOverride {
+                        attempt_id: r.attempt_id,
+                        kind,
+                        target: r.target,
+                        decision: foiled_core::confidence::Override {
+                            feedback,
+                            analyst_id: r.analyst_id,
+                            at: r.at,
+                            note: r.note,
+                        },
+                    })
+                })
+                .collect())
+        })
+    }
+
+    fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let name = |v: serde_json::Value| v.as_str().map(str::to_string).unwrap_or_default();
+            let row = foiled_pg::LinkOverrideRow {
+                attempt_id: o.attempt_id,
+                kind: name(serde_json::to_value(o.kind).map_err(err)?),
+                target: o.target,
+                feedback: name(serde_json::to_value(o.decision.feedback).map_err(err)?),
+                analyst_id: o.decision.analyst_id,
+                at: o.decision.at,
+                note: o.decision.note,
+            };
+            let client = self.pg().await?;
+            foiled_pg::put_link_override(&client, &t, &row)
                 .await
                 .map_err(err)
         })
