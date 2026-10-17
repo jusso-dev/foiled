@@ -8,8 +8,8 @@ The idea: if you expose "Product X at version Y, which is affected by CVE Z", th
 
 Planning. There is no code yet. The design and roadmap live in the issues:
 
-- Roadmap and tracking issue: see the issue labelled `epic`
-- MVP scope: see the [MVP milestone](https://github.com/jusso-dev/version-trap/milestones)
+- Roadmap and tracking: https://github.com/jusso-dev/version-trap/issues/23
+- MVP scope: https://github.com/jusso-dev/version-trap/milestone/1
 - All issues: https://github.com/jusso-dev/version-trap/issues
 
 ## Safety
