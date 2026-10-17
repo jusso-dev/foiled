@@ -175,7 +175,7 @@ When #35's radar doc and exploit page template land, they should link here for t
 
 Whatever the channel, sensor or setting:
 
-- **Third-party enrichment fields:** anything from GreyNoise, CrowdSec CTI, DShield, Shadowserver or Hunt.io. `strip_non_shareable` removes keys named after a provider or prefixed with it (`greynoise.`, `crowdsec.`, `dshield.`, `shadowserver.`, `huntio.`, and the same names with `_`).
+- **Third-party enrichment fields:** anything from GreyNoise, CrowdSec CTI, DShield, Shadowserver, Hunt.io or AbuseIPDB. `strip_non_shareable` removes keys named after a provider or prefixed with it (`greynoise.`, `crowdsec.`, `dshield.`, `shadowserver.`, `huntio.`, `abuseipdb.`, and the same names with `_`). Whole enrichment Facts are filtered by provider with `redact_for_export` ([enrichment.md](enrichment.md)).
 - **Tenant identifiers:** `tenant_id` and anything that names a customer.
 - **Customer sensor data without an opt-in:** nothing from an edge sensor leaves unless its owner opted in, and the edge agent's local setting is also on.
 - **Payload bodies:** `payload_body` and raw request or session content. Hashes may be shared as IOCs.

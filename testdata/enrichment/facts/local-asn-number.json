@@ -1,0 +1,8 @@
+{
+  "provider": "local_asn",
+  "key": "asn.number",
+  "value": 64498,
+  "confidence": 90,
+  "observed_at": 1792285400000,
+  "ttl_secs": 604800
+}

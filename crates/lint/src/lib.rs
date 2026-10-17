@@ -42,6 +42,14 @@ pub const BINDINGS: &[Binding] = &[
         schema: "schemas/retention-config.schema.json",
     },
     Binding {
+        data_dir: "configs/enrichment.yaml",
+        schema: "schemas/enrichment-config.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/enrichment/facts",
+        schema: "schemas/fact.schema.json",
+    },
+    Binding {
         data_dir: "testdata/capture",
         schema: "schemas/capture-event.schema.json",
     },

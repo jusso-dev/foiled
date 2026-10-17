@@ -11,6 +11,7 @@ pub mod auth;
 pub mod capture;
 pub mod catalogue;
 pub mod decoy;
+pub mod enrichment;
 pub mod honeyscore;
 pub mod hooks;
 pub mod retention;
