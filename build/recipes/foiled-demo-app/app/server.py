@@ -24,8 +24,10 @@ import argparse
 import html
 import json
 import os
+import itertools
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -35,6 +37,10 @@ SERVER_BANNER = "demo-app/" + VERSION
 CATALOGUE_ID = "foiled/demo-app/1.0.0"
 HOOK_ID = "demo-app.upload-path-traversal"
 CVE_ID = "FOILED-DEMO-0001"
+# Hook lines carry a process-wide sequence number so the host agent can order
+# hits that share a millisecond. itertools.count is safe across threads in
+# CPython because next() runs under the GIL.
+HOOK_SEQUENCE = itertools.count(1)
 
 MAX_BODY_BYTES = 1024 * 1024
 MAX_LOGGED_TARGET = 2048
@@ -268,30 +274,35 @@ class DemoHandler(BaseHTTPRequestHandler):
                 401, render_page("Sign in", LOGIN_BODY.format(notice=notice))
             )
 
-    def _emit_hook(self, stage, resolved_path, request_path):
+    def _emit_hook(self, stage, resolved_path, request_path, started, notes,
+                   file_writes=None):
         """Emit one structured instrumentation-hook line for FOILED-DEMO-0001 (#32).
 
         This is evidence for the capture layer, not a control. It MUST fail open:
         if logging raises for any reason, the decoy keeps serving so the synthetic
         vulnerability still behaves as a real one would. Hooks never block the
-        decoy and never phone home.
+        decoy and never phone home. Field names match the capture envelope's
+        `hook` object (docs/instrumentation.md).
         """
         try:
-            self.event_log.write(
-                {
-                    "kind": "hook",
-                    "ts": utc_now(),
-                    "hook_id": HOOK_ID,
-                    "catalogue_id": CATALOGUE_ID,
-                    "cve_id": CVE_ID,
-                    "stage": stage,
-                    "src": self._client_ip(),
-                    "request_path": truncate(request_path),
-                    "resolved_path": truncate(resolved_path),
-                    "upload_root": self.config.upload_root,
-                    "notes": "resolved path escaped the upload root",
-                }
-            )
+            record = {
+                "kind": "hook",
+                "ts": utc_now(),
+                "hook_id": HOOK_ID,
+                "catalogue_id": CATALOGUE_ID,
+                "cve_id": CVE_ID,
+                "stage": stage,
+                "sequence_no": next(HOOK_SEQUENCE),
+                "t_offset_ms": int((time.monotonic() - started) * 1000),
+                "src": self._client_ip(),
+                "request_path": truncate(request_path),
+                "resolved_path": truncate(resolved_path),
+                "upload_root": self.config.upload_root,
+                "notes": notes,
+            }
+            if file_writes:
+                record["file_writes"] = [truncate(p) for p in file_writes]
+            self.event_log.write(record)
         except Exception:
             # Fail open. The decoy keeps working even if the hook cannot be logged.
             pass
@@ -307,7 +318,12 @@ class DemoHandler(BaseHTTPRequestHandler):
 
         The content is only ever written to disk. It is never executed, imported,
         rendered or parsed. The body is capped at 1 MiB by _read_body().
+
+        When an escaping upload's name ends in `.sh`, the hook also reports a
+        `post_exploit` stage after the write, recording the resolved path in
+        `file_writes`. The script is still never executed.
         """
+        started = time.monotonic()
         query = parse_qs(urlsplit(self.path).query)
         rel_path = (query.get("path") or [""])[0]
         if not rel_path:
@@ -333,11 +349,21 @@ class DemoHandler(BaseHTTPRequestHandler):
         root = os.path.realpath(self.config.upload_root)
         escaped = os.path.commonpath([resolved, root]) != root
         if escaped:
-            self._emit_hook("trigger", resolved, self.path)
+            self._emit_hook(
+                "trigger", resolved, self.path, started,
+                "resolved path escaped the upload root",
+            )
 
         os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
         with open(target, "wb") as handle:
             handle.write(body)
+
+        if escaped and rel_path.endswith(".sh"):
+            self._emit_hook(
+                "post_exploit", resolved, self.path, started,
+                "shell script written outside the upload root; never executed",
+                file_writes=[resolved],
+            )
 
         self._send_json(
             201,

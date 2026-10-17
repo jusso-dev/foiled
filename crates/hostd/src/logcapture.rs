@@ -109,10 +109,20 @@ pub fn line_to_event(decoy_id: &str, params: &DecoyParams, line: &str) -> Option
             "cleanup" => HookStage::Cleanup,
             _ => return None,
         };
-        let resolved = rec
-            .get("resolved_path")
-            .and_then(Value::as_str)
-            .map(|s| s.chars().take(512).collect::<String>());
+        let file_writes: Vec<String> = match rec.get("file_writes").and_then(Value::as_array) {
+            Some(list) => list
+                .iter()
+                .filter_map(Value::as_str)
+                .take(32)
+                .map(|s| s.chars().take(512).collect())
+                .collect(),
+            None => rec
+                .get("resolved_path")
+                .and_then(Value::as_str)
+                .map(|s| s.chars().take(512).collect::<String>())
+                .into_iter()
+                .collect(),
+        };
         let hook = HookEvent {
             hook_id: rec.get("hook_id")?.as_str()?.to_string(),
             catalogue_id: params.catalogue_id.clone(),
@@ -122,10 +132,14 @@ pub fn line_to_event(decoy_id: &str, params: &DecoyParams, line: &str) -> Option
                 .map(str::to_string),
             stage,
             request_slice_ref: None,
-            sequence_no: 1,
-            t_offset_ms: 0,
+            sequence_no: rec
+                .get("sequence_no")
+                .and_then(Value::as_u64)
+                .map(|n| n.min(u64::from(u32::MAX)) as u32)
+                .unwrap_or(1),
+            t_offset_ms: rec.get("t_offset_ms").and_then(Value::as_u64).unwrap_or(0),
             cmd_lines: vec![],
-            file_writes: resolved.into_iter().collect(),
+            file_writes,
             implant_refs: vec![],
             notes: rec.get("notes").and_then(Value::as_str).map(str::to_string),
         };
@@ -216,6 +230,16 @@ mod tests {
         assert_eq!(h.cve_id.as_deref(), Some("FOILED-DEMO-0001"));
         assert_eq!(h.file_writes, vec!["/tmp/x".to_string()]);
         assert!(e.problems(1_800_000_000_000).is_empty());
+    }
+
+    #[test]
+    fn post_exploit_lines_keep_their_sequence_and_writes() {
+        let line = r#"{"catalogue_id":"foiled/demo-app/1.0.0","cve_id":"FOILED-DEMO-0001","file_writes":["/tmp/x.sh"],"hook_id":"demo-app.upload-path-traversal","kind":"hook","sequence_no":2,"src":"203.0.113.7","stage":"post_exploit","t_offset_ms":15,"ts":"2026-10-18T01:02:03.470Z"}"#;
+        let e = line_to_event("d1", &params(), line).unwrap();
+        let h = e.hook.unwrap();
+        assert_eq!(h.stage, HookStage::PostExploit);
+        assert_eq!((h.sequence_no, h.t_offset_ms), (2, 15));
+        assert_eq!(h.file_writes, vec!["/tmp/x.sh".to_string()]);
     }
 
     #[test]

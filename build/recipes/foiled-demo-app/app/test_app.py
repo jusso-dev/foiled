@@ -98,6 +98,38 @@ class ServerTestCase(unittest.TestCase):
         self.assertEqual(event["hook_id"], "demo-app.upload-path-traversal")
         self.assertEqual(event["cve_id"], "FOILED-DEMO-0001")
         self.assertEqual(event["stage"], "trigger")
+        self.assertIsInstance(event["sequence_no"], int)
+        self.assertGreaterEqual(event["t_offset_ms"], 0)
+        self.assertNotIn("file_writes", event)
+
+    def test_traversal_shell_script_reports_post_exploit_write(self):
+        status, _h, body = self.request(
+            "POST", "/api/upload?path=../../tmp/x.sh", body=b"#!/bin/sh\necho demo\n"
+        )
+        self.assertEqual(status, 201)
+        self.assertTrue(json.loads(body)["escaped_upload_root"])
+        resolved = os.path.realpath(os.path.join(self.upload_root, "../../tmp/x.sh"))
+        self.assertTrue(os.path.isfile(resolved))
+        # Written, never executed: the mode is whatever open() gave it, no exec bit.
+        self.assertFalse(os.stat(resolved).st_mode & 0o111)
+        lines = [l for l in self.event_buf.getvalue().splitlines() if l.strip()]
+        self.assertEqual(len(lines), 2)
+        trigger, post = (json.loads(l) for l in lines)
+        self.assertEqual(trigger["stage"], "trigger")
+        self.assertEqual(post["stage"], "post_exploit")
+        self.assertEqual(post["hook_id"], "demo-app.upload-path-traversal")
+        self.assertEqual(post["cve_id"], "FOILED-DEMO-0001")
+        self.assertEqual(post["file_writes"], [resolved])
+        self.assertGreater(post["sequence_no"], trigger["sequence_no"])
+        self.assertGreaterEqual(post["t_offset_ms"], trigger["t_offset_ms"])
+
+    def test_shell_script_inside_upload_root_fires_no_hook(self):
+        status, _h, body = self.request(
+            "POST", "/api/upload?path=notes.sh", body=b"echo demo\n"
+        )
+        self.assertEqual(status, 201)
+        self.assertFalse(json.loads(body)["escaped_upload_root"])
+        self.assertEqual(self.event_buf.getvalue().strip(), "")
 
     def test_oversize_body_is_rejected(self):
         oversize = server.MAX_BODY_BYTES + 1

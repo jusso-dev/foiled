@@ -11,6 +11,7 @@ pub mod capture;
 pub mod catalogue;
 pub mod decoy;
 pub mod honeyscore;
+pub mod hooks;
 pub mod retention;
 pub mod share;
 pub mod sigv4;

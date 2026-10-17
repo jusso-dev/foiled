@@ -6,7 +6,8 @@
 //! 2. Every data file in a directory listed in [`BINDINGS`] validates against
 //!    the schema bound to that directory. A binding may also name a single
 //!    file. JSON and YAML are both accepted.
-//! 3. Catalogue entries pass the checks a schema cannot express.
+//! 3. Catalogue entries pass the checks a schema cannot express, including
+//!    a `hooks/<id>.yaml` manifest for every declared instrumentation hook.
 //! 4. `configs/contribute-back.yaml`, if present, parses as a
 //!    [`SharePolicy`] and has no policy problems (#37).
 //!
@@ -23,6 +24,7 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 const CATALOGUE_ENTRIES: &str = "catalogue/entries";
+const HOOKS_DIR: &str = "hooks";
 const CONTRIBUTE_BACK: &str = "configs/contribute-back.yaml";
 
 /// Data to schema bindings, relative to the repository root.
@@ -58,6 +60,10 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         data_dir: "testdata/agent/heartbeats",
         schema: "schemas/agent/heartbeat.schema.json",
+    },
+    Binding {
+        data_dir: "hooks",
+        schema: "schemas/hook-manifest.schema.json",
     },
 ];
 
@@ -236,8 +242,9 @@ fn check_contribute_back(root: &Path, report: &mut Report) {
 }
 
 /// Catalogue checks the schema cannot express: id matches path, artefact
-/// shape matches the decoy kind, and verified emulation entries point at a
-/// profile or module manifest that exists in the tree.
+/// shape matches the decoy kind, verified emulation entries point at a
+/// profile or module manifest that exists in the tree, and every declared
+/// instrumentation hook has a manifest under `hooks/` (#32).
 fn check_catalogue(root: &Path, report: &mut Report) -> Result<()> {
     let entries_dir = root.join(CATALOGUE_ENTRIES);
     if !entries_dir.exists() {
@@ -272,6 +279,15 @@ fn check_catalogue(root: &Path, report: &mut Report) -> Result<()> {
                 report.findings.push(Finding {
                     path: rel.clone(),
                     message: format!("matcher {m} not found in catalogue/matchers/"),
+                });
+            }
+        }
+        for hook in &parsed.instrumentation_hooks {
+            let required = format!("{HOOKS_DIR}/{hook}.yaml");
+            if !root.join(&required).exists() {
+                report.findings.push(Finding {
+                    path: rel.clone(),
+                    message: format!("instrumentation hook {hook} needs {required}"),
                 });
             }
         }
@@ -473,6 +489,50 @@ mod tests {
             dir.path(),
             "emulators/redis/profiles/redis-7.0.yaml",
             "id: redis-7.0\n",
+        );
+        let report = run(dir.path(), BINDINGS).unwrap();
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+    }
+
+    #[test]
+    fn declared_hooks_need_a_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "catalogue/schema/entry.schema.json",
+            MINIMAL_ENTRY_SCHEMA,
+        );
+        write(
+            dir.path(),
+            "schemas/hook-manifest.schema.json",
+            MINIMAL_ENTRY_SCHEMA,
+        );
+        let body = catalogue_entry(
+            "emulator/redis/7.0",
+            "draft",
+            r#"{"emulator_id":"redis","emulator_profile":"redis-7.0"}"#,
+        )
+        .replace(
+            r#""status""#,
+            r#""instrumentation_hooks":["redis.config-set-dir"],"status""#,
+        );
+        write(
+            dir.path(),
+            "catalogue/entries/emulator/redis/7.0.json",
+            &body,
+        );
+        let report = run(dir.path(), BINDINGS).unwrap();
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        assert!(
+            report.findings[0]
+                .message
+                .contains("hooks/redis.config-set-dir.yaml")
+        );
+
+        write(
+            dir.path(),
+            "hooks/redis.config-set-dir.yaml",
+            "id: redis.config-set-dir\n",
         );
         let report = run(dir.path(), BINDINGS).unwrap();
         assert!(report.findings.is_empty(), "{:?}", report.findings);
