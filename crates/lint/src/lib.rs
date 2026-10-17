@@ -35,6 +35,14 @@ pub const BINDINGS: &[Binding] = &[
         data_dir: "configs/retention.yaml",
         schema: "schemas/retention-config.schema.json",
     },
+    Binding {
+        data_dir: "testdata/capture",
+        schema: "schemas/capture-event.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/quarantine",
+        schema: "schemas/quarantine-meta.schema.json",
+    },
 ];
 
 /// Directories never scanned for schema files.

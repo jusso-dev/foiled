@@ -1,0 +1,12 @@
+{
+  "event_id": "evt-0003",
+  "ts": 1792285330000,
+  "decoy_id": "dcy-redis-1",
+  "catalogue_id": "emulator/redis/7.0",
+  "decoy_kind": "emulation",
+  "channel": "application",
+  "severity": "medium",
+  "src": { "ip": "198.51.100.23", "port": 40001 },
+  "dst": { "ip": "10.85.1.10", "port": 6379 },
+  "data": { "protocol": "redis", "command": "CONFIG", "args": ["SET", "dir", "/var/spool/cron"] }
+}

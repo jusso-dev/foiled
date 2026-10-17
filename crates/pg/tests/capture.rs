@@ -1,0 +1,78 @@
+//! Capture event storage against a real Postgres (CI service container).
+
+use foiled_core::capture::{CaptureEvent, Source, SourceKind};
+use foiled_pg::{InsertError, events_for_decoy, insert_events, migrate};
+use tokio_postgres::{Client, NoTls};
+
+async fn connect() -> Client {
+    let url = std::env::var("FOILED_TEST_PG_URL")
+        .expect("FOILED_TEST_PG_URL must point at a disposable Postgres database");
+    let (client, conn) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(conn);
+    migrate(&client).await.expect("migrate");
+    client
+}
+
+fn fixture(name: &str) -> CaptureEvent {
+    let path = format!(
+        "{}/../../testdata/capture/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn stamped(mut e: CaptureEvent, tenant: &str) -> CaptureEvent {
+    e.stamp(
+        Source {
+            kind: SourceKind::Host,
+            id: "host-1".into(),
+        },
+        tenant,
+    );
+    e
+}
+
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn events_insert_once_and_read_back_in_order() {
+    let c = connect().await;
+    let tenant = format!("cap-{}", std::process::id());
+    let hook = stamped(fixture("hook-trigger.json"), &tenant);
+    let http = stamped(fixture("http-upload.json"), &tenant);
+    let n = insert_events(&c, &[hook.clone(), http.clone()], 1)
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+    // At-least-once redelivery is a no-op.
+    let n = insert_events(&c, std::slice::from_ref(&http), 2)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+    let got = events_for_decoy(&c, &tenant, &http.decoy_id, 10)
+        .await
+        .unwrap();
+    assert_eq!(got, vec![http, hook], "time order, full envelopes");
+}
+
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn unstamped_events_are_refused_and_rows_are_append_only() {
+    let c = connect().await;
+    let raw = fixture("emulator-redis.json");
+    assert!(matches!(
+        insert_events(&c, std::slice::from_ref(&raw), 1).await,
+        Err(InsertError::Unstamped(_))
+    ));
+    let tenant = format!("cap-upd-{}", std::process::id());
+    insert_events(&c, &[stamped(raw.clone(), &tenant)], 1)
+        .await
+        .unwrap();
+    let err = c
+        .execute(
+            "UPDATE capture_events SET severity = 'info' WHERE tenant_id = $1",
+            &[&tenant],
+        )
+        .await
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("append-only"));
+}

@@ -1,0 +1,14 @@
+{
+  "event_id": "evt-0001",
+  "ts": 1792285323000,
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "decoy_kind": "sandbox",
+  "generation": 1,
+  "channel": "application",
+  "severity": "medium",
+  "src": { "ip": "203.0.113.7", "port": 51234 },
+  "dst": { "ip": "10.85.1.2", "port": 8080 },
+  "payload_ref": "r2://foiled-evidence/t1/dcy-demo-1/_/application/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "data": { "method": "POST", "path": "/api/upload?path=../../tmp/x.sh", "status": 201, "bytes": 42, "user_agent": "curl/8.0", "body_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" }
+}

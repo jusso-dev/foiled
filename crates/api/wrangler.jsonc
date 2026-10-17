@@ -18,5 +18,27 @@
       "migrations_dir": "../../migrations/d1"
     }
   ],
-  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<hyperdrive-config-id>" }]
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<hyperdrive-config-id>" }],
+  // Capture ingest (#9): the API produces, and the same Worker consumes.
+  "queues": {
+    "producers": [{ "binding": "INGEST", "queue": "foiled-ingest" }],
+    "consumers": [
+      {
+        "queue": "foiled-ingest",
+        "max_batch_size": 100,
+        "max_retries": 5,
+        "dead_letter_queue": "foiled-ingest-dlq"
+      }
+    ]
+  },
+  // Evidence bucket, private. Hosts upload through presigned S3 API URLs;
+  // the R2 S3 credentials are Worker secrets R2_ACCESS_KEY_ID and
+  // R2_SECRET_ACCESS_KEY, scoped to this bucket only.
+  "r2_buckets": [{ "binding": "EVIDENCE", "bucket_name": "foiled-evidence" }],
+  "vars": {
+    "EVIDENCE_BUCKET": "foiled-evidence",
+    "R2_S3_HOST": "<account-id>.r2.cloudflarestorage.com"
+  },
+  // Radar counters (#35).
+  "analytics_engine_datasets": [{ "binding": "RADAR", "dataset": "foiled_radar" }]
 }

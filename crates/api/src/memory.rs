@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use foiled_core::audit::AuditRecord;
+use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState};
 
 use crate::store::{
@@ -18,6 +19,7 @@ struct Inner {
     jobs: Vec<JobRecord>,
     rate: HashMap<(String, i64), u32>,
     audit: Vec<AuditRecord>,
+    events: Vec<CaptureEvent>,
 }
 
 #[derive(Default)]
@@ -44,6 +46,18 @@ impl MemoryStore {
 
     pub fn audit(&self) -> Vec<AuditRecord> {
         self.lock().audit.clone()
+    }
+
+    /// Events put on the ingest queue, in order.
+    pub fn queued_events(&self) -> Vec<CaptureEvent> {
+        self.lock().events.clone()
+    }
+
+    /// Test helper: assign a decoy to a host, as the scheduler would.
+    pub fn set_host(&self, id: &str, host_id: &str) {
+        if let Some(d) = self.lock().decoys.iter_mut().find(|d| d.id == id) {
+            d.host_id = Some(host_id.to_string());
+        }
     }
 
     /// Test helper: force a decoy into a state, as a host report would.
@@ -185,5 +199,10 @@ impl Store for MemoryStore {
         out.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
         out.truncate(q.limit);
         ready(Ok(out))
+    }
+
+    fn enqueue_events(&self, events: Vec<CaptureEvent>) -> StoreFuture<'_, ()> {
+        self.lock().events.extend(events);
+        ready(Ok(()))
     }
 }

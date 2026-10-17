@@ -68,6 +68,8 @@ pub struct AppState {
     pub clock: Clock,
     pub ids: IdSource,
     pub limits: Limits,
+    /// R2 upload signing; `None` when evidence uploads are not configured.
+    pub uploads: Option<routes::ingest::UploadConfig>,
 }
 
 impl AppState {
@@ -78,6 +80,7 @@ impl AppState {
             clock,
             ids: Arc::new(|| uuid::Uuid::new_v4().simple().to_string()),
             limits: Limits::default(),
+            uploads: None,
         }
     }
 }
@@ -108,6 +111,7 @@ pub fn router(state: AppState) -> Router {
         // Alias kept for agents and docs that say "sandbox" (#24).
         .nest("/v0/sandboxes", decoys)
         .nest("/v0/audit", routes::audit::router())
+        .merge(routes::ingest::router())
         .fallback(|| async { error::ApiError::not_found("route") })
         .with_state(state)
 }

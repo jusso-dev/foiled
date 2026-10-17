@@ -1,0 +1,14 @@
+{
+  "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "size": 42,
+  "mime_guess": "text/x-shellscript",
+  "first_seen": 1792285323000,
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "capture_channel": "filesystem",
+  "guest_path": "/tmp/x.sh",
+  "src": "203.0.113.7",
+  "payload_ref": "r2://foiled-evidence/t1/dcy-demo-1/_/quarantine/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "executed": false,
+  "yara_matches": []
+}

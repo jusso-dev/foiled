@@ -303,48 +303,82 @@ paths:
       operationId: mintUploadUrl
       summary: Mint a short-lived R2 upload URL for one evidence object
       description: |
-        Pcaps, file diffs and quarantined payloads go straight to R2 and never
-        through a Worker request body. The URL is scoped to one object key
-        under the caller's tenant and decoy, and expires in minutes (#9).
+        Pcaps, file diffs, quarantined payloads and large request slices go
+        straight to R2 and never through a Worker request body. The presigned
+        PUT is scoped to one object key under the caller's tenant and decoy,
+        carries the object's SHA-256 as a signed `x-amz-checksum-sha256`
+        header (R2 rejects a body that does not match), and expires in
+        minutes. Only decoys assigned to the calling host or sensor (#9).
       security: [{ mtls: [] }]
-      x-foiled-status: planned
-      x-foiled-issue: 9
+      x-foiled-status: implemented
       x-foiled-store: r2
       x-foiled-scopes: [host:upload, sensor:upload]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema: { $ref: "#/components/schemas/UploadRequest" }
       responses:
         "201":
-          description: Upload URL and the `payload_ref` to cite in events.
+          description: Upload URL, required headers and the `payload_ref` to cite in events.
           content:
             application/json:
-              schema: { type: object }
+              schema: { $ref: "#/components/schemas/UploadGrant" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503":
+          description: Uploads are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /v0/ingest/events:
     post:
       tags: [ingest]
       operationId: ingestEvents
       summary: Submit a batch of capture envelopes
-      description: Validated against `schemas/capture-event.schema.json`, stamped with the certificate identity and put on a Queue (#9, #31).
+      description: |
+        1 to 100 envelopes, each validated against
+        `schemas/capture-event.schema.json` and the core checks (size, time,
+        IPs, hook channel, payload references under the caller's own tenant
+        and decoy). Any invalid event rejects the batch. Accepted events are
+        stamped with the certificate identity (claimed `source` and
+        `tenant_id` are replaced) and put on the ingest Queue (#9, #31).
       security: [{ mtls: [] }]
-      x-foiled-status: planned
-      x-foiled-issue: 9
+      x-foiled-status: implemented
       x-foiled-store: queue
       x-foiled-scopes: [host:ingest, sensor:ingest]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              additionalProperties: false
+              required: [events]
+              properties:
+                events:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { $ref: "../schemas/capture-event.schema.json" }
       responses:
-        "202": { description: "Queued." }
+        "202":
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accepted]
+                properties:
+                  accepted: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
 
   /v0/sensors:
     get:
@@ -875,6 +909,28 @@ components:
         job_kind:
           type: string
           enum: [decoy.create, decoy.stop, decoy.rotate, decoy.reset, decoy.mark_compromised, decoy.destroy]
+    UploadRequest:
+      type: object
+      additionalProperties: false
+      required: [decoy_id, channel, sha256, size]
+      properties:
+        decoy_id: { type: string }
+        attempt_id: { type: string }
+        channel: { type: string, enum: [network, application, filesystem, process, quarantine, hook, dns, egress] }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        size: { type: integer, minimum: 1, maximum: 5368709120 }
+    UploadGrant:
+      type: object
+      required: [method, url, headers, payload_ref, expires_at]
+      properties:
+        method: { type: string, const: PUT }
+        url: { type: string, format: uri }
+        headers:
+          type: array
+          description: Header name and value pairs the uploader must send unchanged.
+          items: { type: array, items: { type: string }, minItems: 2, maxItems: 2 }
+        payload_ref: { type: string, examples: ["r2://foiled-evidence/t1/dcy-1/_/network/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"] }
+        expires_at: { type: integer, description: Unix ms. }
     AuditRecord:
       type: object
       required: [id, ts, tenant_id, actor_id, actor_kind, action, outcome]

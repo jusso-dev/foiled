@@ -7,13 +7,20 @@
 
 use foiled_core::audit::{AuditRecord, Outcome};
 use foiled_core::auth::Role;
+use foiled_core::capture::CaptureEvent;
 use tokio_postgres::{Client, Error, Row};
 
 /// Ordered migrations under `migrations/postgres/`.
-pub const MIGRATIONS: &[(&str, &str)] = &[(
-    "0001_audit",
-    include_str!("../../../migrations/postgres/0001_audit.sql"),
-)];
+pub const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0001_audit",
+        include_str!("../../../migrations/postgres/0001_audit.sql"),
+    ),
+    (
+        "0002_capture_events",
+        include_str!("../../../migrations/postgres/0002_capture_events.sql"),
+    ),
+];
 
 /// Arbitrary constant key for the migration advisory lock.
 const MIGRATION_LOCK_KEY: i64 = 0x666f_696c_6564; // "foiled"
@@ -160,4 +167,104 @@ fn audit_from_row(row: &Row) -> Option<AuditRecord> {
         outcome: Outcome::parse(row.get("outcome"))?,
         detail: row.get("detail"),
     })
+}
+
+/// Insert stamped envelopes. Returns how many were new; replays of an
+/// `event_id` already stored are ignored (Queue delivery is at least once).
+/// Events without a stamped source or tenant are refused: they never came
+/// through the ingest API.
+pub async fn insert_events(
+    client: &Client,
+    events: &[CaptureEvent],
+    received_at: i64,
+) -> Result<u64, InsertError> {
+    let stmt = client
+        .prepare(
+            "INSERT INTO capture_events (event_id, tenant_id, decoy_id, catalogue_id, decoy_kind, ts,
+                channel, severity, src_ip, attempt_id, payload_ref, source_kind, source_id, body,
+                received_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text::inet, $10, $11, $12, $13, $14, $15)
+             ON CONFLICT (tenant_id, event_id) DO NOTHING",
+        )
+        .await?;
+    let mut inserted = 0;
+    for e in events {
+        let (Some(tenant), Some(source)) = (&e.tenant_id, &e.source) else {
+            return Err(InsertError::Unstamped(e.event_id.clone()));
+        };
+        let body = serde_json::to_value(e).map_err(|err| InsertError::Encode(err.to_string()))?;
+        let kind = serde_json::to_value(source.kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        inserted += client
+            .execute(
+                &stmt,
+                &[
+                    &e.event_id,
+                    tenant,
+                    &e.decoy_id,
+                    &e.catalogue_id,
+                    &e.decoy_kind.as_str(),
+                    &e.ts,
+                    &e.channel.as_str(),
+                    &serde_json::to_value(e.severity)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                        .unwrap_or_default(),
+                    &e.src.ip,
+                    &e.attempt_id,
+                    &e.payload_ref,
+                    &kind,
+                    &source.id,
+                    &body,
+                    &received_at,
+                ],
+            )
+            .await?;
+    }
+    Ok(inserted)
+}
+
+/// Events for one decoy in time order, for timelines (#10) and tests.
+pub async fn events_for_decoy(
+    client: &Client,
+    tenant_id: &str,
+    decoy_id: &str,
+    limit: i64,
+) -> Result<Vec<CaptureEvent>, Error> {
+    let rows = client
+        .query(
+            "SELECT body FROM capture_events WHERE tenant_id = $1 AND decoy_id = $2
+             ORDER BY ts, event_id LIMIT $3",
+            &[&tenant_id, &decoy_id, &limit],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .filter_map(|r| serde_json::from_value(r.get("body")).ok())
+        .collect())
+}
+
+#[derive(Debug)]
+pub enum InsertError {
+    Db(Error),
+    Unstamped(String),
+    Encode(String),
+}
+
+impl From<Error> for InsertError {
+    fn from(e: Error) -> Self {
+        InsertError::Db(e)
+    }
+}
+
+impl std::fmt::Display for InsertError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InsertError::Db(e) => write!(f, "{e}"),
+            InsertError::Unstamped(id) => write!(f, "event {id} has no ingest identity"),
+            InsertError::Encode(e) => write!(f, "encode: {e}"),
+        }
+    }
 }

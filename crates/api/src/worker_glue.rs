@@ -8,16 +8,22 @@ use std::sync::Arc;
 
 use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, parse_scopes};
+use foiled_core::capture::CaptureEvent;
 use foiled_core::catalogue::DecoyKind;
 use foiled_core::decoy::{Decoy, DecoyState};
+use foiled_core::sigv4::Credentials;
 use serde::Deserialize;
 use tower_service::Service;
 use worker::send::SendFuture;
 use worker::wasm_bindgen::JsValue;
-use worker::{Cf, Context, D1Database, Env, HttpRequest, Hyperdrive, event};
+use worker::{
+    AnalyticsEngineDataPointBuilder, Cf, Context, D1Database, Env, HttpRequest, Hyperdrive,
+    MessageBatch, Queue, event,
+};
 
 use crate::auth::ClientCert;
 use crate::d1_sql as sql;
+use crate::routes::ingest::UploadConfig;
 use crate::store::{
     AuditQuery, DecoyQuery, IdentityRecord, JobRecord, Store, StoreError, StoreFuture, TokenRecord,
 };
@@ -35,12 +41,86 @@ async fn fetch(
     let store = CfStore {
         db: env.d1("DB")?,
         hyperdrive: env.hyperdrive("HYPERDRIVE")?,
+        ingest: env.queue("INGEST").ok(),
     };
-    let state = AppState::new(
-        Arc::new(store),
-        Arc::new(|| worker::Date::now().as_millis() as i64),
-    );
+    let mut state = AppState::new(Arc::new(store), Arc::new(now_ms));
+    state.uploads = upload_config(&env);
     Ok(router(state).call(req).await?)
+}
+
+fn now_ms() -> i64 {
+    worker::Date::now().as_millis() as i64
+}
+
+/// Upload signing needs an R2 S3 API token (Worker secrets) and the
+/// endpoint host and bucket (vars). Missing any of them disables uploads.
+fn upload_config(env: &Env) -> Option<UploadConfig> {
+    let secret = |n: &str| env.secret(n).ok().map(|s| s.to_string());
+    let var = |n: &str| env.var(n).ok().map(|s| s.to_string());
+    Some(UploadConfig {
+        host: var("R2_S3_HOST")?,
+        bucket: var("EVIDENCE_BUCKET")?,
+        credentials: Credentials {
+            access_key_id: secret("R2_ACCESS_KEY_ID")?,
+            secret_access_key: secret("R2_SECRET_ACCESS_KEY")?,
+        },
+        expires_secs: 300,
+    })
+}
+
+/// Ingest Queue consumer: write envelopes to Postgres, count them in
+/// Analytics Engine for the radar (#35). Delivery is at least once; the
+/// insert is idempotent on event_id, so a retry after a partial failure is
+/// safe.
+#[event(queue)]
+async fn consume(batch: MessageBatch<CaptureEvent>, env: Env, _ctx: Context) -> worker::Result<()> {
+    let events: Vec<CaptureEvent> = batch
+        .messages()?
+        .into_iter()
+        .map(|m| m.into_body())
+        .collect();
+    let store = CfStore {
+        db: env.d1("DB")?,
+        hyperdrive: env.hyperdrive("HYPERDRIVE")?,
+        ingest: None,
+    };
+    let client = match store.pg().await {
+        Ok(c) => c,
+        Err(e) => {
+            worker::console_error!("ingest consumer: {e}");
+            batch.retry_all();
+            return Ok(());
+        }
+    };
+    match foiled_pg::insert_events(&client, &events, now_ms()).await {
+        Ok(_) => {
+            if let Ok(radar) = env.analytics_engine("RADAR") {
+                for e in &events {
+                    let point = AnalyticsEngineDataPointBuilder::new()
+                        .indexes([e.catalogue_id.as_str()])
+                        .add_blob(e.channel.as_str())
+                        .add_blob(e.decoy_kind.as_str())
+                        .add_blob(e.tenant_id.as_deref().unwrap_or(""))
+                        .add_double(1.0)
+                        .build();
+                    if let Err(err) = radar.write_data_point(&point) {
+                        worker::console_error!("radar counter: {err}");
+                    }
+                }
+            }
+            batch.ack_all();
+        }
+        Err(foiled_pg::InsertError::Unstamped(id)) => {
+            // Never came through the ingest API. Drop rather than retry forever.
+            worker::console_error!("ingest consumer: dropping unstamped event {id}");
+            batch.ack_all();
+        }
+        Err(e) => {
+            worker::console_error!("ingest consumer: {e}");
+            batch.retry_all();
+        }
+    }
+    Ok(())
 }
 
 /// Copy `cf.tlsClientAuth` into a plain extension the router can read.
@@ -58,7 +138,11 @@ fn client_cert(req: &HttpRequest) -> Option<ClientCert> {
 struct CfStore {
     db: D1Database,
     hyperdrive: Hyperdrive,
+    ingest: Option<Queue>,
 }
+
+/// Queues accept batches of up to 100 messages and 256 KB.
+const QUEUE_BATCH_BYTES: usize = 200 * 1024;
 
 fn err(e: impl std::fmt::Display) -> StoreError {
     worker::console_error!("store: {e}");
@@ -443,6 +527,33 @@ impl Store for CfStore {
             foiled_pg::list_audit(&client, &t, &filter)
                 .await
                 .map_err(err)
+        })
+    }
+
+    fn enqueue_events(&self, events: Vec<CaptureEvent>) -> StoreFuture<'_, ()> {
+        wrap(async move {
+            let queue = self
+                .ingest
+                .as_ref()
+                .ok_or_else(|| StoreError("INGEST queue binding missing".into()))?;
+            let mut chunk: Vec<CaptureEvent> = Vec::new();
+            let mut bytes = 0;
+            for e in events {
+                let size = serde_json::to_vec(&e).map(|v| v.len()).unwrap_or(0);
+                if !chunk.is_empty() && (bytes + size > QUEUE_BATCH_BYTES || chunk.len() == 100) {
+                    queue
+                        .send_batch(std::mem::take(&mut chunk))
+                        .await
+                        .map_err(err)?;
+                    bytes = 0;
+                }
+                bytes += size;
+                chunk.push(e);
+            }
+            if !chunk.is_empty() {
+                queue.send_batch(chunk).await.map_err(err)?;
+            }
+            Ok(())
         })
     }
 }
