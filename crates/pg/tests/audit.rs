@@ -36,6 +36,24 @@ fn record(id: &str, tenant: &str, ts: i64, action: &str, target: &str) -> AuditR
 
 #[tokio::test]
 #[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn concurrent_migrations_do_not_race() {
+    let url = std::env::var("FOILED_TEST_PG_URL").expect("FOILED_TEST_PG_URL");
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let url = url.clone();
+        handles.push(tokio::spawn(async move {
+            let (client, conn) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+            tokio::spawn(conn);
+            migrate(&client).await.expect("concurrent migrate")
+        }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
 async fn migrations_are_idempotent() {
     let c = connect().await;
     assert!(migrate(&c).await.unwrap().is_empty());

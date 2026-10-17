@@ -15,9 +15,28 @@ pub const MIGRATIONS: &[(&str, &str)] = &[(
     include_str!("../../../migrations/postgres/0001_audit.sql"),
 )];
 
+/// Arbitrary constant key for the migration advisory lock.
+const MIGRATION_LOCK_KEY: i64 = 0x666f_696c_6564; // "foiled"
+
 /// Apply any migration not yet recorded in `schema_migrations`. Intended for
 /// tests and operator tooling, never called per request from the Worker.
+///
+/// Safe to call from several connections at once: a session advisory lock
+/// serialises runners, and each migration commits with its bookkeeping row.
 pub async fn migrate(client: &Client) -> Result<Vec<&'static str>, Error> {
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK_KEY])
+        .await?;
+    let result = migrate_locked(client).await;
+    let unlock = client
+        .execute("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK_KEY])
+        .await;
+    let applied = result?;
+    unlock?;
+    Ok(applied)
+}
+
+async fn migrate_locked(client: &Client) -> Result<Vec<&'static str>, Error> {
     client
         .batch_execute(
             "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -38,13 +57,24 @@ pub async fn migrate(client: &Client) -> Result<Vec<&'static str>, Error> {
         if done {
             continue;
         }
-        client.batch_execute(sql).await?;
-        client
-            .execute(
-                "INSERT INTO schema_migrations (version) VALUES ($1)",
-                &[version],
-            )
-            .await?;
+        client.batch_execute("BEGIN").await?;
+        let step = async {
+            client.batch_execute(sql).await?;
+            client
+                .execute(
+                    "INSERT INTO schema_migrations (version) VALUES ($1)",
+                    &[version],
+                )
+                .await
+        }
+        .await;
+        match step {
+            Ok(_) => client.batch_execute("COMMIT").await?,
+            Err(e) => {
+                client.batch_execute("ROLLBACK").await?;
+                return Err(e);
+            }
+        }
         applied.push(*version);
     }
     Ok(applied)
