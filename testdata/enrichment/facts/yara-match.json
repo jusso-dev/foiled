@@ -1,0 +1,14 @@
+{
+  "provider": "yara",
+  "key": "yara.match",
+  "value": {
+    "rule": "foiled_example_shell_dropper",
+    "ruleset": "foiled-examples",
+    "ruleset_version": "2026.10.0",
+    "tags": ["dropper", "linux"]
+  },
+  "confidence": 60,
+  "observed_at": 1792285460000,
+  "ttl_secs": 2592000,
+  "raw_ref": "r2://foiled-evidence/t1/dcy-demo-1/_/application/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+}

@@ -25,8 +25,14 @@ pub const POLICY_VERSION: u32 = 1;
 /// Enrichment providers whose fields are never shared or published. A key is
 /// removed if it equals the name or starts with the name followed by `.` or
 /// `_` (for example `greynoise.classification` or `dshield_count`).
-pub const ENRICHMENT_PROVIDERS: &[&str] =
-    &["greynoise", "crowdsec", "dshield", "shadowserver", "huntio"];
+pub const ENRICHMENT_PROVIDERS: &[&str] = &[
+    "greynoise",
+    "crowdsec",
+    "dshield",
+    "shadowserver",
+    "huntio",
+    "abuseipdb",
+];
 
 /// Other keys that are never shared. A key is removed if it equals the name or
 /// starts with the name followed by `.` (for example `canary.token_id`).

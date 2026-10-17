@@ -1,0 +1,9 @@
+# Fake IP-to-ASN table for tests. Documentation ranges (RFC 5737, RFC 3849)
+# and documentation ASNs (RFC 5398) only. Real datasets are downloaded by the
+# operator and never committed (docs/enrichment.md).
+start_ip,end_ip,asn,org,country
+192.0.2.0,192.0.2.255,64496,"Example Docs Net, Pty Ltd",AU
+198.51.100.0,198.51.100.255,64497,Example Transit,NZ
+203.0.113.0,203.0.113.127,64498,Example Hosting,US
+2001:db8::,2001:db8:0:ffff:ffff:ffff:ffff:ffff,64499,Example IPv6 Net,AU
+2001:db8:1::,2001:db8:1:ffff:ffff:ffff:ffff:ffff,AS64500,Example IPv6 Cloud,

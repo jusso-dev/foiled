@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/fact.schema.json",
+  "title": "Foiled enrichment Fact",
+  "description": "One piece of context a provider asserts about an observable (#11). Facts hang off observables and join to attempts (#25) through the observables an attempt carries. See docs/enrichment.md. Mirrors Fact in crates/core/src/enrichment.rs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["provider", "key", "value", "confidence", "observed_at", "ttl_secs"],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$",
+      "description": "Provider id from configs/enrichment.yaml, or yara for the YARA batch job. Facts from greynoise, crowdsec, dshield, shadowserver, huntio, abuseipdb and local_asn are never exported."
+    },
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
+      "maxLength": 96,
+      "description": "Dotted key namespaced by provider or topic, for example greynoise.noise, crowdsec.mitre_techniques or asn.number."
+    },
+    "value": {
+      "description": "The asserted value. Provider text is untrusted, clipped to 256 characters and lists to 64 items."
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "The provider's own certainty. An input to the confidence layer (#27), never a final link score."
+    },
+    "observed_at": {
+      "type": "integer",
+      "description": "Unix milliseconds when the provider was asked."
+    },
+    "ttl_secs": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Seconds after observed_at during which the Fact may be used."
+    },
+    "raw_ref": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "Where the raw response or source object is kept (a cache row key or an r2:// reference). Never the response itself."
+    }
+  }
+}

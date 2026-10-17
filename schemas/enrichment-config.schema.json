@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/enrichment-config.schema.json",
+  "title": "Foiled enrichment config",
+  "description": "Enrichment providers, key variable names, cache TTLs and rate limits (#11). See docs/enrichment.md. Keys are never stored here, only the names of the Worker secrets that hold them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "queue", "cache", "show_to_tenants", "providers"],
+  "properties": {
+    "version": { "const": 1 },
+    "queue": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,63}$",
+      "description": "Queue the ingest consumer feeds and the enrichment consumer reads."
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["store", "negative_ttl_secs", "error_backoff_secs"],
+      "properties": {
+        "store": { "const": "d1", "description": "Cache rows and rate limit counters live in D1." },
+        "negative_ttl_secs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "TTL for an answer that says the provider knows nothing."
+        },
+        "error_backoff_secs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Wait before asking a provider again after an error or a rate limit."
+        }
+      }
+    },
+    "show_to_tenants": {
+      "type": "boolean",
+      "description": "When false, third-party Facts are visible to operator roles only."
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Every provider must also have a row in docs/compliance/licence-register.md, so no unlisted provider is accepted.",
+      "required": ["local_asn", "greynoise", "crowdsec", "dshield", "shadowserver", "huntio", "abuseipdb"],
+      "properties": {
+        "local_asn": { "$ref": "#/$defs/local_provider" },
+        "greynoise": { "$ref": "#/$defs/http_provider" },
+        "crowdsec": { "$ref": "#/$defs/http_provider" },
+        "dshield": {
+          "allOf": [
+            { "$ref": "#/$defs/http_provider" },
+            { "required": ["user_agent_env"] }
+          ]
+        },
+        "shadowserver": {
+          "allOf": [
+            { "$ref": "#/$defs/http_provider" },
+            { "required": ["api_key_env", "api_secret_env"] }
+          ]
+        },
+        "huntio": { "$ref": "#/$defs/http_provider" },
+        "abuseipdb": { "$ref": "#/$defs/http_provider" }
+      }
+    }
+  },
+  "$defs": {
+    "env_name": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+      "description": "Name of a Worker secret or environment variable. Upper case only, which also rejects a pasted key."
+    },
+    "observables": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["ip", "domain", "sha256", "url"] }
+    },
+    "ttl_secs": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 2592000,
+      "description": "Fact and cache TTL in seconds, one minute to 30 days. The retention purge (configs/retention.yaml) may delete rows sooner."
+    },
+    "local_provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "observables", "dataset_key", "ttl_secs"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "observables": { "$ref": "#/$defs/observables" },
+        "dataset_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._/-]+$",
+          "description": "R2 object key of the operator-supplied start_ip,end_ip,asn,org,country CSV."
+        },
+        "ttl_secs": { "$ref": "#/$defs/ttl_secs" }
+      }
+    },
+    "http_provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "observables", "api_key_required", "ttl_secs", "rate_limit"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "observables": { "$ref": "#/$defs/observables" },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^https://",
+          "description": "HTTPS URL template. {ip}, {domain}, {sha256} or {url} is replaced with the encoded observable."
+        },
+        "api_key_env": { "$ref": "#/$defs/env_name" },
+        "api_secret_env": { "$ref": "#/$defs/env_name" },
+        "user_agent_env": { "$ref": "#/$defs/env_name" },
+        "api_key_required": { "type": "boolean" },
+        "ttl_secs": { "$ref": "#/$defs/ttl_secs" },
+        "rate_limit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["per_minute", "per_day"],
+          "properties": {
+            "per_minute": { "type": "integer", "minimum": 1 },
+            "per_day": { "type": "integer", "minimum": 1 }
+          }
+        }
+      },
+      "if": { "properties": { "api_key_required": { "const": true } } },
+      "then": { "required": ["api_key_env"] }
+    }
+  }
+}
