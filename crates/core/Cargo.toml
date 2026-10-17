@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
 hex = "0.4"
 hmac = "0.12"
 serde.workspace = true

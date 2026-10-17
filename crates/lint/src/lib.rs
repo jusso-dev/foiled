@@ -43,6 +43,18 @@ pub const BINDINGS: &[Binding] = &[
         data_dir: "testdata/quarantine",
         schema: "schemas/quarantine-meta.schema.json",
     },
+    Binding {
+        data_dir: "testdata/agent/jobs",
+        schema: "schemas/agent/job.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/agent/results",
+        schema: "schemas/agent/job-result.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/agent/heartbeats",
+        schema: "schemas/agent/heartbeat.schema.json",
+    },
 ];
 
 /// Directories never scanned for schema files.

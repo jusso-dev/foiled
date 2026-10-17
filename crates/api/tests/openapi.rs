@@ -119,6 +119,10 @@ async fn implemented_operations_are_routed_and_planned_ones_are_not() {
             }
         }
     }
-    assert!(implemented >= 11, "implemented operations: {implemented}");
-    assert!(planned >= 20, "planned operations: {planned}");
+    // Guards against the walk silently matching nothing.
+    assert!(
+        implemented + planned >= 30,
+        "only {implemented} implemented and {planned} planned operations found"
+    );
+    assert!(implemented >= 16, "implemented operations: {implemented}");
 }

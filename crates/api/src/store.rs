@@ -70,7 +70,12 @@ pub struct JobRecord {
     pub idempotency_key: String,
     pub created_at: i64,
     pub expires_at: i64,
+    /// `queued`, `leased`, `succeeded`, `failed` or `rejected`.
     pub status: String,
+    /// Run parameters for create and rebuild jobs (`foiled_core::agent::DecoyParams`).
+    pub params: Option<serde_json::Value>,
+    /// While leased, the time after which another lease may take the job.
+    pub leased_until: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -127,4 +132,46 @@ pub trait Store: Send + Sync {
     /// Put validated, identity-stamped capture envelopes on the ingest Queue
     /// (#9). The Queue consumer writes them to Postgres.
     fn enqueue_events(&self, events: Vec<CaptureEvent>) -> StoreFuture<'_, ()>;
+
+    /// Lease up to `limit` jobs for a host: queued jobs already for this host
+    /// or not yet placed, plus leases that have lapsed. Unplaced jobs (and
+    /// their decoys) are assigned to the host. Expired jobs are never leased.
+    fn lease_jobs(
+        &self,
+        tenant_id: &str,
+        host_id: &str,
+        now: i64,
+        lease_ms: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<JobRecord>>;
+
+    /// Close a job leased by `host_id`. Returns the job, or `None` when it is
+    /// not leased by that host.
+    fn finish_job(
+        &self,
+        tenant_id: &str,
+        host_id: &str,
+        job_id: &str,
+        status: &str,
+    ) -> StoreFuture<'_, Option<JobRecord>>;
+
+    /// Compare-and-set a decoy's state. Returns false if it was not `from`.
+    fn set_decoy_state(
+        &self,
+        tenant_id: &str,
+        decoy_id: &str,
+        from: DecoyState,
+        to: DecoyState,
+        bump_generation: bool,
+        now: i64,
+    ) -> StoreFuture<'_, bool>;
+
+    fn record_heartbeat(
+        &self,
+        tenant_id: &str,
+        host_id: &str,
+        heartbeat: serde_json::Value,
+        clock_skew_ms: i64,
+        now: i64,
+    ) -> StoreFuture<'_, ()>;
 }

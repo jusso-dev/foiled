@@ -1,0 +1,32 @@
+[package]
+name = "foiled-hostd"
+description = "Foiled sandbox host agent: leases signed jobs, drives the decoy runtime, ships evidence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "foiled-hostd"
+path = "src/main.rs"
+
+[dependencies]
+foiled-core = { path = "../core" }
+fs4 = "1.1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "fs", "signal", "sync"] }
+toml = "1"
+
+[dev-dependencies]
+axum = { workspace = true, features = ["tokio", "http1"] }
+foiled-api = { path = "../api" }
+tempfile = "3"
+tower = { workspace = true }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+
+[lints]
+workspace = true
