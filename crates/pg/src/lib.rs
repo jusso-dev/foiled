@@ -268,3 +268,47 @@ impl std::fmt::Display for InsertError {
         }
     }
 }
+
+/// Per source IP aggregates for the IOC export, oldest first.
+pub struct IpIoc {
+    pub ip: String,
+    pub first_seen: i64,
+    pub last_seen: i64,
+    pub events: i64,
+    pub decoy_ids: Vec<String>,
+    pub catalogue_ids: Vec<String>,
+    pub hook_cves: Vec<String>,
+}
+
+pub async fn ip_iocs(client: &Client, tenant_id: &str, since: i64) -> Result<Vec<IpIoc>, Error> {
+    let rows = client
+        .query(
+            "SELECT host(src_ip) AS ip, min(ts) AS first_seen, max(ts) AS last_seen,
+                    count(*) AS events,
+                    array_agg(DISTINCT decoy_id ORDER BY decoy_id) AS decoy_ids,
+                    array_agg(DISTINCT catalogue_id ORDER BY catalogue_id) AS catalogue_ids,
+                    array_remove(array_agg(DISTINCT body->'hook'->>'cve_id'), NULL) AS hook_cves
+             FROM capture_events
+             WHERE tenant_id = $1 AND ts >= $2
+             GROUP BY src_ip
+             ORDER BY min(ts), host(src_ip)",
+            &[&tenant_id, &since],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let mut hook_cves: Vec<String> = r.get("hook_cves");
+            hook_cves.sort();
+            IpIoc {
+                ip: r.get("ip"),
+                first_seen: r.get("first_seen"),
+                last_seen: r.get("last_seen"),
+                events: r.get("events"),
+                decoy_ids: r.get("decoy_ids"),
+                catalogue_ids: r.get("catalogue_ids"),
+                hook_cves,
+            }
+        })
+        .collect())
+}

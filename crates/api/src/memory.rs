@@ -8,7 +8,8 @@ use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState};
 
 use crate::store::{
-    AuditQuery, DecoyQuery, IdentityRecord, JobRecord, Store, StoreError, StoreFuture, TokenRecord,
+    AuditQuery, DecoyQuery, IdentityRecord, IpIocRow, JobRecord, Store, StoreError, StoreFuture,
+    TokenRecord,
 };
 
 #[derive(Default)]
@@ -322,5 +323,47 @@ impl Store for MemoryStore {
             (heartbeat, clock_skew_ms),
         );
         ready(Ok(()))
+    }
+
+    fn ip_iocs(&self, tenant_id: &str, since: i64) -> StoreFuture<'_, Vec<IpIocRow>> {
+        use std::collections::BTreeMap;
+        let g = self.lock();
+        let mut rows: BTreeMap<String, IpIocRow> = BTreeMap::new();
+        for e in g
+            .events
+            .iter()
+            .filter(|e| e.tenant_id.as_deref() == Some(tenant_id) && e.ts >= since)
+        {
+            let r = rows.entry(e.src.ip.clone()).or_insert_with(|| IpIocRow {
+                ip: e.src.ip.clone(),
+                first_seen: e.ts,
+                last_seen: e.ts,
+                events: 0,
+                decoy_ids: vec![],
+                catalogue_ids: vec![],
+                hook_cves: vec![],
+            });
+            r.first_seen = r.first_seen.min(e.ts);
+            r.last_seen = r.last_seen.max(e.ts);
+            r.events += 1;
+            for (list, v) in [
+                (&mut r.decoy_ids, Some(&e.decoy_id)),
+                (&mut r.catalogue_ids, Some(&e.catalogue_id)),
+                (
+                    &mut r.hook_cves,
+                    e.hook.as_ref().and_then(|h| h.cve_id.as_ref()),
+                ),
+            ] {
+                if let Some(v) = v
+                    && !list.contains(v)
+                {
+                    list.push(v.clone());
+                    list.sort();
+                }
+            }
+        }
+        let mut out: Vec<IpIocRow> = rows.into_values().collect();
+        out.sort_by(|a, b| (a.first_seen, &a.ip).cmp(&(b.first_seen, &b.ip)));
+        ready(Ok(out))
     }
 }

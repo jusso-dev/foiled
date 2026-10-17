@@ -50,6 +50,7 @@
           "type": ["string", "null"],
           "pattern": "^(sha256:[a-f0-9]{64}|emulator:[a-z0-9_-]+/[a-z0-9._-]+|module:[a-z0-9_-]+/[a-z0-9._-]+(@sha256:[a-f0-9]{64})?)$"
         },
+        "image": { "type": "string", "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$" },
         "listen_ports": {
           "type": "array",
           "items": {

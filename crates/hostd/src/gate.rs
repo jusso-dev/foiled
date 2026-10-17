@@ -176,6 +176,7 @@ mod tests {
                 decoy_kind: DecoyKind::Emulation,
                 generation: 1,
                 artefact: artefact.map(str::to_string),
+                image: None,
                 listen_ports: vec![],
                 hard_deadline: NOW + 86_400_000,
             }),

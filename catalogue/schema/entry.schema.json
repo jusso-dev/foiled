@@ -54,6 +54,11 @@
       "type": "array",
       "items": { "type": "string", "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$" }
     },
+    "matchers": {
+      "description": "Ids of tier 1 signatures in catalogue/matchers/ (#12).",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" }
+    },
     "instrumentation_hooks": {
       "description": "Ids of vulnerable-path hooks (#32) declared for this decoy.",
       "type": "array",

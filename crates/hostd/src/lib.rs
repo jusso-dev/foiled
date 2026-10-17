@@ -11,6 +11,8 @@ pub mod agent;
 pub mod buffer;
 pub mod client;
 pub mod config;
+pub mod docker;
 pub mod executor;
 pub mod gate;
+pub mod logcapture;
 pub mod runtime;

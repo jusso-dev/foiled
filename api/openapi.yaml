@@ -632,20 +632,26 @@ paths:
     get:
       tags: [exports]
       operationId: exportIocsCsv
-      summary: IOC CSV export
-      parameters:
-        - { name: min_confidence, in: query, schema: { type: integer } }
-        - { name: since, in: query, schema: { type: integer } }
-      x-foiled-status: planned
-      x-foiled-issue: 22
+      summary: IOC CSV export (source IPs seen at the tenant's decoys)
+      description: |
+        One row per source IP: `indicator_type, indicator, first_seen,
+        last_seen, event_count, decoy_ids, catalogue_ids, hook_cves`. Reads
+        live rows only, so data removed by the retention purge never returns
+        (#16). Cells are RFC 4180 quoted and formula-safe. The richer IOC
+        model (#34) and STIX, MISP and TAXII outputs (#13) build on this.
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
+      parameters:
+        - { name: since, in: query, schema: { type: integer }, description: "Unix ms. Default: 30 days ago." }
       responses:
         "200":
           description: CSV.
           content:
             text/csv:
               schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /v0/exports/stix:
     post:

@@ -1,7 +1,7 @@
 //! Capture event storage against a real Postgres (CI service container).
 
 use foiled_core::capture::{CaptureEvent, Source, SourceKind};
-use foiled_pg::{InsertError, events_for_decoy, insert_events, migrate};
+use foiled_pg::{InsertError, events_for_decoy, insert_events, ip_iocs, migrate};
 use tokio_postgres::{Client, NoTls};
 
 async fn connect() -> Client {
@@ -75,4 +75,27 @@ async fn unstamped_events_are_refused_and_rows_are_append_only() {
         .await
         .unwrap_err();
     assert!(format!("{err:?}").contains("append-only"));
+}
+
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn ip_iocs_aggregate_per_source_and_respect_since() {
+    let c = connect().await;
+    let tenant = format!("ioc-{}", std::process::id());
+    let events = [
+        stamped(fixture("http-upload.json"), &tenant),
+        stamped(fixture("hook-trigger.json"), &tenant),
+        stamped(fixture("emulator-redis.json"), &tenant),
+    ];
+    insert_events(&c, &events, 1).await.unwrap();
+    let rows = ip_iocs(&c, &tenant, 0).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let attacker = rows.iter().find(|r| r.ip == "203.0.113.7").unwrap();
+    assert_eq!(attacker.events, 2);
+    assert_eq!(attacker.hook_cves, vec!["FOILED-DEMO-0001".to_string()]);
+    assert_eq!(attacker.decoy_ids, vec!["dcy-demo-1".to_string()]);
+    let later = ip_iocs(&c, &tenant, events[2].ts).await.unwrap();
+    assert_eq!(later.len(), 1);
+    assert_eq!(later[0].ip, "198.51.100.23");
+    assert!(ip_iocs(&c, "nobody", 0).await.unwrap().is_empty());
 }

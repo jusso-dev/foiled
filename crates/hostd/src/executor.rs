@@ -147,6 +147,7 @@ mod tests {
                 decoy_kind: DecoyKind::Sandbox,
                 generation: 2,
                 artefact: Some(format!("sha256:{}", "a".repeat(64))),
+                image: None,
                 listen_ports: vec![],
                 hard_deadline: 0,
             }),

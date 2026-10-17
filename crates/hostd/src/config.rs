@@ -27,9 +27,11 @@ pub struct HostConfig {
     pub host_id: String,
     /// Ingest hostname base URL, for example `https://ingest.example.invalid`.
     pub api_base: String,
-    /// PEM client certificate and key for mTLS (#31 enrolment).
-    pub client_cert: PathBuf,
-    pub client_key: PathBuf,
+    /// PEM client certificate and key for mTLS (#31 enrolment). Required
+    /// for `https://` control planes; only a lab host talking to a loopback
+    /// mock may omit them.
+    pub client_cert: Option<PathBuf>,
+    pub client_key: Option<PathBuf>,
     pub trusted_keys: Vec<TrustedKey>,
     /// Artefacts this host will run: `sha256:<hex>`, `emulator:<id>/<profile>`
     /// or `module:<id>/<profile>[@sha256:<hex>]`.
@@ -45,6 +47,9 @@ pub struct HostConfig {
     pub heartbeat_secs: u64,
     #[serde(default = "default_poll")]
     pub poll_secs: u64,
+    /// Settings for the Docker lab runtime.
+    #[serde(default)]
+    pub docker: crate::docker::DockerConfig,
 }
 
 fn default_true() -> bool {
@@ -69,6 +74,7 @@ pub enum ConfigError {
     DockerOnPublicHost,
     NoTrustedKeys,
     InsecureApiBase,
+    MissingClientCertificate,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -80,7 +86,13 @@ impl std::fmt::Display for ConfigError {
                 "sandbox_runtime = \"docker\" is refused on a publicly exposed host"
             ),
             ConfigError::NoTrustedKeys => write!(f, "trusted_keys must list at least one key"),
-            ConfigError::InsecureApiBase => write!(f, "api_base must be https://"),
+            ConfigError::InsecureApiBase => write!(
+                f,
+                "api_base must be https://, except a loopback mock on a host that is not publicly exposed"
+            ),
+            ConfigError::MissingClientCertificate => {
+                write!(f, "client_cert and client_key are required for https://")
+            }
         }
     }
 }
@@ -99,8 +111,17 @@ impl HostConfig {
         if self.trusted_keys.is_empty() {
             return Err(ConfigError::NoTrustedKeys);
         }
-        if !self.api_base.starts_with("https://") {
-            return Err(ConfigError::InsecureApiBase);
+        if self.api_base.starts_with("https://") {
+            if self.client_cert.is_none() || self.client_key.is_none() {
+                return Err(ConfigError::MissingClientCertificate);
+            }
+        } else {
+            let loopback = ["http://127.0.0.1:", "http://[::1]:", "http://localhost:"]
+                .iter()
+                .any(|p| self.api_base.starts_with(p));
+            if !loopback || self.publicly_exposed {
+                return Err(ConfigError::InsecureApiBase);
+            }
         }
         Ok(())
     }
@@ -158,6 +179,19 @@ public_key = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
     fn plain_http_and_unknown_keys_are_refused() {
         let http = BASE.replace("https://", "http://");
         assert_eq!(HostConfig::parse(&http), Err(ConfigError::InsecureApiBase));
+        let lab = BASE.replace("https://ingest.example.invalid", "http://127.0.0.1:8787");
+        assert_eq!(
+            HostConfig::parse(&lab),
+            Err(ConfigError::InsecureApiBase),
+            "public host"
+        );
+        let lab = format!("publicly_exposed = false\n{lab}");
+        assert!(HostConfig::parse(&lab).is_ok(), "loopback lab mock");
+        let no_cert = BASE.replace("client_cert = \"/etc/foiled/host.crt\"\n", "");
+        assert_eq!(
+            HostConfig::parse(&no_cert),
+            Err(ConfigError::MissingClientCertificate)
+        );
         let extra = format!("database_url = \"postgres://x\"\n{BASE}");
         assert!(matches!(
             HostConfig::parse(&extra),
