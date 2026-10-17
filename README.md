@@ -8,9 +8,18 @@ It stands up real software at deliberately old, known-vulnerable versions (and l
 
 The idea: if you expose "Product X at version Y, which is affected by CVE Z", the traffic that hits it tells you who is exploiting CVE Z right now, how they do it and what they drop.
 
+## Start here
+
+- MVP slice, the first thing we are building: [#22](https://github.com/jusso-dev/foiled/issues/22)
+- Threat model: [docs/threat-model.md](docs/threat-model.md)
+- How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Reporting a vulnerability or sandbox escape: [SECURITY.md](SECURITY.md)
+- Docs index and glossary: [docs/README.md](docs/README.md), [docs/glossary.md](docs/glossary.md)
+- Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+
 ## Status
 
-Planning. There is no product code yet. Design and roadmap live in issues and docs:
+Early build. The Rust workspace, the front-end Worker and CI are in place; features land issue by issue. Design and roadmap live in issues and docs:
 
 - Roadmap and tracking: https://github.com/jusso-dev/foiled/issues/23
 - MVP scope: https://github.com/jusso-dev/foiled/milestone/1
