@@ -19,6 +19,9 @@ The model is deterministic: the same evidence and config always give the same sc
 | `enrichment` | #11 | CrowdSec reports the source exploiting this CVE |
 | `llm` | #28 | The model proposed this CVE |
 | `campaign_cluster` | #33 | Two attempts share a payload hash, so they join one campaign ([campaigns.md](campaigns.md)) |
+| `actor_ttp_overlap` | #29 | A public actor profile uses the techniques seen, weighted by rarity ([actor-attribution.md](actor-attribution.md#matching)) |
+| `actor_indicator_overlap` | #29 | A callback domain seen on a decoy is listed in a public report about the actor |
+| `actor_targeting` | #29 | The CVE hit is one the report says the actor targets |
 | `noise_score` | #25 | Source noise score (a penalty, below) |
 | `analyst` | console, API | Recorded through overrides, not as points |
 
@@ -29,7 +32,8 @@ The model is deterministic: the same evidence and config always give the same sc
 3. **Noise penalty.** The noise score takes off up to `noise_max_penalty` points (20 by default) in proportion, but never below what a vulnerable-path hook or a signature established on its own. Mass scanning lowers confidence that something was targeted; it does not erase a hook.
 4. **LLM-only cap.** If the only evidence is `llm` (plus a catalogue prior), the score stays below `high`. With the default weights the LLM adds at most 20 points.
 5. **Pre-disclosure cap.** If the only evidence is `predisclosure_backmatch` (plus a prior), the score stays below `publish_min` until an analyst reviews it.
-6. **Analyst override.** `true_positive` sets 100 and flips the wording to confirmed; `false_positive` sets 0 and suppresses every downstream use; `unsure` records feedback and changes nothing. Overrides are stored per link, replace earlier ones, and are written to the audit log.
+6. **Actor caps (#29).** Every `attempt_actor` link, whatever its evidence and whatever the config, stays below `medium` without `actor_indicator_overlap` evidence, and below `high`, never publishable and never promoting state until an analyst confirms it ([actor-attribution.md](actor-attribution.md#confidence-and-caps)).
+7. **Analyst override.** `true_positive` sets 100 and flips the wording to confirmed; `false_positive` sets 0 and suppresses every downstream use; `unsure` records feedback and changes nothing. Overrides are stored per link, replace earlier ones, and are written to the audit log.
 
 Default tier weights (normative, tunable in `configs/confidence.yaml`):
 
@@ -44,6 +48,9 @@ Default tier weights (normative, tunable in `configs/confidence.yaml`):
 | `enrichment` | 10 | 15 |
 | `llm` | 20 | 20 |
 | `campaign_cluster` | 45 | 55 |
+| `actor_ttp_overlap` | 25 | 30 |
+| `actor_indicator_overlap` | 30 | 40 |
+| `actor_targeting` | 10 | 10 |
 
 The config checks itself: the LLM cap must stay below `high`, the pre-disclosure cap below `publish_min`, and the `campaign_cluster` cap below both, so clustering alone never publishes a campaign or reaches `high` (#33). `campaign_cluster` evidence counts only for `attempt_campaign` links: on any other kind (a CVE, technique, indicator or actor link) it adds nothing and the explanation says so in `caps_applied`, because attempts belonging together says nothing about an actor or a CVE.
 
@@ -80,10 +87,12 @@ These are tests (`crates/core/src/confidence.rs` and `crates/lint/tests/confiden
 | LLM alone, even with a misconfigured weight of 100 | capped at 69, not publishable, cannot promote state |
 | Any of the above + analyst `true_positive` | 100, "confirmed" |
 | Hook alone + a mass-scanning noise score of 100 | 60: the penalty stops at the hook's own contribution |
+| Actor link with full-strength TTP, indicator and targeting overlap, even with weights of 100 | capped at 69, `medium`, "possible association", not publishable |
+| Actor link with TTP and targeting overlap but no shared indicator | capped at 39, `low` |
 
 ## What the API computes today
 
-`GET /v0/attempts/{id}/links` builds evidence from vulnerable-path hook hits (#32), the catalogue entry's CVEs and expected techniques as priors (#5; the CVE prior is only attached once the attempt got past probing or has other CVE evidence), the attempt's noise score (#25) and the bundled ATT&CK rules (#26). `POST` records an analyst override. Tier 1 and 2 CVE evidence (#12), enrichment (#11), LLM proposals (#28) and actors (#29) add evidence to the same lists as they land. Campaign membership links (#33) are served per campaign at `GET /v0/campaigns/{id}/evidence` ([campaigns.md](campaigns.md#confidence-and-wording)).
+`GET /v0/attempts/{id}/links` builds evidence from vulnerable-path hook hits (#32), the catalogue entry's CVEs and expected techniques as priors (#5; the CVE prior is only attached once the attempt got past probing or has other CVE evidence), the attempt's noise score (#25) and the bundled ATT&CK rules (#26). `POST` records an analyst override. Tier 1 and 2 CVE evidence (#12), enrichment (#11), LLM proposals (#28) add evidence to the same lists as they land. Actor links (#29) are served per campaign or lone attempt at `GET /v0/actor-links` ([actor-attribution.md](actor-attribution.md#api-and-the-review-queue)). Campaign membership links (#33) are served per campaign at `GET /v0/campaigns/{id}/evidence` ([campaigns.md](campaigns.md#confidence-and-wording)).
 
 ## Explainability
 
