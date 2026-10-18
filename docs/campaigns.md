@@ -17,6 +17,7 @@ The contract is [`schemas/campaign.schema.json`](../schemas/campaign.schema.json
 - [Features](#features)
 - [Clustering](#clustering)
 - [Merge and split rules](#merge-and-split-rules)
+- [Forged bridges](#forged-bridges)
 - [Ids and the campaign registry](#ids-and-the-campaign-registry)
 - [Confidence and wording](#confidence-and-wording)
 - [Status](#status)
@@ -125,9 +126,26 @@ Automatic:
 | Weak key between two established clusters | No join. |
 | Key too generic by construction | Not a key at all (empty-body hash, probe-only paths, bare ASN, bare CVE, a fingerprint of requests and a trigger only). |
 | Behaviour fingerprint common to many sources | Joins only as weak. |
-| Attempts recorded in one campaign | Stay together across windows (the registry). A new attempt that bridges two recorded campaigns with a strong or medium feature folds the newer one into the older; the newer id resolves with `merged_into`. A weak feature never does. |
+| Attempts recorded in one campaign | Stay together across windows (the registry). A bridge of strong or medium features between two recorded campaigns folds the newer one into the older; the newer id resolves with `merged_into` and the bridge is recorded as provenance. A weak feature never does. |
+| One source alone joining two parts of 3 or more attempts each | No join: the parts stay apart with a possible link ([forged bridges](#forged-bridges)). |
 
 Manual, through [analyst actions](#analyst-actions): `merge` folds campaigns together, `split` moves attempts out. Both are replayed on every read, so they hold as new attempts arrive.
+
+## Forged bridges
+
+Campaign payloads and stage-2 URLs are often public: anyone who saw them can send them. One attempt that carries campaign A's body and campaign B's body would join A and B, and once recorded the registry would keep them joined. Clustering therefore refuses a join that **one source alone** makes between two parts that each hold at least 3 attempts (`BRIDGE_MIN_ATTEMPTS`):
+
+- After the strong and medium pass and the registry, each cluster is checked on a bipartite graph of source nodes (its attempts contracted per source) and join nodes (each strong or medium key's holders within the join gap, and each recorded campaign). A source node whose removal splits the cluster into two or more parts of 3 or more attempts is a single-source bridge (Tarjan's articulation points; linear in nodes and edges).
+- Contracting by source means two bridging attempts from one address count once, while **two independent bridging attempts from distinct sources** keep the join.
+- The bridging source's attempts go with the adjacent part holding the oldest recorded campaign (else the earliest attempt). The other parts stay separate campaigns, and every side lists the refused link in `possible_links` (the other campaign ids, the source, its attempts and the shared feature ids) and in the response `notes`.
+- Recorded campaigns are join nodes in that graph, so the check never splits a campaign the registry already holds whole.
+- **Provenance for every permanent merge.** Whenever the registry records a merge (two groups of two or more attempts joining, or attempts recorded in different campaigns joining), the attempts and feature that made the join go into `campaign_bridges`: the campaign it was recorded in, the recorded campaign folded in (or null when neither side was recorded yet), both attempts, the feature, how many attempts each side held, and `small_halves` when a side was below the guard size. That covers merges of recorded campaigns, merges on a first read, merges made while the halves were small, and joins made by two or more sources. `bridges` on the campaign shows the ones recorded in the current read, and `GET /v0/campaigns/{id}/evidence` returns all of them, across all windows.
+
+**What the guard does not stop.** It only refuses single-source bridges. An attacker who sends both campaigns' bodies from **two or more sources**, or who forges the bridge **early, while either side holds fewer than 3 attempts**, can still merge two campaigns, and the registry then keeps them merged. The guard raises the cost; it is not proof against a determined forger. What makes those merges visible is the provenance: every recorded merge names its bridging attempts, sources and feature, and `small_halves` marks the early ones for audit.
+
+**Analyst remedy.** A refused link that is real: `merge` the campaigns (`POST /v0/campaigns/{id}/actions`, `campaign_ids` from `possible_links`). A recorded merge that is wrong: `split` the bridging attempts and the attempts of the side that was merged in, using the attempt ids in the evidence's `bridges` and members. The split is replayed on every read, so it holds even though the registry keeps the recorded merge; attempts that later join the merged-in side through the registry are covered by the same split only if named, so repeat the split as the wave grows. Undoing a recorded merge in the registry itself is a follow-up.
+
+**Earlier data.** Merges recorded before migration 0007 stay in place (except the ones the migration clears for breaking the strictly-older rule), and they have no bridge rows: provenance starts with 0007.
 
 ## Ids and the campaign registry
 
@@ -138,9 +156,14 @@ Ids must outlive the read window: a wave that lasts longer than the default 7-da
 - `campaign_members` records the campaign live clustering put each attempt in; `campaigns` records each id with `created_at` (when it was first recorded), first and last seen, and `merged_into`.
 - **Only established memberships are recorded**: an attempt joined to its campaign by a strong or medium feature. Weak joins, registry carry-overs and analyst actions never write memberships (merges and splits are replayed from the actions on every read). So the registry can only re-apply evidence that would join the attempts on its own, and can never glue two campaigns that live clustering keeps apart.
 - Clustering unions attempts recorded in the same campaign before the weak pass, and a recorded attempt counts as established there, so a weak feature never bridges two recorded campaigns. A cluster takes the **oldest recorded id** in its established core (smallest `created_at`, then id). Only a cluster with no recorded member takes a new seed id.
-- When a new attempt bridges two recorded campaigns with a strong or medium feature, the newer one is recorded as `merged_into` the older. Ids are followed through `merged_into` (at most 8 hops).
+- When a bridge of strong or medium features joins two recorded campaigns (and passes the [forged-bridge guard](#forged-bridges)), the newer one is recorded as `merged_into` the older, and the bridging attempts and features are recorded in `campaign_bridges` (as they are for every merge the registry records). Ids are followed through `merged_into` (at most 8 hops).
 - **Only reads of the canonical window write.** `GET /v0/campaigns`, `GET /v0/attempts` and `POST .../actions` record changes only when the caller passed no `since` or `until` (the default 7 days up to now). Reads of any other window use the registry but never write it, so ids never depend on which window someone read first.
-- **Writes converge.** Each write is two multi-row upserts in one transaction, and only rows that changed are sent. `created_at` keeps the oldest value, first and last seen only widen, `merged_into` is write-once (`COALESCE`) and a CHECK keeps it off the campaign itself, and a membership only moves to an older campaign. Concurrent or stale writers end in the same state in any commit order. The in-memory store applies the same rules.
+- **Writes converge.** Each write is a few batched multi-row statements in one transaction, rows in key order so concurrent writers lock in the same order, and only rows that changed are sent.
+  - `created_at` is set on insert and **never changed**; first and last seen only widen.
+  - `merged_into` is write-once and may only name a campaign that is **strictly older by `(created_at, id)`**. Registry writes for one tenant are serialised by a transaction-scoped advisory lock (`pg_advisory_xact_lock` on `campaign_registry:<tenant>`), so two writers never interleave their row locks or deadlock, and triggers (`migrations/postgres/0007_campaign_registry_order.sql`) refuse a changed `created_at`, a rewritten `merged_into` or a merge into a newer campaign from any writer. Because the order is total and never changes after insert, merges cannot form a cycle, whichever writer commits first; the migration also clears any merge written earlier that broke the rule.
+  - A membership only moves to an older campaign.
+  - Bridge provenance is written only for merges that were applied: the merged-in campaign now points here, or both attempts are recorded here.
+  - The in-memory store applies the same rules. `resolve` also detects a cycle should one exist in older data, and answers with the oldest campaign in it from any starting point.
 - `GET /v0/campaigns/{campaign_id}` resolves any recorded id. When fewer than two of its attempts are in the window, or it was merged away (by a bridge or an analyst merge), it answers with a stub: `stub: true`, first and last seen, the recorded `attempt_count` and `merged_into`.
 
 Analyst actions name the campaign id, which the registry keeps stable. Each action also stores up to 16 of the campaign's newest member attempts as `anchor_attempt_ids`, used only if the id is not in the window.
@@ -309,25 +332,28 @@ Illustrative only; these are the golden fixtures in [testdata/campaigns](../test
 | Analyst actions replayed | every structural action; the newest 500 feedback actions |
 | Analyst actions recorded | 60 per token per hour |
 | Registry `merged_into` hops | 8 |
+| Forged-bridge guard | one source may not be the only join between two parts of 3 or more attempts |
+| Bridge provenance per merge | 16 records |
 | Title, note | 120, 1,000 characters |
 | Merge, split | 20 campaigns, 500 attempts |
 
 ## Retention
 
-Campaigns are derived, not stored: they are recomputed from live capture events, so once the purge job removes attempts (`attempt` TTL, 90 days by default, [privacy-and-retention.md](privacy-and-retention.md)) they leave their campaigns too, and a campaign with fewer than two attempts left disappears. Analyst actions (`campaign_actions`, `migrations/postgres/0005_campaign_actions.sql`) hold attempt ids, analyst ids and free-text titles and notes, no addresses; they stay with the tenant like the audit log, and an action applies whenever its campaign is in view. The registry (`campaigns` and `campaign_members`, `migrations/postgres/0006_campaign_registry.sql`) holds campaign ids, attempt ids and times, no addresses. **Registry rows are not purged yet.** When the purge job (#16) covers them, member rows go with the `attempt` TTL (they carry `attempt_first_seen` for that), and a campaign row goes once it has no members left and its `last_seen` is older than the `attempt` TTL; until then a purged campaign still resolves to a stub with first and last seen and nothing else.
+Campaigns are derived, not stored: they are recomputed from live capture events, so once the purge job removes attempts (`attempt` TTL, 90 days by default, [privacy-and-retention.md](privacy-and-retention.md)) they leave their campaigns too, and a campaign with fewer than two attempts left disappears. Analyst actions (`campaign_actions`, `migrations/postgres/0005_campaign_actions.sql`) hold attempt ids, analyst ids and free-text titles and notes, no addresses; they stay with the tenant like the audit log, and an action applies whenever its campaign is in view. The registry (`campaigns`, `campaign_members` and `campaign_bridges`, migrations `0006_campaign_registry.sql` and `0007_campaign_registry_order.sql`) holds campaign ids, attempt ids, feature ids and times, no addresses. **Registry rows are not purged yet.** When the purge job (#16) covers them, member rows go with the `attempt` TTL (they carry `attempt_first_seen` for that), bridge rows go with the older of their two attempts, and a campaign row goes once it has no members left and its `last_seen` is older than the `attempt` TTL; until then a purged campaign still resolves to a stub with first and last seen and nothing else.
 
 ## Tests
 
-- `crates/core/src/campaign.rs`: payload-hash wave, ASN-only probes, ASN and CVE only is low and emerging, generic hook hits from one ASN stay low and emerging, a common fingerprint joins only weakly, junk bodies cannot push out a shared hash and cap hits are noted, join gap, closed, tenant isolation, weak-bridge refusal, label, feedback, merge and split replay, ids, labels and merges surviving the seed leaving the window, a lone member keeping its id, feedback spam never shedding structural actions, a weak join in a narrow window never merging recorded campaigns, stale registry writes never undoing newer ones, a botnet wave still forming on a shared command or stage 2, junk shared by two attackers never splitting a wave, action validation, `attach`, alerts, and 2,000 attempts on one key.
+- `crates/core/src/campaign.rs`: payload-hash wave, ASN-only probes, ASN and CVE only is low and emerging, generic hook hits from one ASN stay low and emerging, a common fingerprint joins only weakly, junk bodies cannot push out a shared hash and cap hits are noted, join gap, closed, tenant isolation, weak-bridge refusal, label, feedback, merge and split replay, ids, labels and merges surviving the seed leaving the window, a lone member keeping its id, feedback spam never shedding structural actions, a weak join in a narrow window never merging recorded campaigns, stale registry writes never undoing newer ones, a botnet wave still forming on a shared command or stage 2, junk shared by two attackers never splitting a wave, writers in any order never leaving a merge cycle, resolve breaking an old cycle at its oldest campaign, one source never bridging two established campaigns (two distinct sources do), a forged bridge never merging recorded campaigns while a real one records provenance, every merge the registry keeps having provenance (including small halves and two-source joins), action validation, `attach`, alerts, and 2,000 attempts on one key.
 - `crates/lint/tests/campaigns.rs`: golden campaigns for both fixtures (`FOILED_BLESS=1` to regenerate) and the recorded actions; the repository lint validates `testdata/campaigns/expected/` and `testdata/campaigns/actions/` against the schemas.
-- `crates/api/tests/campaigns.rs`: tenant scoping, scopes, filters, member attempts, evidence, `campaign_id` on attempts and IOCs, action validation, audit, merge and split, merged ids resolving as stubs, an id and label holding past the default window, only the canonical window writing the registry, and the per-token rate limit.
-- `crates/pg/tests/campaign_actions.rs`: append-only actions, structural actions loaded in full with feedback capped, and the registry (kept `created_at`, widened times, member counts, tenant scoping, write-once `merged_into`, memberships only moving to older campaigns, and a 6,000-row batch) against Postgres.
+- `crates/api/tests/campaigns.rs`: tenant scoping, scopes, filters, member attempts, evidence, `campaign_id` on attempts and IOCs, action validation, audit, merge and split, merged ids resolving as stubs, an id and label holding past the default window, only the canonical window writing the registry, forged bridges staying possible links while real ones show provenance in the evidence, and the per-token rate limit.
+- `crates/pg/tests/campaign_actions.rs`: append-only actions, structural actions loaded in full with feedback capped, and the registry (kept `created_at`, widened times, member counts, tenant scoping, write-once `merged_into`, memberships only moving to older campaigns, a 6,000-row batch, racing first writers never leaving a merge cycle, the ordering triggers, bridge provenance only for applied merges, and first merges recording provenance) against Postgres.
 
 ## Not built yet
 
 - **Console views (#14).** The campaign list, campaign page and merge and split controls belong to the console work.
 - **Materialised campaigns.** Campaigns are a read model over a bounded window, with the registry keeping ids. A table maintained by the ingest consumer can replace the read model later without changing ids or the contract.
 - **Registry purge.** Registry rows are not purged yet; see [Retention](#retention) for how #16 will apply.
+- **Undoing a recorded merge.** An analyst split is replayed over a recorded merge; removing the merge from the registry itself is not built.
 - **Action compaction.** Structural actions accumulate; compacting superseded labels and statuses is a follow-up.
 - **Alert producer.** The `alerts` function is ready; the scheduled producer that keeps snapshots runs with the alert delivery worker (#15).
 - **LLM merge proposals (#28).** An LLM may propose that two campaigns belong together; that proposal goes to the review queue (#35) as a suggestion for an analyst `merge`, never as a join. LLM-only clustering is out of scope.

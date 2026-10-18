@@ -543,6 +543,26 @@ impl Store for MemoryStore {
         ready(Ok(out))
     }
 
+    fn campaign_bridges(
+        &self,
+        tenant_id: &str,
+        campaign_id: &str,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::BridgeRecord>> {
+        let out = self
+            .lock()
+            .campaign_registry
+            .get(tenant_id)
+            .map(|r| {
+                r.bridges
+                    .iter()
+                    .filter(|b| b.campaign_id == campaign_id)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        ready(Ok(out))
+    }
+
     fn update_campaign_registry(
         &self,
         tenant_id: &str,

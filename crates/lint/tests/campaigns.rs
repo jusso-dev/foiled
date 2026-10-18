@@ -296,6 +296,23 @@ fn schemas_refuse_attribution_wording_fleet_scope_and_unexplained_members() {
         f(&mut c);
         assert!(!v.is_valid(&c), "{c}");
     };
+    // A bridge record, as clustering writes it, validates.
+    let mut bridged = good.clone();
+    bridged["bridges"] =
+        serde_json::json!([serde_json::to_value(foiled_core::campaign::BridgeRecord {
+            campaign_id: good["campaign_id"].as_str().unwrap().into(),
+            merged_campaign_id: None,
+            attempt_id: good["attempt_ids"][0].as_str().unwrap().into(),
+            with_attempt_id: good["attempt_ids"][1].as_str().unwrap().into(),
+            signal_id: "campaign:payload_sha256:0123456789ab".into(),
+            feature: Feature::PayloadSha256,
+            attempt_side: 2,
+            with_side: 2,
+            small_halves: true,
+            recorded_at: 1,
+        })
+        .unwrap()]);
+    assert!(v.is_valid(&bridged), "{bridged}");
     bad(&|c| c["confidence"]["wording"] = "confirmed association".into());
     bad(&|c| c["tenant_scope"] = "fleet".into());
     bad(&|c| c["members"][0]["joined_by"] = serde_json::json!([]));

@@ -284,8 +284,17 @@ pub trait Store: Send + Sync {
         campaign_ids: Vec<String>,
     ) -> StoreFuture<'_, Vec<foiled_core::campaign::StoredCampaign>>;
 
-    /// Apply a registry update: `created_at` is kept, first and last seen
-    /// only widen, memberships are replaced.
+    /// Bridge provenance for merges into this campaign (#33).
+    fn campaign_bridges(
+        &self,
+        tenant_id: &str,
+        campaign_id: &str,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::BridgeRecord>>;
+
+    /// Apply a registry update so concurrent writers converge: `created_at`
+    /// is insert-only, first and last seen only widen, `merged_into` is
+    /// write-once and only to a strictly older campaign, memberships only
+    /// move to older campaigns.
     fn update_campaign_registry(
         &self,
         tenant_id: &str,
