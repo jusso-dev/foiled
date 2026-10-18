@@ -88,6 +88,20 @@ Computed with the WCAG 2.x relative luminance formula (`web/app/lib/contrast.ts`
 | `--blue-text` `#7FC4F0` | 9.87:1 | 10.55:1 | Passes. |
 | `--green` `#3FB68B` | 7.39:1 | 7.90:1 | Passes. |
 
+Console pairs (#14, [console.md](console.md)):
+
+| Foreground | Background | Ratio | Use |
+| --- | --- | --- | --- |
+| `--text` `#E6E8EB` | `--panel-2` `#14171C` | 14.63:1 | Inputs, notices |
+| `--text-2` `#C9CDD3` | `--panel-2` | 11.25:1 | Notice body |
+| `--muted` `#8A9099` | `--panel-2` | 5.59:1 | Placeholders, empty states |
+| `--red-bright` `#FF3B3F` | `--panel-2` | 5.09:1 | Danger buttons, field errors |
+| `--blue-text` `#7FC4F0` | `--panel` / `--bg` | 9.87:1 / 10.55:1 | Links |
+| `--amber` `#F2A93B` | `--chip-fill` `#1D2128` | 8.08:1 | Warn tags |
+| `--green` `#3FB68B` | `--chip-fill` | 6.36:1 | Ok tags |
+| `--red-bright` | `--red-deep` `#3A0D0F` | 4.78:1 | Bad tags, badges |
+| white | `--red-deep` | 16.88:1 | Primary buttons |
+
 Decision: `--dim` is limited to decorative use (separators, inactive dots, disabled states) and text 18.66px bold or 24px regular and larger. Table headers and placeholders, which mockup-v3 draws in `--dim`, use `--muted` instead. `--dim` on `--panel-2` is 2.88:1, so it is not used on raised controls at all.
 
 ## Components
@@ -144,6 +158,10 @@ What differs, and why:
 - KPI icons are stroked line icons in `--red-bright`; the mockup fills the bolt and sandbox icons.
 - The page scrolls and continues below the mockup's fold with the detail views (confidence meter, timeline, ATT&CK heatmap, IOCs, raw request) and a primitives section.
 - Below 1280px the grid stacks to one column; the mockup is a fixed 1600 x 1060 canvas.
+
+## Console components
+
+The operator console (#14) adds `web/app/components/console/`: `ConsoleShell` (sidebar with the console's sections, jump box, signed-in operator, sign out, skip link, loading state), `Notice`, `EmptyState`, `ErrorState` (including "not served yet" for planned API routes), `LinkExplainer` (the confidence panel with ledger, caps, evidence, flags and the override form), tables for attempts, IOCs and decoys, `LiveFeed`, `WizardSteps`, `ReasonFields` and `Facts`. `ConfidenceChip` and `ConfidenceMeter` take an optional `wording` so actor and campaign links use "possible association" and "possible" instead of the CVE sentence. Styles are in the console section of `components.css`, scoped so the top bar keeps its own look. See [console.md](console.md).
 
 ## Accessibility checklist
 

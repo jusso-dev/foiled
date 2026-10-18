@@ -23,23 +23,35 @@ export interface ConfidenceMeterProps {
   /** What the confidence is about, usually a CVE id. */
   subject: string;
   evidence: readonly EvidenceEntry[];
+  /** Full sentence when the link is not a CVE (lib/links.ts). Defaults to the CVE wording. */
+  wording?: string;
+  /** Heading level for the "Confidence" title, so the meter fits the page outline. */
+  headingLevel?: 2 | 3;
 }
 
 /**
  * Score bar coloured by level, with the evidence ledger that produced it.
  * The ledger lists contributions as recorded; it does not recompute the score.
  */
-export function ConfidenceMeter({ level, score, subject, evidence }: ConfidenceMeterProps) {
+export function ConfidenceMeter({
+  level,
+  score,
+  subject,
+  evidence,
+  wording,
+  headingLevel = 2,
+}: ConfidenceMeterProps) {
   const s = clampScore(score);
+  const Heading = headingLevel === 3 ? "h3" : "h2";
   return (
     <section className={`card meter meter--${level}`} aria-label={`Confidence for ${subject}`}>
       <header className="meter__head">
-        <h2 className="panel__title">Confidence</h2>
+        <Heading className="panel__title">Confidence</Heading>
         <span className="meter__score mono">
           {CONFIDENCE_LABEL[level]} {s}
         </span>
       </header>
-      <p className="meter__wording">{confidenceWording(level, s, subject)}</p>
+      <p className="meter__wording">{wording ?? confidenceWording(level, s, subject)}</p>
       {/* Native meter for assistive tech; the styled bar below is decorative. */}
       <meter
         className="sr-only"

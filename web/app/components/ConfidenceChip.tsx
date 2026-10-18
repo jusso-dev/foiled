@@ -11,6 +11,11 @@ export interface ConfidenceChipProps {
   score: number;
   /** What the confidence is about, usually a CVE id. Used in the full wording. */
   subject?: string;
+  /**
+   * Full sentence when the link is not a CVE, for example "Possible
+   * association with ..." for an actor (lib/links.ts). Defaults to the CVE wording.
+   */
+  wording?: string;
 }
 
 /**
@@ -18,8 +23,8 @@ export interface ConfidenceChipProps {
  * The visible chip is short; the full sentence ("We assess as ...") is in the
  * tooltip and read by screen readers.
  */
-export function ConfidenceChip({ level, score, subject }: ConfidenceChipProps) {
-  const wording = confidenceWording(level, score, subject);
+export function ConfidenceChip({ level, score, subject, wording: sentence }: ConfidenceChipProps) {
+  const wording = sentence ?? confidenceWording(level, score, subject);
   return (
     <span className={`chip chip--${level}`} title={wording} data-confidence={level}>
       <span className="sr-only">{wording}</span>
