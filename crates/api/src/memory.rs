@@ -868,7 +868,8 @@ impl Store for MemoryStore {
             })
             .collect();
         for e in &g.cache {
-            if matches!(e.observable.kind.as_str(), "ip")
+            if e.tenant_id.as_deref().is_none_or(|t| t == tenant_id)
+                && matches!(e.observable.kind.as_str(), "ip")
                 && addresses.contains(&e.observable.value)
                 && e.is_fresh(now)
             {

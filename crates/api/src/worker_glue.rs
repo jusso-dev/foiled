@@ -2176,7 +2176,12 @@ impl Store for CfStore {
                 .filter_map(|a| Observable::ip(a).ok())
                 .collect();
             let mut rows: Vec<String> = self
-                .enrichment_cache(observables, now, DAY_INPUT_LOOKUP_STATEMENTS)
+                .enrichment_cache(
+                    observables,
+                    now,
+                    DAY_INPUT_LOOKUP_STATEMENTS,
+                    Some(t.clone()),
+                )
                 .await?
                 .iter()
                 .map(|e| format!("{}|{}|{}", e.key(), e.fetched_at, e.ttl_secs))

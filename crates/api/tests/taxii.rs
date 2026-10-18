@@ -1329,6 +1329,7 @@ async fn late_enrichment_rebuilds_days() {
             ttl_secs: 604_800,
             raw_ref: None,
         }],
+        tenant_id: None,
     });
     h.now.store(T0 + 2 * HOUR, Ordering::SeqCst);
     let r = materialise(s, "t1").await.unwrap();
