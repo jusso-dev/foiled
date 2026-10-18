@@ -112,7 +112,7 @@ All exports and the IOC CSV with `fields=ioc` take:
 | IOC (#34) | `indicator` with pattern, `confidence`, `sighting`, and an observable where STIX has one | Attribute or `file` object | One row or item per IOC |
 | File hash | `file` observable, `[file:hashes.'SHA-256' = ...]`, unclassified `malware` (`is_family: false`) with the file as sample, `indicates` relationship | `file` object with `sha256` | |
 | ASN context (#11) | `autonomous-system` observable via `belongs_to_refs`, `x_foiled_enrichment` | Attribute comment | `asn`, `as_org`, `country` |
-| Campaign link (#33) | `campaign` and `relationship` | `campaign-id` attribute | `campaign_ids` |
+| Campaign link (#33, from clustering) | `campaign` and `relationship` with `confidence` and "possible" | `campaign-id` attribute | `campaign_ids` |
 | Actor link (#29, opt-in) | `intrusion-set` and `relationship`, "possible association" | `threat-actor` attribute, wording in comment, no galaxy tag | |
 | TLP and review state | OASIS TLP 2.0 `marking-definition` on every Foiled object; `x_foiled_publishable` on indicators and relationships | `tlp:` tag, `foiled:unreviewed` tag | `tlp` and `review` columns (CSV); `tlp`, `marking`, `unreviewed` and `review` fields (JSON) |
 
@@ -235,12 +235,16 @@ Each sentence ends with "Confidence N of 100 (band)." Link targets are escaped w
 
 ## Campaigns and actors
 
-Campaign clustering (#33) and actor association (#29) are being built separately. The export side is ready for them:
+**Campaigns (#33)** come from clustering ([campaigns.md](campaigns.md)). Each export clusters its window without writing the campaign registry, so campaign ids follow the registry and are the same ids `/v0/campaigns` shows. For every exported attempt in a campaign, `routes::exports::export_input` adds the campaign's #27 link (`campaign::campaign_link`: the campaign's own evidence and analyst state), and it goes through the same gate as any other link. Weak, cluster-only campaign links stay below `publish_min`, so they leave once an analyst confirms the campaign or in an unreviewed export.
 
-- Both arrive as `ConfidenceLink`s of kind `attempt_campaign` and `attempt_actor` on `AttemptRecord::links`, scored by #27 like any other link. In the API that means adding them in `routes::exports::export_input` next to the CVE and technique links.
-- STIX: a `campaign` or `intrusion-set` (ids `uuid5(FOILED_NAMESPACE, "campaign|<id>")` and `"intrusion-set|<label>"`) and a `related-to` relationship from the attempt with `confidence` and wording. MISP: `campaign-id` and `threat-actor` attributes. Tested today with synthetic links.
+- STIX: a `campaign` (`uuid5(FOILED_NAMESPACE, "campaign|<campaign id>")`, named by the campaign id) and a `related-to` relationship from the attempt with `confidence` and "possible" (or "confirmed") wording. MISP: a `campaign-id` attribute (Attribution) with the wording in its comment.
+- `campaign_id` filters attempts, and `campaign_ids` on IOCs flow into JSON, CSV and `x_foiled_campaign_ids`.
+- An attempt whose campaign has no other member in the window keeps its `campaign_id` but gets no campaign link, because clustering scores only campaigns it can see.
+
+**Actors (#29)** are not produced yet. When they are, they arrive as `ConfidenceLink`s of kind `attempt_actor` on `AttemptRecord::links`, next to the campaign link in `export_input`:
+
+- STIX: an `intrusion-set` (`uuid5(FOILED_NAMESPACE, "intrusion-set|<label>")`) and a `related-to` relationship; MISP: a `threat-actor` attribute. Tested today with synthetic links.
 - Actor links need `include_actors=true` and keep "possible association" unless `high` and analyst-confirmed. They are counted in `dropped.actor_links` otherwise.
-- `campaign_id` is already a filter, and `campaign_ids` on IOCs already flow into JSON, CSV and `x_foiled_campaign_ids`.
 - Later: a STIX `attributed-to` from `campaign` to `intrusion-set` once #29 can say so with confidence, and MISP galaxy clusters for campaigns. Neither is emitted today.
 
 ## Privacy, retention and redaction

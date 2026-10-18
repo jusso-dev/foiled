@@ -185,10 +185,11 @@ pub(crate) async fn window_model(
     campaigns: Campaigns,
 ) -> Result<WindowModel, ApiError> {
     let cap = state.limits.max_window_events;
-    window_model_capped(state, tenant_id, since, until, None, iocs, cap).await
+    window_model_capped(state, tenant_id, since, until, None, iocs, campaigns, cap).await
 }
 
 /// [`window_model`] reading at most `cap` events.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn window_model_capped(
     state: &AppState,
     tenant_id: &str,
@@ -196,6 +197,7 @@ pub(crate) async fn window_model_capped(
     until: i64,
     after: Option<&EventCursor>,
     iocs: Iocs,
+    campaigns: Campaigns,
     cap: usize,
 ) -> Result<WindowModel, ApiError> {
     if until <= since || until - since > 31 * DAY_MS {

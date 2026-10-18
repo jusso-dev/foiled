@@ -300,7 +300,7 @@
       {
         "Tag": [
           {
-            "name": "foiled:confidence=\"75\""
+            "name": "foiled:confidence=\"100\""
           },
           {
             "name": "foiled:band=\"high\""
@@ -310,7 +310,7 @@
           }
         ],
         "category": "Attribution",
-        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: Possible association with Example Group. This is not an attribution. Confidence 75 of 100 (high).",
+        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: Possible association with Example Group. This is not an attribution. Confidence 100 of 100 (high).",
         "distribution": "5",
         "to_ids": false,
         "type": "threat-actor",
@@ -320,7 +320,7 @@
       {
         "Tag": [
           {
-            "name": "foiled:confidence=\"75\""
+            "name": "foiled:confidence=\"100\""
           },
           {
             "name": "foiled:band=\"high\""
@@ -330,7 +330,7 @@
           }
         ],
         "category": "Attribution",
-        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: Possible part of campaign cmp_demo. Confidence 75 of 100 (high).",
+        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: Possible part of campaign cmp_demo. Confidence 100 of 100 (high).",
         "distribution": "5",
         "to_ids": false,
         "type": "campaign-id",

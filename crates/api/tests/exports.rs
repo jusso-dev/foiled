@@ -319,3 +319,76 @@ async fn cut_exports_continue_by_cursor_even_within_one_millisecond() {
     let (st, _, _) = call(&s, Some("burst"), &format!("{base}&cursor=12.zz"), None).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
 }
+
+/// Real campaigns (#33): clustering puts attempts in a campaign, and the
+/// export carries it as a STIX `campaign` with scored relationships and a
+/// MISP `campaign-id`, worded "possible" until an analyst confirms.
+#[tokio::test]
+async fn campaigns_from_clustering_reach_the_exports() {
+    let store = Arc::new(MemoryStore::new());
+    store.add_token(TokenRecord {
+        id: "analyst".into(),
+        tenant_id: "t1".into(),
+        role: Role::Human,
+        scopes: vec![Scope::ExportsRead, Scope::ReviewWrite],
+        secret_sha256: sha256_hex(SECRET),
+        expires_at: None,
+        revoked: false,
+    });
+    let raw: Value = serde_json::from_str(
+        &std::fs::read_to_string(format!(
+            "{}/../../testdata/campaigns/fleet-wave.input.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let events: Vec<CaptureEvent> = serde_json::from_value(raw["events"].clone()).unwrap();
+    store.enqueue_events(events).await.unwrap();
+    let now = raw["now"].as_i64().unwrap();
+    let s = AppState::new(store, Arc::new(move || now));
+
+    let (st, _, body) = call(
+        &s,
+        Some("analyst"),
+        "/v0/exports/stix?include_unreviewed=true",
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+    let b = json(&body);
+    assert!(stix::problems(&b).is_empty(), "{:?}", stix::problems(&b));
+    let campaigns = objects_of(&b, "campaign");
+    assert!(!campaigns.is_empty(), "clustering should give a campaign");
+    let cid = campaigns[0]["name"].as_str().unwrap().to_string();
+    assert!(cid.starts_with("cmp_"));
+    let rel = objects_of(&b, "relationship")
+        .into_iter()
+        .find(|r| r["target_ref"] == campaigns[0]["id"])
+        .expect("relationship to the campaign");
+    assert!(rel["confidence"].is_u64());
+    assert!(
+        rel["description"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("Possible part of campaign {cid}."))
+    );
+
+    // The campaign filter selects its attempts; MISP carries the id.
+    let (_, _, body) = call(
+        &s,
+        Some("analyst"),
+        &format!("/v0/exports/misp?include_unreviewed=true&campaign_id={cid}"),
+        None,
+    )
+    .await;
+    let e = json(&body);
+    assert!(misp::problems(&e).is_empty());
+    assert!(
+        e["Event"]["Attribute"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["type"] == "campaign-id" && a["value"] == cid.as_str())
+    );
+}

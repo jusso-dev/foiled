@@ -1,5 +1,5 @@
 {
-  "id": "bundle--b467ee7f-933e-59aa-ab41-8f292156eaa4",
+  "id": "bundle--189c5755-f248-55e0-9020-5988495fb1b9",
   "objects": [
     {
       "created": "2026-01-01T00:00:00.000Z",
@@ -555,10 +555,10 @@
       "type": "note"
     },
     {
-      "confidence": 75,
+      "confidence": 100,
       "created": "2026-10-18T01:02:03.000Z",
       "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
-      "description": "Possible association with Example Group. This is not an attribution. Confidence 75 of 100 (high).",
+      "description": "Possible association with Example Group. This is not an attribution. Confidence 100 of 100 (high).",
       "id": "relationship--20bbf17a-46c4-55d2-a6d1-03c90bb93674",
       "labels": [
         "foiled-band:high"
@@ -579,7 +579,7 @@
           "source": "vuln_path_hook"
         },
         {
-          "points": 15,
+          "points": 45,
           "source": "campaign_cluster"
         }
       ],
@@ -588,10 +588,10 @@
       "x_foiled_wording": "possible association"
     },
     {
-      "confidence": 75,
+      "confidence": 100,
       "created": "2026-10-18T01:02:03.000Z",
       "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
-      "description": "Possible part of campaign cmp_demo. Confidence 75 of 100 (high).",
+      "description": "Possible part of campaign cmp_demo. Confidence 100 of 100 (high).",
       "id": "relationship--9ebd9539-d88e-5895-8b97-b0bb93042290",
       "labels": [
         "foiled-band:high"
@@ -612,7 +612,7 @@
           "source": "vuln_path_hook"
         },
         {
-          "points": 15,
+          "points": 45,
           "source": "campaign_cluster"
         }
       ],

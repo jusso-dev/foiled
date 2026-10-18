@@ -43,7 +43,7 @@ use crate::AppState;
 use crate::auth::Auth;
 use crate::catalogue::Catalogue;
 use crate::error::ApiError;
-use crate::routes::attempts::{EventCursor, Iocs, window_bounds, window_model_capped};
+use crate::routes::attempts::{Campaigns, EventCursor, Iocs, window_bounds, window_model_capped};
 use crate::store::{IpIocRow, LinkOverride};
 
 pub fn router() -> Router<AppState> {
@@ -164,7 +164,12 @@ pub fn export_input(
     extraction: &Extraction,
     iocs: Vec<Ioc>,
     overrides: &OverrideIndex,
+    campaigns: &[foiled_core::campaign::Campaign],
 ) -> ExportInput {
+    let by_campaign: HashMap<&str, &foiled_core::campaign::Campaign> = campaigns
+        .iter()
+        .map(|c| (c.campaign_id.as_str(), c))
+        .collect();
     let by_id: HashMap<&str, &CaptureEvent> =
         events.iter().map(|e| (e.event_id.as_str(), e)).collect();
     let cfg = ConfidenceConfig::default();
@@ -184,6 +189,18 @@ pub fn export_input(
                 &mine,
                 overrides.get(&attempt.attempt_id).unwrap_or(&empty),
             );
+            let mut links = links;
+            // The attempt's campaign (#33), scored by the campaign's own
+            // evidence and analyst state.
+            if let Some(c) = attempt
+                .campaign_id
+                .as_deref()
+                .and_then(|id| by_campaign.get(id))
+                && let Some(mut l) = foiled_core::campaign::campaign_link(&cfg, c)
+            {
+                l.attempt_id = attempt.attempt_id.clone();
+                links.push(l);
+            }
             let summary = extraction.for_attempt(&attempt.attempt_id);
             AttemptRecord {
                 file_ioc_limited: summary.is_some_and(|s| s.file_ioc_limited),
@@ -269,6 +286,9 @@ pub(crate) async fn selection_capped(
         until,
         after.as_ref(),
         Iocs::Attach,
+        // Cluster (#33) without writing the registry, so campaign links
+        // carry their #27 score and wording; ids follow the registry.
+        Campaigns::Full { record: false },
         cap,
     )
     .await?;
@@ -302,6 +322,7 @@ pub(crate) async fn selection_capped(
         &m.iocs,
         iocs,
         &overrides,
+        &m.campaigns.campaigns,
     );
     let scope = {
         use sha2::{Digest, Sha256};
