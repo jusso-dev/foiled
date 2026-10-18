@@ -84,6 +84,9 @@ export function campaignSentence(score: number, wording: LinkWording): string {
 }
 
 export const SOURCE_LABEL: Record<EvidenceSource, string> = {
+  actor_ttp_overlap: "Shared techniques with public reporting",
+  actor_indicator_overlap: "Shared indicators with public reporting",
+  actor_targeting: "Similar targeting in public reporting",
   rule: "Signature rule",
   sequence: "Request sequence",
   vuln_path_hook: "Vulnerable-path hook",

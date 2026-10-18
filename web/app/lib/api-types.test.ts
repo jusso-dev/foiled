@@ -14,7 +14,13 @@ import actionSchema from "../../../schemas/campaign-action.schema.json";
 import linkSchema from "../../../schemas/confidence-link.schema.json";
 import iocSchema from "../../../schemas/ioc.schema.json";
 import quarantineSchema from "../../../schemas/quarantine-meta.schema.json";
+// TODO(#35, #29): copies from PR #84 and PR #83; import from schemas/ once they land.
+import actorLinkSchema from "../test/pr/actor-link-schema.json";
+import radarSchema from "../test/pr/radar-feed-schema.json";
+import reviewSchema from "../test/pr/review-item-schema.json";
+import writeUpSchema from "../test/pr/write-up-schema.json";
 import type {
+  ActorLinkRecord,
   AgentRecord,
   Attempt,
   AttemptTimeline,
@@ -23,6 +29,9 @@ import type {
   ConfidenceLink,
   Ioc,
   QuarantineItem,
+  RadarFeed,
+  ReviewItem,
+  WriteUp,
 } from "./api-types";
 
 type Keys<T> = Record<keyof T, true>;
@@ -184,6 +193,98 @@ const quarantine: Keys<QuarantineItem> = {
   yara_matches: true,
 };
 
+const review: Keys<ReviewItem> = {
+  item_id: true,
+  tenant_id: true,
+  kind: true,
+  subject: true,
+  title: true,
+  score: true,
+  band: true,
+  wording: true,
+  status: true,
+  assignee: true,
+  claimed_at: true,
+  snoozed_until: true,
+  decided_by: true,
+  decided_at: true,
+  note: true,
+  created_at: true,
+  age_ms: true,
+  sla_hours: true,
+  sla_due_at: true,
+  sla_breached: true,
+  priority: true,
+  version: true,
+};
+
+const writeUp: Keys<WriteUp> = {
+  writeup_id: true,
+  tenant_id: true,
+  slug: true,
+  title: true,
+  summary: true,
+  body_md: true,
+  status: true,
+  tlp: true,
+  embargo_until: true,
+  cve_ids: true,
+  technique_ids: true,
+  campaign_ids: true,
+  ioc_ids: true,
+  attempt_ids: true,
+  first_seen: true,
+  redacted_payload: true,
+  source_item_id: true,
+  author_id: true,
+  reviewer_id: true,
+  checklist: true,
+  version: true,
+  created_at: true,
+  updated_at: true,
+  submitted_at: true,
+  approved_at: true,
+  published_at: true,
+  withdrawn_at: true,
+  lint: true,
+};
+
+const radar: Keys<RadarFeed> = {
+  audience: true,
+  generated_at: true,
+  since: true,
+  until: true,
+  policy: true,
+  series: true,
+  cards: true,
+  suppressed_buckets: true,
+  notes: true,
+};
+
+const actorLink: Keys<ActorLinkRecord> = {
+  link_id: true,
+  tenant_id: true,
+  subject_kind: true,
+  subject_id: true,
+  attempt_ids: true,
+  actor_id: true,
+  label: true,
+  label_kind: true,
+  status: true,
+  wording: true,
+  statement: true,
+  score: true,
+  band: true,
+  publishable: true,
+  review_queue: true,
+  matched: true,
+  not_counted: true,
+  sources: true,
+  attack_version: true,
+  example: true,
+  confidence: true,
+};
+
 const CASES: [string, Record<string, true>, { required: string[]; properties: object }][] = [
   ["attempt", attempt, attemptSchema],
   ["attempt-timeline", timeline, timelineSchema],
@@ -193,6 +294,10 @@ const CASES: [string, Record<string, true>, { required: string[]; properties: ob
   ["campaign-action", action, actionSchema],
   ["agent-record", agent, agentSchema],
   ["quarantine-meta", quarantine, quarantineSchema],
+  ["review-item (PR #84)", review, reviewSchema],
+  ["write-up (PR #84)", writeUp, writeUpSchema],
+  ["radar-feed (PR #84)", radar, radarSchema],
+  ["actor-link (PR #83)", actorLink, actorLinkSchema],
 ];
 
 describe("api-types match the JSON Schemas", () => {

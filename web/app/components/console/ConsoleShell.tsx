@@ -8,6 +8,9 @@ export type ConsoleSection =
   | "decoys"
   | "attempts"
   | "review"
+  | "writeups"
+  | "radar"
+  | "actors"
   | "campaigns"
   | "iocs"
   | "exports"
@@ -26,7 +29,10 @@ export const CONSOLE_NAV: readonly {
   { id: "decoys", label: "Decoys", icon: "honeypots", href: "/decoys" },
   { id: "attempts", label: "Attempts", icon: "activity", href: "/attempts" },
   { id: "review", label: "Review queue", icon: "cve", href: "/review" },
+  { id: "writeups", label: "Write-ups", icon: "payloads", href: "/writeups" },
+  { id: "radar", label: "Radar", icon: "globe", href: "/radar" },
   { id: "campaigns", label: "Campaigns", icon: "attackers", href: "/campaigns" },
+  { id: "actors", label: "Actor associations", icon: "ttps", href: "/actors" },
   { id: "iocs", label: "IOCs", icon: "iocs", href: "/iocs" },
   { id: "exports", label: "Exports", icon: "reports", href: "/exports" },
   { id: "quarantine", label: "Quarantine", icon: "malware", href: "/quarantine" },

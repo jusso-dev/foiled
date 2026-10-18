@@ -1,0 +1,72 @@
+{
+  "audience": "tenant",
+  "generated_at": 1792458000000,
+  "since": 1791936000000,
+  "until": 1792454400000,
+  "policy": {
+    "min_sources": 1,
+    "min_sensors": 1,
+    "min_edge_tenants": 1,
+    "delay_days": 0,
+    "min_confidence": "medium",
+    "publishable_only": false
+  },
+  "series": [
+    {
+      "dimension": "cve",
+      "key": "CVE-2099-0008",
+      "label": "CVE-2099-0008",
+      "wording": "we assess as",
+      "total_attempts": 15,
+      "total_sources": 3,
+      "best_band": "high",
+      "first_day": 1792108800000,
+      "last_day": 1792108800000,
+      "days": [
+        {
+          "day": 1791936000000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792022400000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792108800000,
+          "attempts": 15,
+          "publishable_attempts": 15,
+          "sources": 3
+        },
+        {
+          "day": 1792195200000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792281600000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792368000000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        }
+      ],
+      "trend": {
+        "direction": "down",
+        "pct": -100
+      }
+    }
+  ],
+  "cards": [],
+  "suppressed_buckets": 0,
+  "notes": []
+}

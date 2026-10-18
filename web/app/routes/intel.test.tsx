@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Campaign, ConfidenceLink } from "../lib/api-types";
-import { campaign, quarantined, reviewItem } from "../test/fixtures";
+import { campaign, quarantined } from "../test/fixtures";
 import {
   ADMIN,
-  type ApiCall,
   apiError,
   envWith,
   expectPage,
@@ -178,85 +177,6 @@ describe("campaigns", () => {
     expect(text(r.html)).toContain(
       "Fewer than two of this campaign's 4 attempts are in the current window.",
     );
-  });
-});
-
-describe("review queue (#35, planned API)", () => {
-  function reviewApi(extra?: (c: ApiCall) => unknown) {
-    return fakeApi((c) => {
-      const hit = extra?.(c);
-      if (hit !== undefined) return hit;
-      if (c.path === "/v0/review-queue") return { items: [reviewItem], next_cursor: null };
-      if (c.path === `/v0/review-queue/${reviewItem.item_id}` && c.method === "PATCH") {
-        return { ...reviewItem, status: "confirmed" };
-      }
-      return undefined;
-    });
-  }
-
-  it("says the queue is not served yet when the API falls through", async () => {
-    const { cookie } = await signIn();
-    const r = expectPage(await page(envWith(fakeApi(() => notServed())), "/review", { cookie }));
-    expect(text(r.html)).toContain("Review queue: not served yet");
-    expect(r.html).toContain("issues/35");
-  });
-
-  it("lists open items with the link wording", async () => {
-    const { cookie } = await signIn();
-    const a = reviewApi();
-    const r = expectPage(await page(envWith(a), "/review", { cookie }));
-    expect(a.calls[0].search.get("status")).toBe("open");
-    const t = text(r.html);
-    expect(t).toContain("Pre-disclosure candidate");
-    expect(t).toContain("We assess as an attempt against FOILED-DEMO-0001");
-  });
-
-  for (const [decision, extra, expected] of [
-    ["confirm", {}, { action: "confirm", note: "matches advisory" }],
-    ["reject", {}, { action: "reject", note: "matches advisory" }],
-    ["snooze", { snooze_days: "7" }, { action: "snooze", note: "matches advisory" }],
-  ] as const) {
-    it(`can ${decision} an item with a note`, async () => {
-      const { cookie, session } = await signIn();
-      const a = reviewApi();
-      const r = expectPage(
-        await page(envWith(a), "/review", {
-          cookie,
-          form: {
-            csrf: session.csrf,
-            item_id: reviewItem.item_id,
-            intent: decision,
-            note: "matches advisory",
-            ...extra,
-          },
-        }),
-      );
-      const patch = a.calls.find((c) => c.method === "PATCH");
-      expect(patch?.path).toBe(`/v0/review-queue/${reviewItem.item_id}`);
-      expect(patch?.body).toMatchObject(expected);
-      if (decision === "snooze") {
-        expect((patch?.body as { snooze_until: number } | undefined)?.snooze_until).toBeGreaterThan(
-          Date.now() + 6 * 24 * 3600_000,
-        );
-      }
-      expect(r.actionData).toMatchObject({ ok: true });
-    });
-  }
-
-  it("needs a note for every decision", async () => {
-    const { cookie, session } = await signIn();
-    const a = reviewApi();
-    const r = expectPage(
-      await page(envWith(a), "/review", {
-        cookie,
-        form: { csrf: session.csrf, item_id: reviewItem.item_id, intent: "confirm", note: "" },
-      }),
-    );
-    expect(r.actionData).toMatchObject({
-      ok: false,
-      message: "Add a note: every decision is audited.",
-    });
-    expect(a.calls.some((c) => c.method === "PATCH")).toBe(false);
   });
 });
 

@@ -26,7 +26,7 @@ export async function loader(args: Route.LoaderArgs) {
     load(args.request, op.api.listDecoys({ live: true, limit: 200 })),
     load(args.request, op.api.listAttempts({ since, limit: 200 })),
     load(args.request, op.api.listCampaigns({ limit: 200 })),
-    load(args.request, op.api.listReview({ status: "open", limit: 200 })),
+    load(args.request, op.api.listReview({ status: "pending", limit: 1 })),
   ]);
   const live = decoys.ok ? decoys.data.items : [];
   const att = attempts.ok ? attempts.data.items : [];
@@ -43,7 +43,7 @@ export async function loader(args: Route.LoaderArgs) {
       campaigns: campaigns.ok
         ? campaigns.data.items.filter((c) => c.status !== "closed").length
         : null,
-      review: review.ok ? review.data.items.length : null,
+      review: review.ok ? review.data.total : null,
       reviewNotServed: !review.ok && review.error.notServed,
     },
     attention: live.filter((d) =>

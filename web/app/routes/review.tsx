@@ -1,80 +1,145 @@
 import { useId } from "react";
-import { Form, Link } from "react-router";
+import { Form, Link, redirect } from "react-router";
 import { ConfidenceChip } from "../components/ConfidenceChip";
 import { CsrfField } from "../components/console/ConsoleShell";
-import { PageHead, SubmitButton, Time } from "../components/console/Controls";
+import { ChecklistFields, PageHead, SubmitButton, Time } from "../components/console/Controls";
 import { ActionNotice, EmptyState, ErrorState, Notice } from "../components/console/Notice";
 import { RouteError } from "../components/console/RouteError";
-import type { ReviewDecision, ReviewItem, ReviewKind, ReviewStatus } from "../lib/api-types";
-import { field, load, oneOf, requireMutation, requireOperator } from "../lib/console.server";
+import type { ReviewAction, ReviewActionRequest, ReviewItem, ReviewKind } from "../lib/api-types";
+import {
+  field,
+  intField,
+  load,
+  oneOf,
+  requireMutation,
+  requireOperator,
+  windowFrom,
+} from "../lib/console.server";
+import { formatDuration } from "../lib/format";
 import { isId } from "../lib/ids";
-import { confidenceOf, KIND_LABEL, linkSentence } from "../lib/links";
+import { levelFor } from "../lib/links";
 import { toPrintable } from "../lib/printable";
+import {
+  checklistComplete,
+  checklistFrom,
+  itemWording,
+  REVIEW_KIND_LABEL,
+  reviewSentence,
+} from "../lib/review";
 import type { Route } from "./+types/review";
 
-// TODO(#35): the review queue API is planned. This page is built against the
-// console's proposed shapes in lib/api-types.ts and shows a "not served yet"
-// state until /v0/review-queue answers.
+// TODO(#35): /v0/review-queue is not on main yet. This page follows the API
+// in PR #84 (docs/review-queue.md there) and shows "not served yet" until
+// the route answers.
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Review queue · Foiled console" }];
 }
 
-const KINDS: readonly ReviewKind[] = [
-  "predisclosure_candidate",
-  "low_confidence_high_impact",
-  "campaign_suggestion",
+const KINDS = Object.keys(REVIEW_KIND_LABEL) as ReviewKind[];
+const STATUSES = ["pending", "open", "claimed", "snoozed", "approved", "rejected", "all"] as const;
+const ACTIONS: readonly ReviewAction[] = [
+  "claim",
+  "release",
+  "approve",
+  "reject",
+  "snooze",
+  "promote",
 ];
-const KIND_TEXT: Record<ReviewKind, string> = {
-  predisclosure_candidate: "Pre-disclosure candidate",
-  low_confidence_high_impact: "Low confidence, high impact",
-  campaign_suggestion: "Campaign suggestion",
-};
-const STATUSES: readonly ReviewStatus[] = ["open", "snoozed", "confirmed", "rejected"];
-const DECISIONS: readonly ReviewDecision[] = ["confirm", "reject", "snooze"];
 const SNOOZE_DAYS = [1, 7, 30] as const;
+
+function windowOf(request: Request) {
+  const w = windowFrom(new URL(request.url).searchParams);
+  return { since: w.since, until: w.until };
+}
 
 export async function loader(args: Route.LoaderArgs) {
   const op = await requireOperator(args);
   const params = new URL(args.request.url).searchParams;
-  const status = oneOf(params, "status", STATUSES) ?? "open";
-  const kind = oneOf(params, "kind", KINDS) ?? "";
-  const cursor = params.get("cursor")?.slice(0, 256) || undefined;
-  const res = await load(args.request, op.api.listReview({ status, kind, cursor, limit: 50 }));
+  const w = windowFrom(params);
+  const filters = {
+    window: w.key ?? "",
+    status: oneOf(params, "status", STATUSES) ?? "pending",
+    kind: oneOf(params, "kind", KINDS) ?? "",
+    mine: params.get("mine") === "yes",
+    overdue: params.get("overdue") === "yes",
+  };
+  const res = await load(
+    args.request,
+    op.api.listReview({
+      since: w.since,
+      until: w.until,
+      status: filters.status,
+      kind: filters.kind,
+      assignee: filters.mine ? "me" : undefined,
+      sla_breached: filters.overdue ? true : undefined,
+      limit: 100,
+    }),
+  );
   return {
-    filters: { status, kind },
+    filters,
     items: res.ok ? res.data.items : ([] as ReviewItem[]),
-    nextCursor: res.ok ? (res.data.next_cursor ?? null) : null,
+    total: res.ok ? res.data.total : 0,
+    notes: res.ok ? res.data.notes : [],
+    truncated: res.ok ? res.data.truncated : false,
     error: res.ok ? null : res.error,
     canDecide: op.can("review:write"),
+    me: op.session.principal.id,
   };
 }
 
 export async function action(args: Route.ActionArgs) {
   const op = await requireMutation(args);
-  const itemId = op.form.get("item_id");
-  const decision = oneOf(op.form, "intent", DECISIONS);
-  const note = field(op.form, "note", 1000);
+  const f = op.form;
+  const itemId = f.get("item_id");
+  const act = oneOf(f, "intent", ACTIONS);
+  const kind = oneOf(f, "kind", KINDS);
   const base = { item: typeof itemId === "string" ? itemId : "" };
-  if (!isId("opaque", itemId) || !decision) {
-    return { ...base, ok: false, message: "Unknown review item or decision." };
+  const fail = (message: string) => ({ ...base, ok: false, message });
+  if (!isId("review", itemId) || !act || !kind) return fail("Unknown review item or action.");
+  const note = field(f, "note", 1000);
+  const body: ReviewActionRequest = { action: act };
+  const version = intField(f, "version", 0, Number.MAX_SAFE_INTEGER);
+  if (version !== undefined) body.expected_version = version;
+  if (note) body.note = note;
+  if (act === "reject" && !note) return fail("Add a note: a rejection needs a reason.");
+  if (act === "approve" && kind !== "write_up" && !note) {
+    return fail("Add a note: say why you approve.");
   }
-  if (!note) return { ...base, ok: false, message: "Add a note: every decision is audited." };
-  let snoozeUntil: number | undefined;
-  if (decision === "snooze") {
-    const days = Number(op.form.get("snooze_days"));
+  if (act === "snooze") {
+    const days = Number(f.get("snooze_days"));
     if (!SNOOZE_DAYS.includes(days as (typeof SNOOZE_DAYS)[number])) {
-      return { ...base, ok: false, message: "Pick how long to snooze for." };
+      return fail("Pick how long to snooze for.");
     }
-    snoozeUntil = Date.now() + days * 24 * 3600_000;
+    body.until = Date.now() + days * 24 * 3600_000;
   }
-  const res = await load(
-    args.request,
-    op.api.actOnReview(itemId, { action: decision, note, snooze_until: snoozeUntil }),
-  );
-  if (!res.ok) return { ...base, ok: false, message: res.error.message };
-  const done = { confirm: "Confirmed", reject: "Rejected", snooze: "Snoozed" }[decision];
-  return { ...base, ok: true, message: `${done}. The decision is in the audit log.` };
+  if (act === "approve" && kind === "campaign_label") {
+    const label = field(f, "label", 200);
+    if (!label || label.length > 120)
+      return fail("Give the campaign a title of 1 to 120 characters.");
+    body.label = label;
+  }
+  if (act === "approve" && kind === "write_up") {
+    const checklist = checklistFrom(f);
+    if (!checklistComplete(checklist)) return fail("Tick every checklist item to approve.");
+    body.checklist = checklist;
+  }
+  const res = await load(args.request, op.api.actOnReview(itemId, body, windowOf(args.request)));
+  if (!res.ok) return fail(res.error.message);
+  if (act === "promote" && res.data.writeup_id && isId("writeup", res.data.writeup_id)) {
+    return redirect(`/writeups/${res.data.writeup_id}?promoted=1`);
+  }
+  const done: Record<ReviewAction, string> = {
+    claim: "Claimed.",
+    assign: "Assigned.",
+    release: "Released.",
+    approve: "Approved.",
+    reject: "Rejected.",
+    snooze: "Snoozed.",
+    promote: "Draft write-up started.",
+  };
+  const effect = res.data.effect ? ` ${res.data.effect}` : "";
+  return { ...base, ok: true, message: `${done[act]}${effect} The action is in the audit log.` };
 }
 
 export default function Review({ loaderData: d, actionData }: Route.ComponentProps) {
@@ -83,7 +148,7 @@ export default function Review({ loaderData: d, actionData }: Route.ComponentPro
     <>
       <PageHead title="Review queue">
         <span className="muted">
-          Pre-disclosure candidates, low-confidence high-impact links and campaign suggestions.
+          {d.error ? "" : `${d.total} matching. `}Highest priority first; overdue items lead.
         </span>
       </PageHead>
       <section className="card panel" aria-label="Review queue">
@@ -93,7 +158,7 @@ export default function Review({ loaderData: d, actionData }: Route.ComponentPro
             <select id={`${id}-status`} name="status" defaultValue={d.filters.status}>
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {s === "pending" ? "pending (open, claimed, snoozed)" : s}
                 </option>
               ))}
             </select>
@@ -104,16 +169,43 @@ export default function Review({ loaderData: d, actionData }: Route.ComponentPro
               <option value="">Any</option>
               {KINDS.map((k) => (
                 <option key={k} value={k}>
-                  {KIND_TEXT[k]}
+                  {REVIEW_KIND_LABEL[k]}
                 </option>
               ))}
             </select>
           </div>
+          <div className="field">
+            <label htmlFor={`${id}-window`}>Window</label>
+            <select id={`${id}-window`} name="window" defaultValue={d.filters.window || "7d"}>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="31d">Last 31 days (the maximum)</option>
+            </select>
+          </div>
+          <label className="check">
+            <input type="checkbox" name="mine" value="yes" defaultChecked={d.filters.mine} /> Mine
+          </label>
+          <label className="check">
+            <input type="checkbox" name="overdue" value="yes" defaultChecked={d.filters.overdue} />{" "}
+            Overdue only
+          </label>
           <button type="submit" className="btn">
             Apply
           </button>
         </Form>
         {d.error ? <ErrorState what="Review queue" error={d.error} issue={35} /> : null}
+        {d.truncated ? (
+          <Notice kind="warn">
+            <p>The window held more events than one read covers. Narrow it to see every item.</p>
+          </Notice>
+        ) : null}
+        {d.notes.length ? (
+          <Notice kind="info">
+            {d.notes.map((n) => (
+              <p key={n}>{toPrintable(n)}</p>
+            ))}
+          </Notice>
+        ) : null}
         {!d.error && d.items.length === 0 ? (
           <EmptyState>
             <p>Nothing to review with these filters.</p>
@@ -124,123 +216,164 @@ export default function Review({ loaderData: d, actionData }: Route.ComponentPro
         <ReviewCard
           key={item.item_id}
           item={item}
+          me={d.me}
           canDecide={d.canDecide}
           result={actionData && actionData.item === item.item_id ? actionData : null}
         />
       ))}
-      {d.nextCursor ? (
-        <p className="pager">
-          <Link
-            className="link"
-            to={`/review?${new URLSearchParams({ status: d.filters.status, kind: d.filters.kind, cursor: d.nextCursor })}`}
-          >
-            More items
+    </>
+  );
+}
+
+function SubjectLinks({ item }: { item: ReviewItem }) {
+  const s = item.subject;
+  const out: { to: string; text: string }[] = [];
+  if (s.attempt_id && isId("attempt", s.attempt_id)) {
+    out.push({ to: `/attempts/${s.attempt_id}`, text: s.attempt_id });
+  }
+  if (s.campaign_id && isId("campaign", s.campaign_id)) {
+    out.push({ to: `/campaigns/${s.campaign_id}`, text: s.campaign_id });
+  }
+  if (s.ioc_id && isId("ioc", s.ioc_id)) out.push({ to: `/iocs/${s.ioc_id}`, text: s.ioc_id });
+  if (s.writeup_id && isId("writeup", s.writeup_id)) {
+    out.push({ to: `/writeups/${s.writeup_id}`, text: `write-up ${s.writeup_id}` });
+  }
+  if (item.kind === "actor_association" && s.campaign_id) {
+    out.push({ to: `/actors?subject_id=${s.campaign_id}`, text: "actor evidence" });
+  }
+  if (!out.length) return null;
+  return (
+    <>
+      {out.map((o) => (
+        <span key={o.to}>
+          {" · "}
+          <Link className="link mono" to={o.to}>
+            {o.text}
           </Link>
-        </p>
-      ) : null}
+        </span>
+      ))}
     </>
   );
 }
 
 function ReviewCard({
   item,
+  me,
   canDecide,
   result,
 }: {
   item: ReviewItem;
+  me: string;
   canDecide: boolean;
   result: { ok: boolean; message: string } | null;
 }) {
   const id = useId();
-  const link = item.link;
-  const conf = link ? confidenceOf(link) : null;
+  const sentence = reviewSentence(item);
+  const decided = item.status === "approved" || item.status === "rejected";
+  const claimedByOther =
+    item.status === "claimed" && item.assignee !== null && item.assignee !== me;
   return (
     <section className="card panel" aria-labelledby={`${id}-h`}>
       <header className="panel__head">
         <h2 id={`${id}-h`} className="panel__title">
-          {KIND_TEXT[item.kind] ?? item.kind}{" "}
+          {REVIEW_KIND_LABEL[item.kind] ?? item.kind}{" "}
           <span className="mono muted">{toPrintable(item.item_id)}</span>
         </h2>
-        <span className="tag">{item.status}</span>
+        <span>
+          <span className={decided ? "tag" : "tag tag--warn"}>{item.status}</span>{" "}
+          {item.sla_breached && !decided ? <span className="tag tag--bad">overdue</span> : null}
+        </span>
       </header>
       <div className="panel__body">
-        <p>{toPrintable(item.summary)}</p>
+        <p>{toPrintable(item.title)}</p>
+        {sentence ? (
+          <p>
+            <ConfidenceChip
+              level={levelFor(itemWording(item), item.band)}
+              score={item.score}
+              wording={sentence}
+            />{" "}
+            {sentence}
+          </p>
+        ) : null}
         <p className="muted">
-          Queued <Time ms={item.created_at} />
+          Queued <Time ms={item.created_at} /> {`(${formatDuration(item.age_ms)} ago)`}, due{" "}
+          <Time ms={item.sla_due_at} /> {`(${item.sla_hours}h SLA)`}
+          {item.assignee ? (
+            <>
+              , claimed by <span className="mono">{toPrintable(item.assignee)}</span>
+            </>
+          ) : null}
           {item.snoozed_until ? (
             <>
               , snoozed until <Time ms={item.snoozed_until} />
             </>
           ) : null}
-          {item.attempt_id && isId("attempt", item.attempt_id) ? (
-            <>
-              {" "}
-              ·{" "}
-              <Link className="link mono" to={`/attempts/${item.attempt_id}`}>
-                {item.attempt_id}
-              </Link>
-            </>
-          ) : null}
-          {item.campaign_id && isId("campaign", item.campaign_id) ? (
-            <>
-              {" "}
-              ·{" "}
-              <Link className="link mono" to={`/campaigns/${item.campaign_id}`}>
-                {item.campaign_id}
-              </Link>
-            </>
-          ) : null}
+          <SubjectLinks item={item} />
         </p>
-        {link && conf ? (
-          <p>
-            {KIND_LABEL[link.kind]}:{" "}
-            <ConfidenceChip level={conf.level} score={conf.score} wording={linkSentence(link)} />{" "}
-            {linkSentence(link)}
-            {link.caps_applied.length ? (
-              <span className="muted"> Caps: {link.caps_applied.map(toPrintable).join("; ")}.</span>
-            ) : null}
-          </p>
-        ) : null}
-        {item.decision ? (
+        {decided ? (
           <Notice kind="info">
             <p>
-              {item.decision.action} by{" "}
-              <span className="mono">{toPrintable(item.decision.analyst_id)}</span> at{" "}
-              <Time ms={item.decision.at} />: {toPrintable(item.decision.note)}
+              {item.status} by <span className="mono">{toPrintable(item.decided_by ?? "")}</span> at{" "}
+              <Time ms={item.decided_at} />
+              {item.note ? `: ${toPrintable(item.note)}` : ""}
             </p>
           </Notice>
         ) : null}
-        {canDecide && (item.status === "open" || item.status === "snoozed") ? (
-          <Form method="post" className="form-grid">
-            <CsrfField />
-            <input type="hidden" name="item_id" value={item.item_id} />
-            <div className="field field--wide">
-              <label htmlFor={`${id}-note`}>Note (required, audited)</label>
-              <textarea id={`${id}-note`} name="note" required maxLength={1000} rows={2} />
-            </div>
-            <div className="field">
-              <label htmlFor={`${id}-snooze`}>Snooze for</label>
-              <select id={`${id}-snooze`} name="snooze_days" defaultValue="7">
-                {SNOOZE_DAYS.map((n) => (
-                  <option key={n} value={n}>
-                    {n === 1 ? "1 day" : `${n} days`}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="actions-row field--wide">
-              <SubmitButton intent="confirm" tone="primary">
-                Confirm
-              </SubmitButton>
-              <SubmitButton intent="reject" tone="danger">
-                Reject
-              </SubmitButton>
-              <SubmitButton intent="snooze">Snooze</SubmitButton>
-            </div>
-            <div className="field--wide">
-              <ActionNotice result={result} />
-            </div>
-          </Form>
+        {canDecide && !decided ? (
+          claimedByOther ? (
+            <p className="muted">
+              Claimed by someone else. Only they or an assignment can act on it.
+            </p>
+          ) : (
+            <Form method="post" className="form-grid">
+              <CsrfField />
+              <input type="hidden" name="item_id" value={item.item_id} />
+              <input type="hidden" name="kind" value={item.kind} />
+              <input type="hidden" name="version" value={item.version} />
+              <div className="field field--wide">
+                <label htmlFor={`${id}-note`}>Note (audited; required to approve or reject)</label>
+                <textarea id={`${id}-note`} name="note" maxLength={1000} rows={2} />
+              </div>
+              {item.kind === "campaign_label" ? (
+                <div className="field">
+                  <label htmlFor={`${id}-label`}>Campaign title (to approve)</label>
+                  <input id={`${id}-label`} name="label" maxLength={120} />
+                </div>
+              ) : null}
+              {item.kind === "write_up" ? <ChecklistFields /> : null}
+              <div className="field">
+                <label htmlFor={`${id}-snooze`}>Snooze for</label>
+                <select id={`${id}-snooze`} name="snooze_days" defaultValue="7">
+                  {SNOOZE_DAYS.map((n) => (
+                    <option key={n} value={n}>
+                      {n === 1 ? "1 day" : `${n} days`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="actions-row field--wide">
+                {item.status === "claimed" ? (
+                  <SubmitButton intent="release">Release</SubmitButton>
+                ) : (
+                  <SubmitButton intent="claim">Claim</SubmitButton>
+                )}
+                <SubmitButton intent="approve" tone="primary">
+                  {item.kind === "write_up" ? "Approve write-up" : "Approve"}
+                </SubmitButton>
+                <SubmitButton intent="reject" tone="danger">
+                  Reject
+                </SubmitButton>
+                <SubmitButton intent="snooze">Snooze</SubmitButton>
+                {item.kind !== "write_up" ? (
+                  <SubmitButton intent="promote">Start a write-up</SubmitButton>
+                ) : null}
+              </div>
+              <div className="field--wide">
+                <ActionNotice result={result} />
+              </div>
+            </Form>
+          )
         ) : (
           <ActionNotice result={result} />
         )}

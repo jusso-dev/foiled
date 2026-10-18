@@ -19,6 +19,7 @@ export type Scope =
   | "iocs:read"
   | "review:read"
   | "review:write"
+  | "review:publish"
   | "sensors:read"
   | "sensors:write"
   | "hosts:read"
@@ -286,6 +287,9 @@ export interface AttemptTimeline {
 }
 
 export type EvidenceSource =
+  | "actor_ttp_overlap"
+  | "actor_indicator_overlap"
+  | "actor_targeting"
   | "rule"
   | "sequence"
   | "vuln_path_hook"
@@ -487,10 +491,16 @@ export interface PossibleLink {
   signal_ids: string[];
 }
 
+/** `Campaign.suggested_actor_links`. The #29 fields are optional until #29 (PR #83) lands. */
 export interface ActorLink {
-  /** A named public cluster (#29). */
+  link_id?: string;
+  actor_id?: string;
+  /** A public nexus, cluster or group label (#29). */
   label: string;
   wording: "possible association" | "confirmed association";
+  score?: number;
+  band?: Band;
+  status?: "pending" | "confirmed";
   confidence_ref: string;
   report_urls: string[];
 }
@@ -631,45 +641,274 @@ export interface Page<T> {
   next_cursor?: string | null;
 }
 
-// ---------- Review queue (#35, planned) ----------
+// ---------- Review queue, write-ups and radar (#35) ----------
 //
-// TODO(#35): `/v0/review-queue` is `planned` in api/openapi.yaml and no
-// shape is published yet. These types are the console's proposal, written
-// from the #14 and #35 issue text and the `review_queue_item` alert
-// (testdata/alerts/review-queue-item.json). Replace them with the shapes
-// #35 ships; the console shows "not served yet" until the route answers.
+// TODO(#35): these routes are not on main yet. The shapes follow PR #84
+// (schemas/review-item.schema.json, write-up.schema.json and
+// radar-feed.schema.json there). Until the API serves them the console
+// shows "not served yet".
 
 export type ReviewKind =
+  | "cve_link"
   | "predisclosure_candidate"
-  | "low_confidence_high_impact"
-  | "campaign_suggestion";
+  | "technique_link"
+  | "ioc_publication"
+  | "campaign_label"
+  | "actor_association"
+  | "write_up";
 
-export type ReviewStatus = "open" | "confirmed" | "rejected" | "snoozed";
-export type ReviewDecision = "confirm" | "reject" | "snooze";
+export type ReviewStatus = "open" | "claimed" | "snoozed" | "approved" | "rejected";
+export type ReviewAction =
+  | "claim"
+  | "assign"
+  | "release"
+  | "approve"
+  | "reject"
+  | "snooze"
+  | "promote";
+
+export interface WriteUpChecklist {
+  tenant_data_removed: boolean;
+  wording_checked: boolean;
+  no_exploit_code: boolean;
+  payloads_redacted: boolean;
+  sources_linked: boolean;
+  delay_rules_checked: boolean;
+}
 
 export interface ReviewItem {
   item_id: string;
+  tenant_id: string;
   kind: ReviewKind;
+  subject: {
+    attempt_id?: string;
+    /** CVE id, technique id or actor label. */
+    target?: string;
+    ioc_id?: string;
+    campaign_id?: string;
+    writeup_id?: string;
+    submitted_at?: number;
+  };
+  /** Escaped one-line summary. */
+  title: string;
+  score: number;
+  band: Band;
+  wording: string;
   status: ReviewStatus;
-  created_at: number;
-  updated_at: number;
+  assignee: string | null;
+  claimed_at: number | null;
   snoozed_until: number | null;
-  attempt_id: string | null;
-  campaign_id: string | null;
-  catalogue_id: string | null;
-  /** Escaped by the API; rendered through toPrintable. */
-  summary: string;
-  /** The link the item asks an analyst to judge, when there is one. */
-  link: ConfidenceLink | null;
-  decision: { action: ReviewDecision; analyst_id: string; at: number; note: string } | null;
+  decided_by: string | null;
+  decided_at: number | null;
+  note: string;
+  created_at: number;
+  age_ms: number;
+  sla_hours: number;
+  sla_due_at: number;
+  sla_breached: boolean;
+  priority: number;
+  version: number;
+}
+
+export interface ReviewList {
+  items: ReviewItem[];
+  total: number;
+  truncated: boolean;
+  notes: string[];
 }
 
 export interface ReviewActionRequest {
-  action: ReviewDecision;
-  note: string;
-  /** Snooze only. Unix ms. */
-  snooze_until?: number;
+  action: ReviewAction;
+  assignee?: string;
+  /** Snooze only. Unix ms, at most 30 days away. */
+  until?: number;
+  /** Required for reject. */
+  note?: string;
+  expected_version?: number;
+  /** Approve on campaign_label: the campaign title. */
+  label?: string;
+  /** Approve on write_up. */
+  checklist?: WriteUpChecklist;
 }
+
+export interface ReviewActionResult {
+  item: ReviewItem;
+  effect: string | null;
+  writeup_id: string | null;
+}
+
+export type WriteUpStatus = "draft" | "review" | "approved" | "published" | "withdrawn";
+
+export interface LintFinding {
+  rule: string;
+  severity: "error" | "warning";
+  location: string;
+  message: string;
+}
+
+export interface WriteUp {
+  writeup_id: string;
+  tenant_id: string;
+  slug: string;
+  title: string;
+  summary: string;
+  /** Markdown subset. Never rendered as HTML by the console: shown as text. */
+  body_md: string;
+  status: WriteUpStatus;
+  tlp: Tlp;
+  embargo_until: number | null;
+  cve_ids: string[];
+  technique_ids: string[];
+  campaign_ids: string[];
+  ioc_ids: string[];
+  attempt_ids: string[];
+  first_seen: number | null;
+  redacted_payload: string | null;
+  source_item_id: string | null;
+  author_id: string;
+  reviewer_id: string | null;
+  checklist: WriteUpChecklist | null;
+  version: number;
+  created_at: number;
+  updated_at: number;
+  submitted_at: number | null;
+  approved_at: number | null;
+  published_at: number | null;
+  withdrawn_at: number | null;
+  lint?: LintFinding[];
+}
+
+export interface WriteUpFields {
+  slug?: string;
+  title?: string;
+  summary?: string;
+  body_md?: string;
+  tlp?: Tlp;
+  embargo_until?: number | null;
+  cve_ids?: string[];
+  technique_ids?: string[];
+  campaign_ids?: string[];
+  ioc_ids?: string[];
+  attempt_ids?: string[];
+  first_seen?: number | null;
+  redacted_payload?: string | null;
+  expected_version?: number;
+}
+
+export interface WriteUpTransition {
+  to: WriteUpStatus;
+  expected_version?: number;
+  note?: string;
+  checklist?: WriteUpChecklist;
+}
+
+export interface WriteUpVersion {
+  writeup: WriteUp;
+  action: string;
+  actor_id: string;
+  at: number;
+}
+
+export type RadarDimension = "cve" | "technique" | "campaign" | "product";
+
+export interface RadarSeries {
+  dimension: RadarDimension;
+  key: string;
+  label: string;
+  wording: "we assess as" | "possible" | "observed";
+  total_attempts: number;
+  total_sources: number;
+  best_band: Band;
+  first_day: number;
+  last_day: number;
+  days: { day: number; attempts: number; publishable_attempts: number; sources: number }[];
+  trend: { direction: "up" | "down" | "flat"; pct: number };
+}
+
+export interface RadarCard {
+  card_id: string;
+  kind: "new_cve_assessment" | "predisclosure_spike" | "campaign_emergence" | "spike";
+  dimension: RadarDimension;
+  key: string;
+  day: number;
+  attempts: number;
+  sources: number;
+  headline: string;
+}
+
+export interface RadarFeed {
+  audience: "public" | "fleet" | "tenant";
+  generated_at: number;
+  since: number;
+  until: number;
+  policy: {
+    min_sources: number;
+    min_sensors: number;
+    min_edge_tenants: number;
+    delay_days: number;
+    min_confidence: Band;
+    publishable_only: boolean;
+  };
+  series: RadarSeries[];
+  cards: RadarCard[];
+  suppressed_buckets?: number;
+  notes: string[];
+}
+
+// ---------- Actor possible-associations (#29) ----------
+//
+// TODO(#29): `/v0/actor-links` and `/v0/actors` are not on main yet. Shapes
+// follow PR #83 (schemas/actor-link.schema.json there).
+
+export interface ActorLinkRecord {
+  link_id: string;
+  tenant_id: string;
+  subject_kind: "campaign" | "attempt";
+  subject_id: string;
+  attempt_ids: string[];
+  actor_id: string;
+  label: string;
+  label_kind: "nexus" | "cluster" | "named_group";
+  status: "pending" | "confirmed" | "rejected";
+  wording: "possible association" | "confirmed association";
+  /** The only sentence the API allows clients to show for this link. */
+  statement: string;
+  score: number;
+  band: Band;
+  publishable: boolean;
+  review_queue: boolean;
+  matched: {
+    techniques: { id: string; profiles_using: number; rarity: number }[];
+    indicators: {
+      type: "ip" | "cidr" | "domain" | "url" | "sha256" | "asn";
+      /** Defanged and escaped. */
+      display: string;
+      match: "exact" | "subdomain" | "in_range";
+      ioc_id?: string;
+      weight: number;
+      stale: boolean;
+      source_url: string;
+    }[];
+    targeting: string[];
+  };
+  not_counted: string[];
+  sources: {
+    kind: "attack_group" | "vendor_report" | "government_advisory" | "misp_galaxy";
+    publisher: string;
+    title: string;
+    url: string;
+    published: string;
+    retrieved?: string;
+    sha256?: string;
+    licence: string;
+    licence_url?: string;
+  }[];
+  attack_version?: string;
+  example: boolean;
+  confidence: ConfidenceLink;
+}
+
+export type ActorDecision = "confirm" | "reject" | "reopen";
 
 // ---------- Quarantine (#9 list, #14 download; planned) ----------
 //

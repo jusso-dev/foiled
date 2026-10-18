@@ -4,6 +4,9 @@ export const ID_PATTERNS = {
   attempt: /^att_[a-f0-9]{24}$/,
   campaign: /^cmp_[a-f0-9]{24}$/,
   ioc: /^ioc_[a-f0-9]{24}$/,
+  review: /^rq_[a-f0-9]{24}$/,
+  writeup: /^wu_[a-f0-9]{24}$/,
+  actorLink: /^acl_[a-f0-9]{24}$/,
   sha256: /^[a-f0-9]{64}$/,
   catalogue: /^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._+-]*)+$/,
   /** Decoy, host, sensor and review item ids: opaque, but one path segment. */

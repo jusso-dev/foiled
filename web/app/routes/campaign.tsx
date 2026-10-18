@@ -276,6 +276,7 @@ export default function CampaignPage({ loaderData: d, actionData }: Route.Compon
                       )
                     </>
                   ) : null}
+                  {a.score !== undefined ? <span className="muted"> Score {a.score}.</span> : null}
                 </li>
               ))}
             </ul>
@@ -285,6 +286,11 @@ export default function CampaignPage({ loaderData: d, actionData }: Route.Compon
               with public clusters.
             </p>
           )}
+          <p>
+            <Link className="link" to={`/actors?subject_id=${c.campaign_id}`}>
+              Actor evidence and decisions for this campaign
+            </Link>
+          </p>
         </div>
       </section>
 

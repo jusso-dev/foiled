@@ -6,6 +6,8 @@
  */
 
 import type {
+  ActorDecision,
+  ActorLinkRecord,
   AgentCreated,
   AgentRecord,
   AgentRevoked,
@@ -36,10 +38,16 @@ import type {
   QuarantineDownloadGrant,
   QuarantineDownloadRequest,
   QuarantineItem,
+  RadarFeed,
   Reason,
   RegisterAgent,
   ReviewActionRequest,
-  ReviewItem,
+  ReviewActionResult,
+  ReviewList,
+  WriteUp,
+  WriteUpFields,
+  WriteUpTransition,
+  WriteUpVersion,
 } from "./api-types";
 import { BadIdError, type IdKind, isId } from "./ids";
 
@@ -313,15 +321,59 @@ export class ConsoleApi {
     );
   }
 
-  // Review queue (#35). TODO(#35): planned; shapes are the console's proposal (api-types.ts).
-  async listReview(q: { status?: string; kind?: string; cursor?: string; limit?: number } = {}) {
-    return this.json<Page<ReviewItem>>(`/v0/review-queue${qs(q)}`);
+  // Review queue, write-ups and radar (#35). TODO(#35): not on main yet; shapes from PR #84.
+  async listReview(q: Record<string, QueryValue> = {}) {
+    return this.json<ReviewList>(`/v0/review-queue${qs(q)}`);
   }
-  async actOnReview(id: string, body: ReviewActionRequest) {
-    return this.json<ReviewItem>(`/v0/review-queue/${seg("opaque", id)}`, {
-      method: "PATCH",
+  async actOnReview(id: string, body: ReviewActionRequest, w: Window = {}) {
+    return this.json<ReviewActionResult>(
+      `/v0/review-queue/${seg("review", id)}/actions${qs({ ...w })}`,
+      { method: "POST", body },
+    );
+  }
+  async listWriteUps(q: { status?: string; limit?: number } = {}) {
+    return this.json<{ items: WriteUp[] }>(`/v0/write-ups${qs(q)}`);
+  }
+  async getWriteUp(id: string) {
+    return this.json<WriteUp>(`/v0/write-ups/${seg("writeup", id)}`);
+  }
+  async createWriteUp(body: WriteUpFields) {
+    return this.json<WriteUp>("/v0/write-ups", { method: "POST", body });
+  }
+  async editWriteUp(id: string, body: WriteUpFields) {
+    return this.json<WriteUp>(`/v0/write-ups/${seg("writeup", id)}`, { method: "PATCH", body });
+  }
+  async transitionWriteUp(id: string, body: WriteUpTransition) {
+    return this.json<WriteUp>(`/v0/write-ups/${seg("writeup", id)}/transitions`, {
+      method: "POST",
       body,
     });
+  }
+  async listWriteUpVersions(id: string) {
+    return this.json<{ writeup_id: string; items: WriteUpVersion[] }>(
+      `/v0/write-ups/${seg("writeup", id)}/versions`,
+    );
+  }
+  async getRadar(q: Record<string, QueryValue> = {}) {
+    return this.json<RadarFeed>(`/v0/radar${qs(q)}`);
+  }
+
+  // Actor possible-associations (#29). TODO(#29): not on main yet; shapes from PR #83.
+  async listActorLinks(q: Record<string, QueryValue> = {}) {
+    return this.json<{ items: ActorLinkRecord[]; truncated: boolean }>(`/v0/actor-links${qs(q)}`);
+  }
+  async getActorLink(id: string, w: Window = {}) {
+    return this.json<ActorLinkRecord>(`/v0/actor-links/${seg("actorLink", id)}${qs({ ...w })}`);
+  }
+  async decideActorLink(
+    id: string,
+    body: { decision: ActorDecision; note: string },
+    w: Window = {},
+  ) {
+    return this.json<ActorLinkRecord>(
+      `/v0/actor-links/${seg("actorLink", id)}/decision${qs({ ...w })}`,
+      { method: "POST", body },
+    );
   }
 
   // Quarantine. TODO(#9, #14): planned; see api-types.ts.

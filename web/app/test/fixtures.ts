@@ -16,6 +16,7 @@ import hookLink from "../../../testdata/confidence-links/hook-and-sequence-high.
 import llmLink from "../../../testdata/confidence-links/llm-only-capped.json";
 import iocIp from "../../../testdata/iocs/expected/file-drop-00.json";
 import type {
+  ActorLinkRecord,
   AgentRecord,
   Attempt,
   AttemptTimeline,
@@ -25,8 +26,15 @@ import type {
   Decoy,
   Ioc,
   QuarantineItem,
+  RadarFeed,
   ReviewItem,
+  WriteUp,
 } from "../lib/api-types";
+import actorLinkJson from "./pr/actor-link.json";
+import radarJson from "./pr/radar-tenant.json";
+import reviewCve from "./pr/review-cve-link.json";
+import reviewIocPub from "./pr/review-ioc-publication.json";
+import writeUpJson from "./pr/write-up.json";
 
 const as = <T>(v: unknown) => structuredClone(v) as T;
 
@@ -146,20 +154,16 @@ export function decoy(over: Partial<Decoy> = {}): Decoy {
   };
 }
 
-export const reviewItem: ReviewItem = {
-  item_id: "rq_5e6f7a8b",
-  kind: "predisclosure_candidate",
-  status: "open",
-  created_at: 1792287123000,
-  updated_at: 1792287123000,
-  snoozed_until: null,
-  attempt_id: attempts.post.attempt_id,
-  campaign_id: null,
-  catalogue_id: "foiled/demo-app/1.0.0",
-  summary: "Pre-disclosure candidate on foiled/demo-app/1.0.0",
-  link: cveLink,
-  decision: null,
-};
+/**
+ * Review queue, write-up, radar and actor shapes. TODO(#35, #29): copied
+ * from the golden output of PR #84 and PR #83 (test/pr/); import them from
+ * testdata/ once those land.
+ */
+export const reviewItem = as<ReviewItem>(reviewCve);
+export const reviewIoc = as<ReviewItem>(reviewIocPub);
+export const writeUp = as<WriteUp>(writeUpJson);
+export const radarFeed = as<RadarFeed>(radarJson);
+export const actorLinkRecord = as<ActorLinkRecord>(actorLinkJson);
 
 export const quarantined: QuarantineItem = {
   sha256: "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",

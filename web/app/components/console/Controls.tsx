@@ -3,6 +3,7 @@ import { useNavigation } from "react-router";
 import type { AttemptState, DecoyState } from "../../lib/api-types";
 import { formatTs, isoTs } from "../../lib/format";
 import { REASON_LABEL } from "../../lib/reasons";
+import { CHECKLIST } from "../../lib/review";
 
 const DECOY_TONE: Record<DecoyState, "ok" | "warn" | "bad" | "plain"> = {
   pending: "warn",
@@ -148,4 +149,18 @@ export function Time({ ms }: { ms: number | null | undefined }) {
   const text = formatTs(ms);
   if (ms === null || ms === undefined || text === "") return <span className="muted">n/a</span>;
   return <time dateTime={isoTs(ms)}>{text}</time>;
+}
+
+/** The second reviewer's write-up checklist (#35). Every box must be ticked to approve. */
+export function ChecklistFields() {
+  return (
+    <fieldset className="fieldset field--wide">
+      <legend>Second reviewer checklist (all required to approve)</legend>
+      {CHECKLIST.map((c) => (
+        <label key={c.key} className="check">
+          <input type="checkbox" name={`check_${c.key}`} value="yes" /> {c.label}
+        </label>
+      ))}
+    </fieldset>
+  );
 }

@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/review-item.schema.json",
+  "title": "Foiled review queue item",
+  "description": "One analyst review queue item (#35): a pending CVE or technique link, a pre-disclosure candidate, an IOC publication candidate, a campaign label, an actor possible-association or a write-up in review, with its stored analyst state, SLA and priority. Mirrored by foiled_core::review::ReviewItem. See docs/review-queue.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "item_id",
+    "tenant_id",
+    "kind",
+    "subject",
+    "title",
+    "score",
+    "band",
+    "wording",
+    "status",
+    "assignee",
+    "claimed_at",
+    "snoozed_until",
+    "decided_by",
+    "decided_at",
+    "note",
+    "created_at",
+    "age_ms",
+    "sla_hours",
+    "sla_due_at",
+    "sla_breached",
+    "priority",
+    "version"
+  ],
+  "properties": {
+    "item_id": { "type": "string", "pattern": "^rq_[a-f0-9]{24}$" },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "kind": {
+      "enum": [
+        "cve_link",
+        "predisclosure_candidate",
+        "technique_link",
+        "ioc_publication",
+        "campaign_label",
+        "actor_association",
+        "write_up"
+      ]
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": { "type": "string" },
+        "target": { "description": "CVE id, technique id or actor label.", "type": "string" },
+        "ioc_id": { "type": "string", "pattern": "^ioc_[a-f0-9]{24}$" },
+        "campaign_id": { "type": "string", "pattern": "^cmp_[a-f0-9]{24}$" },
+        "writeup_id": { "type": "string", "pattern": "^wu_[a-f0-9]{24}$" },
+        "submitted_at": {
+          "description": "Write-up items: when it was submitted. Each submission is a new item.",
+          "type": "integer"
+        }
+      }
+    },
+    "title": { "description": "Escaped one-line summary.", "type": "string" },
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "band": { "enum": ["low", "medium", "high"] },
+    "wording": { "type": "string" },
+    "status": { "enum": ["open", "claimed", "snoozed", "approved", "rejected"] },
+    "assignee": { "type": ["string", "null"] },
+    "claimed_at": { "type": ["integer", "null"] },
+    "snoozed_until": { "type": ["integer", "null"] },
+    "decided_by": { "type": ["string", "null"] },
+    "decided_at": { "type": ["integer", "null"] },
+    "note": { "type": "string", "maxLength": 1000 },
+    "created_at": { "type": "integer" },
+    "age_ms": { "type": "integer", "minimum": 0 },
+    "sla_hours": { "type": "integer", "minimum": 1 },
+    "sla_due_at": { "type": "integer" },
+    "sla_breached": { "type": "boolean" },
+    "priority": {
+      "description": "Higher first. Zero for snoozed and decided items.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "version": {
+      "description": "Pass back as expected_version to act on the item.",
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

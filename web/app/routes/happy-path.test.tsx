@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { Attempt, Decoy, ReviewItem } from "../lib/api-types";
 import type { LiveResponse } from "../lib/live";
-import { agents, attempts, catalogue, cveLink, decoy, reviewItem } from "../test/fixtures";
+import { agents, attempts, catalogue, decoy, reviewItem } from "../test/fixtures";
 import {
   envWith,
   expectPage,
@@ -43,13 +43,26 @@ function controlPlane() {
     if (c.path.startsWith("/v0/decoys/")) return state.decoys.find((d) => c.path.endsWith(d.id));
     if (c.path === "/v0/attempts") return { items: state.attempts, truncated: false };
     if (c.path === "/v0/campaigns") return { items: [], truncated: false, notes: [] };
-    if (c.path === "/v0/review-queue" && c.method === "GET")
-      return { items: state.review, next_cursor: null };
-    if (c.path.startsWith("/v0/review-queue/") && c.method === "PATCH") {
+    if (c.path === "/v0/review-queue" && c.method === "GET") {
+      const want = c.search.get("status");
+      const items = state.review.filter((i) =>
+        want === "approved" ? i.status === "approved" : i.status !== "approved",
+      );
+      return { items, total: items.length, truncated: false, notes: [] };
+    }
+    if (
+      c.path.endsWith("/actions") &&
+      c.path.startsWith("/v0/review-queue/") &&
+      c.method === "POST"
+    ) {
       const item = state.review[0];
-      item.status = "confirmed";
-      if (item.link) item.link = { ...item.link, score: 100, wording: "confirmed" };
-      return item;
+      item.status = "approved";
+      item.wording = "confirmed";
+      item.score = 100;
+      item.decided_by = "tok1";
+      item.decided_at = Date.now();
+      item.note = (c.body as { note: string }).note;
+      return { item, effect: "link override recorded as true_positive", writeup_id: null };
     }
     if (c.path === "/v0/exports/stix") {
       return new Response(JSON.stringify({ type: "bundle", id: "bundle--x", objects: [] }), {
@@ -69,7 +82,10 @@ function controlPlane() {
       last_seen: Date.now() - 60_000,
     };
     state.attempts.push(a);
-    state.review.push({ ...reviewItem, attempt_id: a.attempt_id, link: { ...cveLink } });
+    state.review.push({
+      ...reviewItem,
+      subject: { attempt_id: a.attempt_id, target: "FOILED-DEMO-0001" },
+    });
   }
   return { api, state, hostReports };
 }
@@ -119,14 +135,16 @@ describe("mock happy path", () => {
         form: {
           csrf: session.csrf,
           item_id: reviewItem.item_id,
-          intent: "confirm",
+          kind: "cve_link",
+          version: "0",
+          intent: "approve",
           note: "hook fired, payload matches",
         },
       }),
     );
     expect(decided.actionData).toMatchObject({ ok: true });
-    expect(cp.state.review[0].link?.wording).toBe("confirmed");
-    const after = expectPage(await page(env, "/review?status=confirmed", { cookie }));
+    expect(cp.state.review[0].status).toBe("approved");
+    const after = expectPage(await page(env, "/review?status=approved", { cookie }));
     expect(text(after.html)).toContain(
       "Confirmed by an analyst as an attempt against FOILED-DEMO-0001",
     );
