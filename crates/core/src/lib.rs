@@ -19,6 +19,7 @@ pub mod decoy;
 pub mod enrichment;
 pub mod honeyscore;
 pub mod hooks;
+pub mod ioc;
 pub mod llm;
 pub mod mcp;
 pub mod retention;

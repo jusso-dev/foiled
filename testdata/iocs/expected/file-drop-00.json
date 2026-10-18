@@ -1,0 +1,85 @@
+{
+  "ioc_id": "ioc_17b8b6ab4beb2dee9dac3a99",
+  "type": "ip",
+  "value": "203.0.113.7",
+  "display": "203[.]0[.]113[.]7",
+  "roles": [
+    "source"
+  ],
+  "origin": "observed",
+  "redacted": false,
+  "file_ioc_limited": false,
+  "first_seen": 1792285400000,
+  "last_seen": 1792285400005,
+  "sightings": 3,
+  "attempt_ids": [
+    "att_9c09513968e521d297116de5"
+  ],
+  "campaign_ids": [],
+  "decoy_ids": [
+    "dcy-demo-1"
+  ],
+  "catalogue_ids": [
+    "foiled/demo-app/1.0.0"
+  ],
+  "event_ids": [
+    "fd-01",
+    "fd-02",
+    "fd-03"
+  ],
+  "extracted_from": [
+    "application:src.ip",
+    "hook:src.ip"
+  ],
+  "enrichment": [
+    {
+      "provider": "local_asn",
+      "key": "asn.number",
+      "value": 64498,
+      "observed_at": 1792285700000,
+      "shareable": false
+    },
+    {
+      "provider": "local_asn",
+      "key": "asn.org",
+      "value": "Example Hosting",
+      "observed_at": 1792285700000,
+      "shareable": false
+    },
+    {
+      "provider": "local_asn",
+      "key": "geo.country",
+      "value": "US",
+      "observed_at": 1792285700000,
+      "shareable": false
+    }
+  ],
+  "confidence": {
+    "score": 68,
+    "band": "medium",
+    "wording": "we assess as",
+    "publishable": true,
+    "evidence": [
+      {
+        "signal_id": "decoy:dcy-demo-1",
+        "source": "catalogue_prior",
+        "weight": 100,
+        "summary": "seen at decoy dcy-demo-1, which has no legitimate users"
+      },
+      {
+        "signal_id": "hook:att_9c09513968e521d297116de5:demo-app.upload-path-traversal",
+        "source": "vuln_path_hook",
+        "weight": 100,
+        "summary": "seen in attempt att_9c09513968e521d297116de5, where vulnerable-path hook demo-app.upload-path-traversal fired",
+        "ref": "fd-02"
+      },
+      {
+        "signal_id": "noise:ioc_17b8b6ab4beb2dee9dac3a99",
+        "source": "noise_score",
+        "weight": 10,
+        "summary": "lowest source noise score across sightings is 10"
+      }
+    ],
+    "caps_applied": []
+  }
+}

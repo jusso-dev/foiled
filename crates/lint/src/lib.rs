@@ -106,6 +106,10 @@ pub const BINDINGS: &[Binding] = &[
         schema: "schemas/attempt-timeline.schema.json",
     },
     Binding {
+        data_dir: "testdata/iocs/expected",
+        schema: "schemas/ioc.schema.json",
+    },
+    Binding {
         data_dir: "testdata/agent/jobs",
         schema: "schemas/agent/job.schema.json",
     },

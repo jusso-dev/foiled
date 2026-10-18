@@ -1,5 +1,5 @@
 //! The confidence layer (#27): one scoring model for every link Foiled
-//! asserts (attempt to CVE, technique, actor or campaign).
+//! asserts (attempt to CVE, technique, actor, campaign or indicator).
 //!
 //! Deterministic: the same evidence and config always give the same score.
 //! Every contribution and every cap is listed in the explanation, so LLM or
@@ -16,6 +16,9 @@ pub enum LinkKind {
     AttemptTechnique,
     AttemptActor,
     AttemptCampaign,
+    /// An indicator extracted from attempts (#34): how strongly the value
+    /// indicates malicious activity. The target is the IOC id.
+    AttemptIoc,
 }
 
 /// Where a piece of evidence came from. Producers: #12 (rule, sequence,
@@ -198,8 +201,12 @@ pub struct ConfidenceLink {
 
 fn wording(kind: LinkKind, band: Band, confirmed: bool) -> &'static str {
     match (kind, confirmed) {
-        (LinkKind::AttemptCve | LinkKind::AttemptTechnique, true) => "confirmed",
-        (LinkKind::AttemptCve | LinkKind::AttemptTechnique, false) => "we assess as",
+        (LinkKind::AttemptCve | LinkKind::AttemptTechnique | LinkKind::AttemptIoc, true) => {
+            "confirmed"
+        }
+        (LinkKind::AttemptCve | LinkKind::AttemptTechnique | LinkKind::AttemptIoc, false) => {
+            "we assess as"
+        }
         // Actors keep the cautious phrase unless high and analyst-confirmed (#29).
         (LinkKind::AttemptActor, true) if band == Band::High => "confirmed association",
         (LinkKind::AttemptActor, _) => "possible association",
