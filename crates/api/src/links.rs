@@ -37,6 +37,8 @@ pub fn attack_sidecar() -> &'static foiled_core::attack::AttackSidecar {
         serde_json::from_str(ATTACK_SIDECAR).expect("bundled ATT&CK sidecar parses")
     })
 }
+static ACTOR_REPORTS: &str = include_str!(concat!(env!("OUT_DIR"), "/actor_reports.json"));
+static ATTACK_GROUPS: &str = include_str!("../../../data/attack/groups.json");
 
 /// The ATT&CK rules bundled at build time. Validated by `foiled-lint` in CI,
 /// so a parse failure is a build bug.
@@ -54,6 +56,41 @@ pub fn cve_rules() -> &'static Rules {
         sequences: serde_json::from_str(SEQUENCES).expect("bundled sequences parse"),
         advisories: serde_json::from_str(ADVISORIES).expect("bundled advisories parse"),
     })
+}
+
+/// The actor catalogue source bundled at build time (#29): ATT&CK groups
+/// from the pinned sidecar plus the curated reports in `catalogue/actors/`,
+/// both validated by `foiled-lint` in CI. Example reports are never
+/// bundled.
+pub struct BundledActors;
+
+impl foiled_core::actor::CatalogueSource for BundledActors {
+    fn attack_groups(&self) -> Option<foiled_core::actor::AttackGroups> {
+        Some(serde_json::from_str(ATTACK_GROUPS).expect("bundled ATT&CK groups parse"))
+    }
+
+    fn reports(&self) -> Vec<foiled_core::actor::ActorReport> {
+        serde_json::from_str::<Vec<foiled_core::actor::ActorReport>>(ACTOR_REPORTS)
+            .expect("bundled actor reports parse")
+            .into_iter()
+            .filter(|r| !r.example)
+            .collect()
+    }
+}
+
+/// The actor reference catalogue (#29) from [`BundledActors`], built once
+/// per isolate.
+pub fn bundled_actor_catalogue() -> std::sync::Arc<foiled_core::actor::ActorCatalogue> {
+    use foiled_core::actor::ActorCatalogue;
+    static BUILT: OnceLock<std::sync::Arc<ActorCatalogue>> = OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            std::sync::Arc::new(ActorCatalogue::from_source(
+                &BundledActors,
+                attack_sidecar(),
+            ))
+        })
+        .clone()
 }
 
 /// Event ids a tier 1 signature matched, as attempt state signals: a

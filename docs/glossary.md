@@ -78,7 +78,7 @@ Open Source Vulnerabilities, a public database and schema for vulnerabilities in
 A reference to a payload body stored in R2, used instead of putting large bodies inside capture envelopes or queue messages. Format: `r2://<bucket>/<tenant>/<decoy-id>/<attempt-id>/<channel>/<sha256>` (#9).
 
 **Possible association**
-The required wording for a link between activity and a public threat actor or cluster that is not confirmed by an analyst at high confidence. Foiled prefers nexus or named public cluster labels and links to the public reports behind them (#29).
+The required wording for a link between activity and a public threat actor or cluster that is not confirmed by an analyst at high confidence. Foiled prefers nexus or named public cluster labels and links to the public reports behind them (#29). See [actor-attribution.md](actor-attribution.md).
 
 **Predisclosure**
 Tracking consistent, non-generic traffic against a decoy that matches no known CVE yet, then back-matching it when an advisory is published. Predisclosure links start capped and are never published automatically (#12).

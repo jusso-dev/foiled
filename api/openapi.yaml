@@ -1153,6 +1153,9 @@ paths:
         scoped. Newest activity first. Confidence is worded "possible" until
         an analyst confirms; clustering alone never publishes. `notes` lists
         analyst actions that did not apply in this window.
+        `suggested_actor_links` (#29) is empty unless `include=actors`, so a
+        plain list never runs the actor matcher; campaign detail always
+        fills it.
       parameters:
         - { name: since, in: query, schema: { type: integer }, description: "Unix ms, inclusive." }
         - { name: until, in: query, schema: { type: integer }, description: "Unix ms, exclusive." }
@@ -1163,6 +1166,7 @@ paths:
         - { name: cve, in: query, schema: { type: string }, description: "Case-insensitive CVE id among the campaign's CVEs." }
         - { name: ioc_id, in: query, schema: { type: string }, description: "An IOC shared by at least two members (#34)." }
         - { name: min_confidence, in: query, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: include, in: query, schema: { type: string, enum: [actors] }, description: "actors: fill suggested_actor_links (#29)." }
         - { $ref: "#/components/parameters/Limit" }
       x-foiled-status: implemented
       x-foiled-store: postgres
@@ -1406,6 +1410,176 @@ paths:
                     oneOf:
                       - { $ref: "../schemas/campaign.schema.json" }
                       - { type: "null" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/actors:
+    get:
+      tags: [intel]
+      operationId: listActors
+      summary: Actor reference catalogue from public sources
+      description: |
+        Actor profiles Foiled can suggest a possible association with
+        (#29, `docs/actor-attribution.md`): MITRE ATT&CK groups from the
+        pinned sidecar (`attack:G0000`) and curated public reports
+        (`report:<slug>`), each with its sources, publication dates,
+        SHA-256 pins and licences. The same for every tenant. Responses
+        carry MITRE's notice, which travels with ATT&CK group names.
+      x-foiled-status: implemented
+      x-foiled-store: bundle
+      x-foiled-scopes: [campaigns:read]
+      parameters:
+        - { name: q, in: query, description: "Case-insensitive text in the label or an alias.", schema: { type: string, maxLength: 100 } }
+        - { name: label_kind, in: query, schema: { type: string, enum: [nexus, cluster, named_group] } }
+        - { name: source, in: query, schema: { type: string, enum: [attack, report] } }
+        - { name: technique, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: cursor, in: query, description: "Return profiles after this actor id (next_cursor).", schema: { type: string } }
+      responses:
+        "200":
+          description: Profiles, sorted by actor id.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor, population, attack_version, attack_notice]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/ActorProfile" } }
+                  next_cursor: { type: [string, "null"] }
+                  population: { type: integer, description: "Profiles in the rarity population." }
+                  attack_version: { type: [string, "null"] }
+                  attack_notice: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v0/actors/{actor_id}:
+    get:
+      tags: [intel]
+      operationId: getActor
+      summary: One actor profile
+      x-foiled-status: implemented
+      x-foiled-store: bundle
+      x-foiled-scopes: [campaigns:read]
+      parameters:
+        - { name: actor_id, in: path, required: true, schema: { type: string, pattern: "^(attack|report):[A-Za-z0-9-]{1,64}$" } }
+      responses:
+        "200":
+          description: The profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActorProfile" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/actor-links:
+    get:
+      tags: [intel]
+      operationId: listActorLinks
+      summary: Actor possible-associations for campaigns and lone attempts
+      description: |
+        Matched on request over the campaigns (#33) and lone attempts (#25)
+        in the window: technique overlap weighted by rarity, indicator
+        overlap with public reports, and targeting. Geography and a shared
+        ASN are never evidence. Scored through #27 as `attempt_actor` and
+        capped in code: below `medium` without a shared indicator, below
+        `high` and never publishable until an analyst confirms. Wording is
+        "possible association" unless confirmed; `statement` is the only
+        sentence clients may show. The review queue (#35) reads
+        `status=pending&review_queue=true`. Strongest first.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [campaigns:read]
+      parameters:
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
+        - { name: status, in: query, schema: { type: string, enum: [pending, confirmed, rejected] } }
+        - { name: subject_kind, in: query, schema: { type: string, enum: [campaign, attempt] } }
+        - { name: subject_id, in: query, description: "A campaign or attempt id.", schema: { type: string } }
+        - { name: actor_id, in: query, schema: { type: string } }
+        - { name: review_queue, in: query, description: "Only pending links at or above radar_queue_min (#35).", schema: { type: boolean } }
+        - { name: min_confidence, in: query, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200":
+          description: Links.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, truncated]
+                properties:
+                  items: { type: array, items: { $ref: "../schemas/actor-link.schema.json" } }
+                  truncated: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v0/actor-links/{link_id}:
+    get:
+      tags: [intel]
+      operationId: getActorLink
+      summary: One actor link with its full explanation
+      description: The target of `confidence_ref` on a campaign's `suggested_actor_links`. Pass the same `since` and `until` as the read that found it.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [campaigns:read]
+      parameters:
+        - { $ref: "#/components/parameters/ActorLinkId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: The link.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/actor-link.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/actor-links/{link_id}/decision:
+    post:
+      tags: [review]
+      operationId: decideActorLink
+      summary: Confirm, reject or reopen an actor link (audited)
+      description: |
+        `confirm` is the only way an actor link reaches `high`, the wording
+        "confirmed association" and exports (#13); it needs a note saying
+        why. `reject` suppresses the link (score 0, never suggested or
+        exported). `reopen` returns it to pending. The latest decision per
+        campaign or attempt and actor is stored and applies on every later
+        read. Written to the audit log as `actor_link.<decision>` with the
+        score before. Rate limited per token (60 an hour by default).
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [review:write]
+      parameters:
+        - { $ref: "#/components/parameters/ActorLinkId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision, note]
+              properties:
+                decision: { type: string, enum: [confirm, reject, reopen] }
+                note: { type: string, maxLength: 1000, description: "Required (not blank) to confirm." }
+      responses:
+        "200":
+          description: The link as it scores now.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/actor-link.schema.json" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -2142,6 +2316,11 @@ components:
       in: path
       required: true
       schema: { type: string, pattern: "^cmp_[a-f0-9]{24}$" }
+    ActorLinkId:
+      name: link_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^acl_[a-f0-9]{24}$" }
     HostId:
       name: host_id
       in: path
@@ -2192,7 +2371,7 @@ components:
       name: include_actors
       in: query
       schema: { type: boolean, default: false }
-      description: Include actor links (#29), worded "possible association" unless high and analyst-confirmed.
+      description: Include actor links (#29). Only analyst-confirmed links are exported, even with `include_unreviewed`; pending and rejected links never leave. Each becomes an `intrusion-set` (with MITRE's notice marking when it is an ATT&CK group) and a relationship worded "confirmed association", or a MISP `threat-actor` attribute.
     ExportIncludePayloads:
       name: include_payloads
       in: query
@@ -2324,6 +2503,53 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    ActorProfile:
+      type: object
+      description: One actor profile from public sources (#29). ATT&CK groups carry MITRE's notice (see the list response); curated reports follow schemas/actor-report.schema.json.
+      required: [actor_id, label, label_kind, aliases, techniques, indicators, targeting, geo, sources, example]
+      properties:
+        actor_id: { type: string, pattern: "^(attack|report):[A-Za-z0-9-]{1,64}$" }
+        label: { type: string }
+        label_kind: { type: string, enum: [nexus, cluster, named_group] }
+        aliases: { type: array, items: { type: string } }
+        techniques: { type: array, items: { type: string } }
+        indicators:
+          type: array
+          items:
+            type: object
+            required: [type, value, source]
+            properties:
+              type: { type: string, enum: [ip, cidr, domain, url, sha256, asn] }
+              value: { type: string }
+              source: { type: integer, minimum: 0 }
+        targeting:
+          type: object
+          properties:
+            cves: { type: array, items: { type: string } }
+            catalogue_ids: { type: array, items: { type: string } }
+        geo:
+          type: object
+          description: Never evidence.
+          properties:
+            source_countries: { type: array, items: { type: string } }
+        sources:
+          type: array
+          items:
+            type: object
+            required: [kind, publisher, title, url, published, licence]
+            properties:
+              kind: { type: string, enum: [attack_group, vendor_report, government_advisory, misp_galaxy] }
+              publisher: { type: string }
+              title: { type: string }
+              url: { type: string }
+              published: { type: string }
+              retrieved: { type: string }
+              sha256: { type: string }
+              licence: { type: string }
+              licence_url: { type: string }
+        attack_version: { type: string }
+        example: { type: boolean }
+        notes: { type: string }
     JsonRpcRequest:
       type: object
       required: [jsonrpc, method]

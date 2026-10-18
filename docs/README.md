@@ -10,6 +10,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [attempts.md](attempts.md) | Exploit attempts: grouping, state machine, noise score and the attempts API. |
 | [attempt-timeline.md](attempt-timeline.md) | The attempt timeline: ordered events, state changes, text rendering, pcap slice extract and the TLS caveat. |
 | [campaigns.md](campaigns.md) | Campaign clustering across decoys and sensors: features, blocking and union-find, merge and split rules, stable ids, confidence and wording, mass versus selective targeting, analyst actions, tenant isolation and the campaigns API (#33). |
+| [actor-attribution.md](actor-attribution.md) | Actor possible-association from public sources: the source pin process, nexus and cluster labels, matching on TTPs, indicators and targeting, code-enforced caps and wording, analyst decisions, the API, exports, legal and ethical framing and what we will not say (#29). |
 | [iocs.md](iocs.md) | IOC extraction: types and sources, redaction and defanging, ASN context, the behaviour fingerprint format, memory-only implants, confidence and the IOC API. |
 | [intel-outputs.md](intel-outputs.md) | Intel exports: STIX 2.1, MISP, IOC CSV and JSON and the read-only TAXII 2.1 server, the mapping table, the confidence gate, wording, the auth model and where campaigns and actors plug in. |
 | [confidence.md](confidence.md) | The confidence layer: evidence, tier weights, caps, bands, wording, thresholds, overrides and worked examples. |

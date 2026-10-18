@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/actor-link.schema.json",
+  "title": "Foiled actor link",
+  "description": "One possible association between a campaign (#33) or a lone attempt (#25) and an actor profile from public sources (#29), scored through #27 as attempt_actor. Wording is \"possible association\" unless an analyst confirmed the link. Without an analyst a link stays below high and is never publishable. statement is the only sentence UI and exports may use. See docs/actor-attribution.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "link_id",
+    "tenant_id",
+    "subject_kind",
+    "subject_id",
+    "attempt_ids",
+    "actor_id",
+    "label",
+    "label_kind",
+    "status",
+    "wording",
+    "statement",
+    "score",
+    "band",
+    "publishable",
+    "review_queue",
+    "matched",
+    "not_counted",
+    "sources",
+    "example",
+    "confidence"
+  ],
+  "properties": {
+    "link_id": { "type": "string", "pattern": "^acl_[0-9a-f]{24}$" },
+    "tenant_id": { "type": "string" },
+    "subject_kind": { "enum": ["campaign", "attempt"] },
+    "subject_id": { "type": "string" },
+    "attempt_ids": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "actor_id": { "type": "string", "pattern": "^(attack|report):[A-Za-z0-9][A-Za-z0-9-]{0,63}$" },
+    "label": { "type": "string", "minLength": 1 },
+    "label_kind": { "enum": ["nexus", "cluster", "named_group"] },
+    "status": { "enum": ["pending", "confirmed", "rejected"] },
+    "wording": { "enum": ["possible association", "confirmed association"] },
+    "statement": {
+      "type": "string",
+      "minLength": 1,
+      "not": { "pattern": "(?i)(attributed to|attributable to|attribution to|is behind|are behind|responsible for|perpetrated|carried out by|conducted by)" }
+    },
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "band": { "enum": ["low", "medium", "high"] },
+    "publishable": { "type": "boolean" },
+    "review_queue": { "type": "boolean" },
+    "matched": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["techniques", "indicators", "targeting"],
+      "properties": {
+        "techniques": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "profiles_using", "rarity"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$" },
+              "profiles_using": { "type": "integer", "minimum": 0 },
+              "rarity": { "type": "integer", "minimum": 0, "maximum": 100 }
+            }
+          }
+        },
+        "indicators": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "display", "match", "weight", "stale", "observed", "source_url"],
+            "properties": {
+              "type": { "enum": ["ip", "cidr", "domain", "url", "sha256", "asn"] },
+              "display": { "type": "string", "description": "Defanged and escaped. Never parse this." },
+              "match": { "enum": ["exact", "subdomain", "in_range"] },
+              "ioc_id": { "type": "string" },
+              "weight": { "type": "integer", "minimum": 0, "maximum": 100 },
+              "stale": { "type": "boolean" },
+              "observed": { "type": "boolean", "description": "Seen by the defender as infrastructure in use (source or callback). False for values the attacker chose and sent." },
+              "source_url": { "type": "string" }
+            }
+          }
+        },
+        "targeting": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "not_counted": { "type": "array", "items": { "type": "string" } },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "publisher", "title", "url", "published", "licence"],
+        "properties": {
+          "kind": { "enum": ["attack_group", "vendor_report", "government_advisory", "misp_galaxy"] },
+          "publisher": { "type": "string" },
+          "title": { "type": "string" },
+          "url": { "type": "string", "pattern": "^https://" },
+          "published": { "type": "string" },
+          "retrieved": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "licence": { "type": "string", "minLength": 1 },
+          "licence_url": { "type": "string" }
+        }
+      }
+    },
+    "attack_version": { "type": "string" },
+    "example": { "type": "boolean" },
+    "confidence": {
+      "type": "object",
+      "description": "The #27 link (see confidence-link.schema.json), kind attempt_actor.",
+      "required": ["kind", "attempt_id", "target", "score", "band", "wording", "evidence", "contributions", "caps_applied", "publishable"],
+      "properties": {
+        "kind": { "const": "attempt_actor" },
+        "attempt_id": { "type": "string" },
+        "target": { "type": "string" },
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "band": { "enum": ["low", "medium", "high"] },
+        "wording": { "enum": ["possible association", "confirmed association"] },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["signal_id", "source", "weight", "summary"],
+            "properties": {
+              "signal_id": { "type": "string" },
+              "weight": { "type": "integer", "minimum": 0, "maximum": 100 },
+              "summary": { "type": "string" },
+              "ref": { "type": "string" },
+              "source": { "enum": ["rule", "sequence", "vuln_path_hook", "catalogue_prior", "vendor_desc", "predisclosure_backmatch", "enrichment", "llm", "analyst", "campaign_cluster", "noise_score", "actor_ttp_overlap", "actor_indicator_overlap", "actor_targeting", "actor_payload_overlap", "actor_asn_overlap"] }
+            }
+          }
+        },
+        "contributions": { "type": "array" },
+        "caps_applied": { "type": "array", "items": { "type": "string" } },
+        "publishable": { "type": "boolean" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "confirmed" } } },
+      "then": { "properties": { "wording": { "const": "confirmed association" } } },
+      "else": {
+        "properties": {
+          "wording": { "const": "possible association" },
+          "band": { "enum": ["low", "medium"] },
+          "publishable": { "const": false },
+          "statement": { "not": { "pattern": "(?i)confirmed" } }
+        }
+      }
+    }
+  ]
+}

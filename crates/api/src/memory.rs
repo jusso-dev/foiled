@@ -28,6 +28,7 @@ struct Inner {
     overrides: Vec<(String, LinkOverride)>,
     campaign_actions: Vec<(String, foiled_core::campaign::CampaignAction)>,
     campaign_registry: HashMap<String, foiled_core::campaign::Registry>,
+    actor_decisions: Vec<(String, foiled_core::actor::ActorDecision)>,
     /// Audit appends with this action fail, to test storage outages.
     fail_audit_action: Option<String>,
     cache: Vec<CacheEntry>,
@@ -646,6 +647,35 @@ impl Store for MemoryStore {
                 && x.target == o.target)
         });
         g.overrides.push((tenant_id.to_string(), o));
+        ready(Ok(()))
+    }
+
+    fn actor_decisions(
+        &self,
+        tenant_id: &str,
+        subject_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<foiled_core::actor::ActorDecision>> {
+        let wanted: std::collections::HashSet<String> = subject_ids.into_iter().collect();
+        let out = self
+            .lock()
+            .actor_decisions
+            .iter()
+            .filter(|(t, d)| t == tenant_id && wanted.contains(&d.subject_id))
+            .map(|(_, d)| d.clone())
+            .collect();
+        ready(Ok(out))
+    }
+
+    fn put_actor_decision(
+        &self,
+        tenant_id: &str,
+        d: foiled_core::actor::ActorDecision,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        g.actor_decisions.retain(|(t, x)| {
+            !(t == tenant_id && x.subject_id == d.subject_id && x.actor_id == d.actor_id)
+        });
+        g.actor_decisions.push((tenant_id.to_string(), d));
         ready(Ok(()))
     }
 

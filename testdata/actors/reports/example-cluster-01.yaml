@@ -1,0 +1,38 @@
+# Fictional example (#29). Every value is a documentation address, ASN or
+# reserved domain, and both publishers are made up. Matches the stage-2
+# campaign in testdata/campaigns/fleet-wave.input.json for the golden test.
+id: example-cluster-01
+example: true
+label:
+  kind: cluster
+  text: EXAMPLE-CLUSTER-01
+aliases: [EXAMPLE-LOADER-CREW]
+sources:
+  - kind: vendor_report
+    publisher: Example Threat Research (fictional)
+    title: Loader waves against demo upload endpoints
+    url: https://reports.example.com/2026/example-cluster-01
+    published: "2026-09-14"
+    retrieved: "2026-10-01"
+    sha256: e1f75d6e4e5d830fa4c41e06698cb5123bfc9bf557eb8d745b4dd77e3a5d814c
+    licence: Fictional example for tests and docs; no third-party content
+  - kind: government_advisory
+    publisher: Example National CERT (fictional)
+    title: Advisory EX-2026-001, upload path traversal exploitation
+    url: https://advisories.example.org/ex-2026-001
+    published: "2026-09-20"
+    retrieved: "2026-10-01"
+    sha256: d89b7765b3fc9ba1f22d998f42494b92dfe5ec47eba5e658095318ce80a42836
+    licence: Fictional example for tests and docs; no third-party content
+techniques: [T1190, T1059.004, T1105]
+indicators:
+  - { type: domain, value: stage2.example.invalid }
+  - { type: ip, value: 192.0.2.80, source: 1 }
+  - { type: cidr, value: 203.0.113.128/25 }
+  - { type: sha256, value: 965d7fd31d6ff8eabb9813b058ea3420e100fe252a30e17d4fdc81f541ce2f08 }
+targeting:
+  cves: [FOILED-DEMO-0001]
+  catalogue_ids: [foiled/demo-app/1.0.0]
+geo:
+  source_countries: [XA]
+notes: Reported as a loader crew reusing one stage-2 host. Fictional.

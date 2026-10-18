@@ -1191,6 +1191,67 @@ impl Store for CfStore {
         })
     }
 
+    fn actor_decisions(
+        &self,
+        tenant_id: &str,
+        subject_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<foiled_core::actor::ActorDecision>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            if subject_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            let client = self.pg().await?;
+            let rows = foiled_pg::actor_decisions(&client, &t, &subject_ids)
+                .await
+                .map_err(err)?;
+            Ok(rows
+                .into_iter()
+                .filter_map(|r| {
+                    let feedback =
+                        serde_json::from_value(serde_json::Value::String(r.feedback)).ok()?;
+                    Some(foiled_core::actor::ActorDecision {
+                        subject_id: r.subject_id,
+                        actor_id: r.actor_id,
+                        decision: foiled_core::confidence::Override {
+                            feedback,
+                            analyst_id: r.analyst_id,
+                            at: r.at,
+                            note: r.note,
+                        },
+                    })
+                })
+                .collect())
+        })
+    }
+
+    fn put_actor_decision(
+        &self,
+        tenant_id: &str,
+        d: foiled_core::actor::ActorDecision,
+    ) -> StoreFuture<'_, ()> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let feedback = serde_json::to_value(d.decision.feedback)
+                .map_err(err)?
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_default();
+            let row = foiled_pg::ActorDecisionRow {
+                subject_id: d.subject_id,
+                actor_id: d.actor_id,
+                feedback,
+                analyst_id: d.decision.analyst_id,
+                at: d.decision.at,
+                note: d.decision.note,
+            };
+            let client = self.pg().await?;
+            foiled_pg::put_actor_decision(&client, &t, &row)
+                .await
+                .map_err(err)
+        })
+    }
+
     fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()> {
         let t = tenant_id.to_string();
         wrap(async move {

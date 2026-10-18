@@ -67,6 +67,8 @@ pub struct Limits {
     /// cache (#11). Each covers up to 98 observables. The default leaves
     /// room inside the D1 Free plan's 50 queries per Worker invocation.
     pub enrichment_lookup_statements: usize,
+    /// Actor link decisions per principal per hour (#29).
+    pub actor_decisions_per_hour: u32,
 }
 
 impl Default for Limits {
@@ -87,6 +89,7 @@ impl Default for Limits {
             campaign_actions_per_hour: 60,
             max_window_events: routes::attempts::MAX_WINDOW_EVENTS,
             enrichment_lookup_statements: 20,
+            actor_decisions_per_hour: 60,
         }
     }
 }
@@ -111,6 +114,8 @@ pub struct AppState {
     pub mcp: Arc<foiled_core::mcp::McpConfig>,
     /// Signs enrolment CSRs; `None` disables enrolment and renewal (#31).
     pub cert_issuer: Option<Arc<dyn issuer::CertIssuer>>,
+    /// The actor reference catalogue (#29).
+    pub actors: Arc<foiled_core::actor::ActorCatalogue>,
 }
 
 impl AppState {
@@ -125,6 +130,7 @@ impl AppState {
             job_signer: None,
             mcp: Arc::new(mcp::bundled_config()),
             cert_issuer: None,
+            actors: links::bundled_actor_catalogue(),
         }
     }
 }
@@ -162,6 +168,7 @@ fn rest_routes() -> Router<AppState> {
         .merge(routes::attempts::router())
         .merge(routes::iocs::router())
         .merge(routes::campaigns::router())
+        .merge(routes::actors::router())
 }
 
 /// The REST API alone. MCP tool calls are replayed against this router, so

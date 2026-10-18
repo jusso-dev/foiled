@@ -56,6 +56,9 @@ pub struct CampaignQuery {
     pub ioc_id: Option<String>,
     /// 0 to 100, against the campaign's confidence score (#27).
     pub min_confidence: Option<u8>,
+    /// `actors`: fill `suggested_actor_links` (#29). Off by default, so a
+    /// list does not run the actor matcher.
+    pub include: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -208,7 +211,16 @@ async fn list(
             "min_confidence must be between 0 and 100",
         ));
     }
-    let m = model(&state, &who.tenant_id, q.since, q.until).await?;
+    let actors = match q.include.as_deref() {
+        None => false,
+        Some("actors") => true,
+        Some(_) => return Err(ApiError::bad_request("include must be actors")),
+    };
+    let mut m = model(&state, &who.tenant_id, q.since, q.until).await?;
+    if actors {
+        // Actor possible-associations (#29) on `suggested_actor_links`.
+        crate::routes::actors::attach_to_model(&state, &who.tenant_id, &mut m).await?;
+    }
     let mut items: Vec<Campaign> = m
         .campaigns
         .campaigns
@@ -267,7 +279,10 @@ async fn get_one(
     }
     let m = model(&state, &who.tenant_id, q.since, q.until).await?;
     if let Some(c) = m.campaigns.get(&campaign_id) {
-        return Ok(Json(CampaignView::Full(Box::new(c.clone()))));
+        let mut c = c.clone();
+        // Actor possible-associations (#29) for this campaign only.
+        crate::routes::actors::attach_to_campaign(&state, &who.tenant_id, &m, &mut c).await?;
+        return Ok(Json(CampaignView::Full(Box::new(c))));
     }
     // Recorded, but not listed in this window: a stub, so ids on attempts
     // always resolve.
@@ -526,7 +541,19 @@ async fn act(
         record,
     )
     .await;
-    let campaign = after.get(&campaign_id).cloned();
+    let mut campaign = after.get(&campaign_id).cloned();
+    if let Some(c) = campaign.as_mut() {
+        // Actor possible-associations (#29) for this campaign only.
+        crate::routes::actors::match_window(
+            &state,
+            &who.tenant_id,
+            std::slice::from_mut(c),
+            &[],
+            &m.iocs,
+            &inputs,
+        )
+        .await?;
+    }
     Ok(Json(ActionResult { action, campaign }))
 }
 

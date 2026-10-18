@@ -58,7 +58,7 @@ The contract is [`schemas/campaign.schema.json`](../schemas/campaign.schema.json
 | `shared_ioc_ids` | IOC ids (#34) seen in at least two members, for pivoting. |
 | `confidence_ref` | `/v0/campaigns/{campaign_id}/evidence`: the full #27 explanation. |
 | `confidence` | Score, band, wording, publishable, evidence and caps for the campaign as a whole. |
-| `suggested_actor_links[]` | Attachment point for #29. Always empty from clustering. |
+| `suggested_actor_links[]` | Actor possible-associations (#29, [actor-attribution.md](actor-attribution.md)): pending and confirmed links, strongest first, at most five. Never filled by clustering. |
 | `analyst` | Analyst title, status override, latest feedback, `merged_from`, `split_from` and the action ids applied. |
 | `notes` | Plain-language notes, for example when a member had more features than were used. |
 
@@ -239,12 +239,13 @@ Fields that do not belong to the action are refused. Actions are replayed in `(a
 
 ## Actor suggestions
 
-`suggested_actor_links[]` is the attachment point for #29 and is always empty from clustering. When #29 lands, each item is `{label, wording, confidence_ref, report_urls}`:
+`suggested_actor_links[]` is never filled by clustering. The actor matcher (#29, [actor-attribution.md](actor-attribution.md)) fills it on campaign detail, on the campaign an action returns, and on the list with `include=actors`, and each item is `{link_id, actor_id, label, wording, score, band, status, confidence_ref, report_urls}`, with `confidence_ref` pointing at `/v0/actor-links/{link_id}`:
 
 - Labels prefer a nexus or a named public cluster ("nexus overlapping TTPs reported in <public report>") over hard numbering without sources.
 - `wording` is "possible association" unless the actor link is `high` and analyst-confirmed (#27), when it may read "confirmed association".
 - `report_urls` link the public reports the suggestion rests on.
-- The suggestion's confidence is a separate `attempt_actor` link through #27. Campaign confidence never feeds actor confidence above `medium` without an analyst, and a campaign is never labelled with an actor automatically at high confidence.
+- The suggestion's confidence is a separate `attempt_actor` link through #27. Campaign confidence never feeds actor confidence: the actor link is capped below `medium` without a shared indicator and below `high` until an analyst confirms it, so a campaign is never labelled with an actor automatically at high confidence.
+- Rejected links are left out; `status` is `pending` or `confirmed`.
 
 What campaigns will not say: that an actor, country or organisation is behind a campaign; that a campaign is "confirmed" without an analyst; that a shared ASN, hosting provider or geography means a shared operator.
 

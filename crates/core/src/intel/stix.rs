@@ -375,6 +375,54 @@ fn link_target(
                 "description".into(),
                 json!("A publicly named group. Foiled links to it carry their own wording and confidence; read the relationship, not this object, for the claim."),
             );
+            // The public sources behind the actor profile (#29): MITRE's
+            // group page for an ATT&CK group, the report URLs otherwise.
+            // Foiled's own object, never MITRE's id (as for attack-pattern).
+            let actor_id = crate::actor::link_actor_id(link);
+            let mut refs: Vec<Value> = Vec::new();
+            let mut urls: Vec<&str> = link
+                .evidence
+                .iter()
+                .filter_map(|e| e.reference.as_deref())
+                .filter(|u| u.starts_with("https://"))
+                .collect();
+            urls.sort_unstable();
+            urls.dedup();
+            let attack_group = crate::actor::is_attack_group_link(link);
+            if let Some(gid) = actor_id
+                .as_deref()
+                .and_then(|a| a.strip_prefix("attack:"))
+                .filter(|_| attack_group)
+            {
+                let mut ext = json!({"source_name": "mitre-attack", "external_id": printable(gid)});
+                if let Some(u) = urls
+                    .iter()
+                    .find(|u| u.starts_with("https://attack.mitre.org/"))
+                {
+                    ext["url"] = json!(printable(u));
+                }
+                refs.push(ext);
+            } else {
+                for u in urls.iter().take(8) {
+                    refs.push(json!({"source_name": "public-report", "url": printable(u)}));
+                }
+            }
+            if !refs.is_empty() {
+                m.insert("external_references".into(), Value::Array(refs));
+            }
+            if let Some(a) = &actor_id {
+                m.insert("x_foiled_actor_id".into(), json!(printable(a)));
+            }
+            if attack_group {
+                let mut markings = vec![json!(tlp_marking_id(tlp))];
+                if let Some(n) = notice_marking {
+                    markings.push(json!(n));
+                }
+                m.insert("object_marking_refs".into(), Value::Array(markings));
+                if let Some(v) = &sel.attack_version {
+                    m.insert("x_foiled_attack_version".into(), json!(v));
+                }
+            }
             (id, Value::Object(m))
         }
     }

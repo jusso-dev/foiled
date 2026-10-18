@@ -5,7 +5,8 @@
 //!   `sequences.json` and `advisories.json`;
 //! - `configs/mcp.yaml` (#24) as `mcp_config.json`;
 //! - `configs/retention.yaml` (#16) as `retention_config.json`;
-//! - `configs/enrichment.yaml` (#11) as `enrichment_config.json`.
+//! - `configs/enrichment.yaml` (#11) as `enrichment_config.json`;
+//! - `catalogue/actors/*.yaml` (#29) as `actor_reports.json`, sorted by id.
 //!
 //! Each deploy serves exactly what was merged. `foiled-lint` validates the
 //! files in CI; this script only converts YAML to JSON.
@@ -62,4 +63,5 @@ fn main() {
     bundle_file("configs/mcp.yaml", "mcp_config.json");
     bundle_file("configs/retention.yaml", "retention_config.json");
     bundle_file("configs/enrichment.yaml", "enrichment_config.json");
+    bundle("catalogue/actors", "actor_reports.json");
 }

@@ -371,6 +371,22 @@ pub trait Store: Send + Sync {
         action: foiled_core::campaign::CampaignAction,
     ) -> StoreFuture<'_, ()>;
 
+    /// The latest analyst decision on each actor link (#29) of these
+    /// subjects (campaign or attempt ids).
+    fn actor_decisions(
+        &self,
+        tenant_id: &str,
+        subject_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<foiled_core::actor::ActorDecision>>;
+
+    /// Record an analyst decision on an actor link, replacing any earlier
+    /// one for the same subject and actor.
+    fn put_actor_decision(
+        &self,
+        tenant_id: &str,
+        d: foiled_core::actor::ActorDecision,
+    ) -> StoreFuture<'_, ()>;
+
     /// Source IPs seen since `since` (Unix ms), oldest first.
     fn ip_iocs(&self, tenant_id: &str, since: i64) -> StoreFuture<'_, Vec<IpIocRow>>;
 

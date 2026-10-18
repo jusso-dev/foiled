@@ -126,6 +126,18 @@ pub const BINDINGS: &[Binding] = &[
         schema: "schemas/misp-event.schema.json",
     },
     Binding {
+        data_dir: "catalogue/actors",
+        schema: "schemas/actor-report.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/actors/reports",
+        schema: "schemas/actor-report.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/actors/expected",
+        schema: "schemas/actor-link.schema.json",
+    },
+    Binding {
         data_dir: "testdata/agent/jobs",
         schema: "schemas/agent/job.schema.json",
     },

@@ -153,6 +153,17 @@ pub fn index_overrides(list: Vec<LinkOverride>) -> OverrideIndex {
     out
 }
 
+/// Links that come from clustering and matching rather than from one
+/// attempt's own events.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowLinks<'a> {
+    /// Campaigns over the same window (#33); each member gets its own link.
+    pub campaigns: &'a [foiled_core::campaign::Campaign],
+    /// Actor links per attempt (#29), from `actor::export_links`, so only
+    /// confirmed ones.
+    pub actors: Option<&'a BTreeMap<String, Vec<foiled_core::confidence::ConfidenceLink>>>,
+}
+
 /// The export input for attempts built from `events`: links scored with
 /// the bundled rules and catalogue (with overrides applied) and IOC notes
 /// from `extraction`. Pure, so golden tests build exactly what the routes
@@ -164,8 +175,9 @@ pub fn export_input(
     extraction: &Extraction,
     iocs: Vec<Ioc>,
     overrides: &OverrideIndex,
-    campaigns: &[foiled_core::campaign::Campaign],
+    window: WindowLinks<'_>,
 ) -> ExportInput {
+    let (campaigns, actor_links) = (window.campaigns, window.actors);
     let cfg_links = ConfidenceConfig::default();
     // Each member's own link (#33): its joins, carried-over state and noise,
     // so a weak or carried-over member is never exported with the
@@ -201,6 +213,11 @@ pub fn export_input(
                 && let Some(l) = member_links.get(&(attempt.attempt_id.clone(), c.clone()))
             {
                 links.push(l.clone());
+            }
+            // Actor possible-associations (#29), already reduced by
+            // `actor::export_links` to confirmed (the only publishable) ones.
+            if let Some(list) = actor_links.and_then(|m| m.get(&attempt.attempt_id)) {
+                links.extend(list.iter().cloned());
             }
             let summary = extraction.for_attempt(&attempt.attempt_id);
             AttemptRecord {
@@ -293,6 +310,24 @@ pub(crate) async fn selection_capped(
         cap,
     )
     .await?;
+    // Actor links (#29) only when the export opts in. Pending and rejected
+    // links never leave, even with `include_unreviewed`: `export_links`
+    // keeps confirmed links only.
+    let actor_links = match m.inputs.as_ref() {
+        Some(inputs) if opts.include_actors => {
+            let (links, _, _) = crate::routes::actors::match_window(
+                state,
+                &who.tenant_id,
+                &mut m.campaigns.campaigns,
+                &m.attempts,
+                &m.iocs,
+                inputs,
+            )
+            .await?;
+            foiled_core::actor::export_links(&links)
+        }
+        _ => BTreeMap::new(),
+    };
     let attempts: Vec<Attempt> = m
         .attempts
         .into_iter()
@@ -325,7 +360,10 @@ pub(crate) async fn selection_capped(
         &m.iocs,
         iocs,
         &overrides,
-        &m.campaigns.campaigns,
+        WindowLinks {
+            campaigns: &m.campaigns.campaigns,
+            actors: Some(&actor_links),
+        },
     );
     let scope = {
         use sha2::{Digest, Sha256};
