@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::Auth;
 use crate::error::{ApiError, JsonBody};
+use crate::routes::check_rate;
 
 /// Largest object a single presigned PUT may carry. Bigger artefacts need
 /// multipart upload, which is not offered yet.
@@ -94,6 +95,16 @@ async fn ingest_events(
 ) -> Result<(StatusCode, Json<Accepted>), ApiError> {
     let who = require_any(&auth, [Scope::HostIngest, Scope::SensorIngest])?.clone();
     let source = source_of(&who)?;
+    // Per-identity flood control: a stolen certificate cannot exhaust the
+    // ingest Queue for everyone else (#31 tabletop, step 8).
+    check_rate(
+        &state,
+        &who,
+        "ingest.batch",
+        state.limits.ingest_batches_per_minute,
+        60_000,
+    )
+    .await?;
     if batch.events.is_empty() || batch.events.len() > MAX_BATCH {
         return Err(ApiError::bad_request(format!(
             "a batch holds 1 to {MAX_BATCH} events"

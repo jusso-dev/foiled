@@ -1,5 +1,6 @@
 //! Route handlers grouped by resource.
 
+pub mod agents;
 pub mod attempts;
 pub mod audit;
 pub mod catalogue;
@@ -38,6 +39,26 @@ pub(crate) fn audit_record(
         detail: serde_json::Value::Null,
     }
 }
+
+/// Count one hit against a fixed-window rate limit for this principal.
+/// `window_ms` is the window length, for example an hour.
+pub(crate) async fn check_rate(
+    state: &AppState,
+    who: &Principal,
+    bucket: &str,
+    limit: u32,
+    window_ms: i64,
+) -> Result<(), crate::error::ApiError> {
+    let window = (state.clock)() / window_ms * window_ms;
+    let key = format!("{bucket}:{}:{}", who.tenant_id, who.id);
+    if state.store.rate_limit(&key, window, limit).await? {
+        Ok(())
+    } else {
+        Err(crate::error::ApiError::rate_limited())
+    }
+}
+
+pub(crate) const HOUR_MS: i64 = 3_600_000;
 
 /// Clamp a `limit` query parameter.
 pub(crate) fn page_limit(requested: Option<usize>) -> usize {

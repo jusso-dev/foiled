@@ -42,7 +42,7 @@ tags:
   - name: decoys
     description: "Decoy lifecycle (#8, #21)."
   - name: hosts
-    description: "Sandbox host agent channel, mTLS only (#41)."
+    description: "Sandbox host registry and enrolment (operators), and the host agent channel (mTLS only) (#41, #31)."
   - name: ingest
     description: "Evidence ingest from hosts and sensors, mTLS only (#9, #31)."
   - name: attempts
@@ -52,7 +52,7 @@ tags:
   - name: review
     description: "Analyst review queue (#35)."
   - name: sensors
-    description: "Edge sensor enrolment (#31)."
+    description: "Edge sensor registry, enrolment, revocation and the sensor agent channel (#31)."
   - name: quarantine
     description: "Quarantined payload metadata (#9)."
   - name: exports
@@ -230,6 +230,196 @@ paths:
   /v0/decoys/{decoy_id}:destroy:
     $ref: "#/components/pathItems/DecoyAction"
 
+  /v0/hosts:
+    get:
+      tags: [hosts]
+      operationId: listHosts
+      summary: List registered hosts
+      description: Newest first, this tenant only (#31).
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [hosts:read]
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { name: cursor, in: query, schema: { type: string }, description: "`next_cursor` from the previous page." }
+      responses:
+        "200":
+          description: Registered hosts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentList" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [hosts]
+      operationId: registerHost
+      summary: Register a host and mint its one-time enrolment token
+      description: |
+        Creates a `pending` host in the caller's tenant and returns a
+        one-time enrolment token (`foe_<id>.<secret>`), shown once and stored
+        only as a SHA-256 hash. The token expires after
+        `enrolment_ttl_seconds` (default 3600, 300 to 86400) and is redeemed
+        with `POST /v0/enrol`. Research hosts default to `sandbox_allowed: true`. This is the enrolment path for sandbox hosts (#41). Audited as `host.create`;
+        the token is never written to the audit log. Rate limited per
+        principal (default 10 an hour).
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [hosts:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterAgent" }
+      responses:
+        "201":
+          description: Registered. Hand the token to the host over a trusted channel.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/hosts/{host_id}:
+    get:
+      tags: [hosts]
+      operationId: getHost
+      summary: One registered host
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [hosts:read]
+      parameters:
+        - { name: host_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The host.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/agent/agent-record.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/hosts/{host_id}:revoke:
+    post:
+      tags: [hosts]
+      operationId: revokeHost
+      summary: Revoke a host and every certificate it holds
+      description: |
+        Final. Marks the host and all of its certificates revoked in D1 (the
+        Worker refuses them from this request on), closes any unused
+        enrolment token, then revokes each certificate at the
+        Cloudflare-managed CA so the WAF rule's `cert_revoked` check blocks it
+        at the edge. `ca_failed` counts certificates the CA did not revoke;
+        finish those in the dashboard. A `reason` is required and audited as
+        `host.revoke`. A revoked host cannot be re-enrolled: register a
+        new one.
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [hosts:write]
+      parameters:
+        - { name: host_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentAction" }
+      responses:
+        "200":
+          description: Revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentRevoked" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v0/hosts/{host_id}:reenrol:
+    post:
+      tags: [hosts]
+      operationId: reenrolHost
+      summary: Mint a new enrolment token for a host that lost its key
+      description: |
+        For a rebuilt or wiped host that is not suspected of compromise
+        (revoke that instead). Any unused token is closed. Redeeming the new
+        token retires the host's existing certificates immediately, with
+        no grace period. Audited as `host.reenrol`; refused with 409 for a
+        revoked host.
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [hosts:write]
+      parameters:
+        - { name: host_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentAction" }
+      responses:
+        "201":
+          description: New token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/hosts/{host_id}/certificate:renew:
+    post:
+      tags: [hosts]
+      operationId: renewHostCertificate
+      summary: Renew this host's client certificate with a new key
+      description: |
+        Called by the host itself over mTLS, with a CSR for a freshly
+        generated key. The previous certificate keeps working for 24 hours
+        so a lost response can be retried, then stops. Only as itself
+        (403 otherwise), only while active, and rate limited (default 4 a
+        day). Audited as `host.renew`.
+      security: [{ mtls: [] }]
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [host:report]
+      parameters:
+        - { name: host_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [csr_pem]
+              properties:
+                csr_pem: { type: string, maxLength: 8192 }
+      responses:
+        "201":
+          description: New certificate.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/agent/enrol-response.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: The certificate authority did not issue a certificate.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Certificate issuance is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /v0/hosts/{host_id}/heartbeat:
     post:
       tags: [hosts]
@@ -405,17 +595,325 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/Unprocessable" }
 
+  /v0/enrol:
+    post:
+      tags: [sensors]
+      operationId: enrol
+      summary: Redeem a one-time enrolment token with a CSR
+      description: |
+        Called once by a new sensor or host, before it has a certificate, on
+        the ingest hostname (the only path the mTLS WAF rule exempts). The
+        agent generates its key pair locally and sends only a CSR; a body
+        holding a private key is refused. The token decides the identity
+        (id, role, tenant, scopes); the CSR subject is ignored. The CSR is
+        signed by the Cloudflare-managed client CA and the certificate's
+        SHA-256 fingerprint is bound to the identity in D1. Tokens are single
+        use: reuse, a wrong secret or an expired token is 401 and audited as
+        `sensor.enrol` or `host.enrol` with outcome `denied`. Rate limited
+        per source IP (default 30 an hour).
+      security: []
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "../schemas/agent/enrol-request.schema.json" }
+      responses:
+        "201":
+          description: Enrolled. Store the certificate next to the private key.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/agent/enrol-response.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: The certificate authority did not issue a certificate. The token is spent; re-enrol.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Certificate issuance is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /v0/sensors:
     get:
       tags: [sensors]
       operationId: listSensors
-      summary: Edge sensor enrolment status
-      x-foiled-status: planned
-      x-foiled-issue: 31
+      summary: List registered sensors
+      description: Newest first, this tenant only (#31).
+      x-foiled-status: implemented
       x-foiled-store: d1
       x-foiled-scopes: [sensors:read]
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { name: cursor, in: query, schema: { type: string }, description: "`next_cursor` from the previous page." }
       responses:
-        "200": { description: "Sensors for the tenant." }
+        "200":
+          description: Registered sensors.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentList" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [sensors]
+      operationId: registerSensor
+      summary: Register a sensor and mint its one-time enrolment token
+      description: |
+        Creates a `pending` sensor in the caller's tenant and returns a
+        one-time enrolment token (`foe_<id>.<secret>`), shown once and stored
+        only as a SHA-256 hash. The token expires after
+        `enrolment_ttl_seconds` (default 3600, 300 to 86400) and is redeemed
+        with `POST /v0/enrol`. Edge sensors default to `sandbox_allowed: false` (emulations only) and `share_opt_in: null` (the contribute-back default, off for edge sensors). Audited as `sensor.create`;
+        the token is never written to the audit log. Rate limited per
+        principal (default 10 an hour).
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [sensors:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterAgent" }
+      responses:
+        "201":
+          description: Registered. Hand the token to the sensor over a trusted channel.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/sensors/{sensor_id}:
+    get:
+      tags: [sensors]
+      operationId: getSensor
+      summary: One registered sensor
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [sensors:read]
+      parameters:
+        - { name: sensor_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The sensor.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/agent/agent-record.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/sensors/{sensor_id}:revoke:
+    post:
+      tags: [sensors]
+      operationId: revokeSensor
+      summary: Revoke a sensor and every certificate it holds
+      description: |
+        Final. Marks the sensor and all of its certificates revoked in D1 (the
+        Worker refuses them from this request on), closes any unused
+        enrolment token, then revokes each certificate at the
+        Cloudflare-managed CA so the WAF rule's `cert_revoked` check blocks it
+        at the edge. `ca_failed` counts certificates the CA did not revoke;
+        finish those in the dashboard. A `reason` is required and audited as
+        `sensor.revoke`. A revoked sensor cannot be re-enrolled: register a
+        new one.
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [sensors:write]
+      parameters:
+        - { name: sensor_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentAction" }
+      responses:
+        "200":
+          description: Revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentRevoked" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v0/sensors/{sensor_id}:reenrol:
+    post:
+      tags: [sensors]
+      operationId: reenrolSensor
+      summary: Mint a new enrolment token for a sensor that lost its key
+      description: |
+        For a rebuilt or wiped sensor that is not suspected of compromise
+        (revoke that instead). Any unused token is closed. Redeeming the new
+        token retires the sensor's existing certificates immediately, with
+        no grace period. Audited as `sensor.reenrol`; refused with 409 for a
+        revoked sensor.
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [sensors:write]
+      parameters:
+        - { name: sensor_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentAction" }
+      responses:
+        "201":
+          description: New token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/sensors/{sensor_id}/certificate:renew:
+    post:
+      tags: [sensors]
+      operationId: renewSensorCertificate
+      summary: Renew this sensor's client certificate with a new key
+      description: |
+        Called by the sensor itself over mTLS, with a CSR for a freshly
+        generated key. The previous certificate keeps working for 24 hours
+        so a lost response can be retried, then stops. Only as itself
+        (403 otherwise), only while active, and rate limited (default 4 a
+        day). Audited as `sensor.renew`.
+      security: [{ mtls: [] }]
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [sensor:report]
+      parameters:
+        - { name: sensor_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [csr_pem]
+              properties:
+                csr_pem: { type: string, maxLength: 8192 }
+      responses:
+        "201":
+          description: New certificate.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/agent/enrol-response.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: The certificate authority did not issue a certificate.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Certificate issuance is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v0/sensors/{sensor_id}/heartbeat:
+    post:
+      tags: [sensors]
+      operationId: sensorHeartbeat
+      summary: Edge sensor health report
+      description: Same body as the host heartbeat. The control plane records clock skew and where the sensor reported from; a move to another ASN (or, without ASNs, another IPv4 /16 or IPv6 /32) sets `network_changed_at` and is audited as `sensor.network_changed` (#31).
+      security: [{ mtls: [] }]
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [sensor:report]
+      parameters:
+        - { name: sensor_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "../schemas/agent/heartbeat.schema.json" }
+      responses:
+        "204": { description: "Recorded." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v0/sensors/{sensor_id}/jobs:lease:
+    post:
+      tags: [sensors]
+      operationId: leaseSensorJobs
+      summary: Lease signed jobs placed on this sensor
+      description: |
+        As the host lease, with one difference: an edge sensor only receives
+        jobs already placed on it (`sensor_id` at decoy create). It never
+        takes unplaced work meant for research hosts (#31).
+      security: [{ mtls: [] }]
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [sensor:lease]
+      parameters:
+        - { name: sensor_id, in: path, required: true, schema: { type: string } }
+        - { name: max, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 10 } }
+      responses:
+        "200":
+          description: Zero or more signed jobs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobs, lease_expires_at]
+                properties:
+                  jobs:
+                    type: array
+                    items: { $ref: "../schemas/agent/signed-job.schema.json" }
+                  lease_expires_at: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: Job signing is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v0/sensors/{sensor_id}/jobs/{job_id}:ack:
+    post:
+      tags: [sensors]
+      operationId: ackSensorJob
+      summary: Report a job result from an edge sensor
+      description: As the host acknowledgement. Audited as `job.ack`.
+      security: [{ mtls: [] }]
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [sensor:lease]
+      parameters:
+        - { name: sensor_id, in: path, required: true, schema: { type: string } }
+        - { name: job_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "../schemas/agent/job-result.schema.json" }
+      responses:
+        "204": { description: "Recorded." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /v0/attempts:
     get:
@@ -1008,9 +1506,11 @@ components:
       type: mutualTLS
       description: |
         Sandbox hosts (scopes host:lease, host:report, host:ingest,
-        host:upload) and edge sensors (sensor:ingest, sensor:upload,
-        sensor:heartbeat) on the ingest hostname. Verified by a WAF rule and
-        again in the Worker from `cf.tlsClientAuth`.
+        host:upload) and edge sensors (sensor:lease, sensor:report,
+        sensor:ingest, sensor:upload) on the ingest hostname. Verified by a
+        WAF rule and again in the Worker from `cf.tlsClientAuth`; the
+        certificate's SHA-256 fingerprint maps to one identity, role and
+        tenant in D1. Certificates are issued through `POST /v0/enrol` (#31).
 
   parameters:
     Limit:
@@ -1202,6 +1702,9 @@ components:
         label: { type: string, maxLength: 100 }
         lifetime_seconds: { type: integer, minimum: 1, maximum: 604800, default: 86400 }
         allow_draft: { type: boolean, default: false }
+        sensor_id:
+          type: string
+          description: Place the decoy on this edge sensor of the caller's tenant (#31). The sensor must not be revoked, and sandbox entries need `sandbox_allowed` on the sensor. Without it, the first research host to lease the job takes it.
     Decoy:
       type: object
       required: [id, tenant_id, catalogue_id, decoy_kind, state, generation, created_at, updated_at, expires_at, created_by]
@@ -1249,6 +1752,47 @@ components:
           items: { type: array, items: { type: string }, minItems: 2, maxItems: 2 }
         payload_ref: { type: string, examples: ["r2://foiled-evidence/t1/dcy-1/_/network/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"] }
         expires_at: { type: integer, description: Unix ms. }
+    RegisterAgent:
+      type: object
+      additionalProperties: false
+      properties:
+        label: { type: string, minLength: 1, maxLength: 100 }
+        sandbox_allowed: { type: boolean, description: "Default false for sensors, true for hosts." }
+        share_opt_in: { type: [boolean, "null"], description: "Contribute-back choice (#37). Omit for the policy default." }
+        enrolment_ttl_seconds: { type: integer, minimum: 300, maximum: 86400, default: 3600 }
+    AgentAction:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { $ref: "#/components/schemas/Reason" }
+        enrolment_ttl_seconds: { type: integer, minimum: 300, maximum: 86400, default: 3600, description: "Re-enrol only." }
+    AgentCreated:
+      type: object
+      required: [agent, enrolment]
+      properties:
+        agent: { $ref: "../schemas/agent/agent-record.schema.json" }
+        enrolment:
+          type: object
+          required: [token, expires_at]
+          properties:
+            token: { type: string, description: "`foe_<id>.<secret>`. Shown once; only its hash is stored." }
+            expires_at: { type: integer, description: Unix ms. }
+    AgentList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "../schemas/agent/agent-record.schema.json" }
+        next_cursor: { type: [string, "null"] }
+    AgentRevoked:
+      type: object
+      required: [agent, ca_revoked, ca_failed]
+      properties:
+        agent: { $ref: "../schemas/agent/agent-record.schema.json" }
+        ca_revoked: { type: integer, minimum: 0 }
+        ca_failed: { type: integer, minimum: 0 }
     AuditRecord:
       type: object
       required: [id, ts, tenant_id, actor_id, actor_kind, action, outcome]

@@ -11,15 +11,16 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use foiled_core::audit::Outcome;
-use foiled_core::auth::{Principal, Scope};
-use foiled_core::catalogue::{Artefact, EntryStatus, Runtime};
+use foiled_core::auth::{Role, Scope};
+use foiled_core::catalogue::{Artefact, DecoyKind, EntryStatus, Runtime};
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
+use foiled_core::enrolment::AgentStatus;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::auth::Auth;
 use crate::error::{ApiError, JsonBody};
-use crate::routes::{audit_record, page_limit};
+use crate::routes::{HOUR_MS, audit_record, check_rate, page_limit};
 use crate::store::{DecoyQuery, JobRecord};
 
 pub fn router() -> Router<AppState> {
@@ -40,6 +41,9 @@ pub struct CreateDecoy {
     /// Launch a `draft` entry. Needs the `decoys:elevate` scope.
     #[serde(default)]
     pub allow_draft: bool,
+    /// Place the decoy on this edge sensor of the caller's tenant (#31).
+    /// Without it the first research host to lease the job takes it.
+    pub sensor_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -87,22 +91,6 @@ fn idempotency_key(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
             }
             Ok(Some(s.to_string()))
         }
-    }
-}
-
-async fn check_rate(
-    state: &AppState,
-    who: &Principal,
-    bucket: &str,
-    limit: u32,
-) -> Result<(), ApiError> {
-    let hour_ms = 3_600_000;
-    let window = (state.clock)() / hour_ms * hour_ms;
-    let key = format!("{bucket}:{}:{}", who.tenant_id, who.id);
-    if state.store.rate_limit(&key, window, limit).await? {
-        Ok(())
-    } else {
-        Err(ApiError::rate_limited())
     }
 }
 
@@ -190,7 +178,36 @@ async fn create(
         ));
     }
 
-    check_rate(&state, &who, "decoy.create", state.limits.creates_per_hour).await?;
+    // Edge placement: the sensor must be this tenant's, not revoked, and
+    // allowed to run the decoy kind. Emulations are the edge default.
+    if let Some(sensor_id) = &body.sensor_id {
+        let sensor = state
+            .store
+            .get_agent(&who.tenant_id, Role::Sensor, sensor_id)
+            .await?
+            .filter(|a| a.status != AgentStatus::Revoked)
+            .ok_or_else(|| {
+                deny(
+                    "sensor_unavailable",
+                    "no enrolled or pending sensor with that id in this tenant",
+                )
+            })?;
+        if entry.decoy_kind == DecoyKind::Sandbox && !sensor.sandbox_allowed {
+            return Err(deny(
+                "sandbox_not_allowed",
+                "this sensor runs emulations only; full sandboxes need sandbox_allowed",
+            ));
+        }
+    }
+
+    check_rate(
+        &state,
+        &who,
+        "decoy.create",
+        state.limits.creates_per_hour,
+        HOUR_MS,
+    )
+    .await?;
     if state.store.count_live_decoys(&who.tenant_id).await? >= state.limits.max_live_decoys {
         return Err(deny(
             "decoy_cap_reached",
@@ -206,7 +223,7 @@ async fn create(
         decoy_kind: entry.decoy_kind,
         label: body.label,
         state: DecoyState::Pending,
-        host_id: None,
+        host_id: body.sensor_id.clone(),
         generation: 1,
         created_at: now,
         updated_at: now,
@@ -217,7 +234,7 @@ async fn create(
         id: (state.ids)(),
         tenant_id: who.tenant_id.clone(),
         decoy_id: decoy.id.clone(),
-        host_id: None,
+        host_id: body.sensor_id.clone(),
         kind: "decoy.create".into(),
         reason_code: None,
         reason_text: None,
@@ -239,8 +256,11 @@ async fn create(
     );
     rec.job_id = Some(job.id.clone());
     rec.idempotency_key = idem;
-    rec.detail =
-        serde_json::json!({"catalogue_id": decoy.catalogue_id, "lifetime_seconds": lifetime});
+    rec.detail = serde_json::json!({
+        "catalogue_id": decoy.catalogue_id,
+        "lifetime_seconds": lifetime,
+        "sensor_id": body.sensor_id,
+    });
     state.store.append_audit(rec).await?;
 
     Ok((
@@ -375,6 +395,7 @@ async fn action(
         &who,
         "decoy.destructive",
         state.limits.destructive_per_hour,
+        HOUR_MS,
     )
     .await?;
 

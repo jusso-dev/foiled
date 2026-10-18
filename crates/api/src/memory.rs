@@ -4,13 +4,15 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use foiled_core::audit::AuditRecord;
+use foiled_core::auth::{Role, agent_scopes};
 use foiled_core::capture::CaptureEvent;
-use foiled_core::decoy::{Decoy, DecoyState};
 use foiled_core::enrichment::{Observable, ObservedFacts};
+use foiled_core::decoy::{Decoy, DecoyState, Reason};
+use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
 
 use crate::store::{
-    AuditQuery, DecoyQuery, IdentityRecord, IpIocRow, JobRecord, LinkOverride, Store, StoreError,
-    StoreFuture, TokenRecord,
+    AgentQuery, AuditQuery, DecoyQuery, EnrolmentTokenRecord, IdentityRecord, IpIocRow, JobRecord,
+    LinkOverride, NewCert, Store, StoreError, StoreFuture, TokenRecord,
 };
 
 #[derive(Default)]
@@ -27,6 +29,10 @@ struct Inner {
     /// Audit appends with this action fail, to test storage outages.
     fail_audit_action: Option<String>,
     facts: Vec<(String, ObservedFacts)>,
+    agents: Vec<AgentRecord>,
+    enrolment_tokens: Vec<EnrolmentTokenRecord>,
+    /// CA reference for each bound certificate, by fingerprint.
+    issuer_refs: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -45,6 +51,11 @@ impl MemoryStore {
 
     pub fn add_identity(&self, identity: IdentityRecord) {
         self.lock().identities.push(identity);
+    }
+
+    /// Certificate identities, for tests.
+    pub fn identities(&self) -> Vec<IdentityRecord> {
+        self.lock().identities.clone()
     }
 
     pub fn jobs(&self) -> Vec<JobRecord> {
@@ -260,6 +271,7 @@ impl Store for MemoryStore {
         now: i64,
         lease_ms: i64,
         limit: usize,
+        take_unplaced: bool,
     ) -> StoreFuture<'_, Vec<JobRecord>> {
         let mut g = self.lock();
         let mut leased = Vec::new();
@@ -271,7 +283,10 @@ impl Store for MemoryStore {
                 break;
             }
             let j = &mut g.jobs[i];
-            let mine = j.host_id.as_deref().is_none_or(|h| h == host_id);
+            let mine = match j.host_id.as_deref() {
+                Some(h) => h == host_id,
+                None => take_unplaced,
+            };
             let available = j.status == "queued"
                 || (j.status == "leased" && j.leased_until.is_some_and(|t| t <= now));
             if j.tenant_id != tenant_id || !mine || !available || j.expires_at <= now {
@@ -459,6 +474,202 @@ impl Store for MemoryStore {
                 && x.target == o.target)
         });
         g.overrides.push((tenant_id.to_string(), o));
+        ready(Ok(()))
+    }
+
+    fn create_agent(&self, agent: AgentRecord, token: EnrolmentTokenRecord) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        if g.agents.iter().any(|a| a.id == agent.id) {
+            return ready(Err(StoreError(format!("agent {} exists", agent.id))));
+        }
+        g.agents.push(agent);
+        g.enrolment_tokens.push(token);
+        ready(Ok(()))
+    }
+
+    fn get_agent(
+        &self,
+        tenant_id: &str,
+        role: Role,
+        id: &str,
+    ) -> StoreFuture<'_, Option<AgentRecord>> {
+        let found = self
+            .lock()
+            .agents
+            .iter()
+            .find(|a| a.tenant_id == tenant_id && a.role == role && a.id == id)
+            .cloned();
+        ready(Ok(found))
+    }
+
+    fn list_agents(
+        &self,
+        tenant_id: &str,
+        role: Role,
+        q: AgentQuery,
+    ) -> StoreFuture<'_, Vec<AgentRecord>> {
+        let mut all: Vec<AgentRecord> = self
+            .lock()
+            .agents
+            .iter()
+            .filter(|a| a.tenant_id == tenant_id && a.role == role)
+            .cloned()
+            .collect();
+        all.sort_by(|a, b| (b.created_at, &b.id).cmp(&(a.created_at, &a.id)));
+        if let Some(cursor) = &q.cursor
+            && let Some(pos) = all.iter().position(|a| &a.id == cursor)
+        {
+            all.drain(..=pos);
+        }
+        all.truncate(q.limit);
+        ready(Ok(all))
+    }
+
+    fn replace_enrolment_token(
+        &self,
+        token: EnrolmentTokenRecord,
+        now: i64,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        for t in g.enrolment_tokens.iter_mut() {
+            if t.tenant_id == token.tenant_id && t.agent_id == token.agent_id && t.used_at.is_none()
+            {
+                t.used_at = Some(now);
+            }
+        }
+        g.enrolment_tokens.push(token);
+        ready(Ok(()))
+    }
+
+    fn enrolment_token(&self, id: &str) -> StoreFuture<'_, Option<EnrolmentTokenRecord>> {
+        let found = self
+            .lock()
+            .enrolment_tokens
+            .iter()
+            .find(|t| t.id == id)
+            .cloned();
+        ready(Ok(found))
+    }
+
+    fn consume_enrolment_token(&self, id: &str, now: i64) -> StoreFuture<'_, bool> {
+        let mut g = self.lock();
+        let ok = match g
+            .enrolment_tokens
+            .iter_mut()
+            .find(|t| t.id == id && t.used_at.is_none() && t.expires_at > now)
+        {
+            Some(t) => {
+                t.used_at = Some(now);
+                true
+            }
+            None => false,
+        };
+        ready(Ok(ok))
+    }
+
+    fn bind_certificate(
+        &self,
+        tenant_id: &str,
+        role: Role,
+        agent_id: &str,
+        cert: NewCert,
+        retire_at: i64,
+        now: i64,
+    ) -> StoreFuture<'_, bool> {
+        let mut guard = self.lock();
+        let g = &mut *guard;
+        let Some(agent) = g.agents.iter_mut().find(|a| {
+            a.tenant_id == tenant_id
+                && a.role == role
+                && a.id == agent_id
+                && a.status != AgentStatus::Revoked
+        }) else {
+            return ready(Ok(false));
+        };
+        agent.status = AgentStatus::Active;
+        agent.enrolled_at.get_or_insert(now);
+        agent.cert_sha256 = Some(cert.cert_sha256.clone());
+        agent.cert_expires_at = Some(cert.expires_at);
+        for i in g.identities.iter_mut() {
+            if i.tenant_id == tenant_id && i.id == agent_id && !i.revoked {
+                i.valid_until = Some(i.valid_until.map_or(retire_at, |v| v.min(retire_at)));
+            }
+        }
+        if let Some(r) = &cert.issuer_ref {
+            g.issuer_refs.insert(cert.cert_sha256.clone(), r.clone());
+        }
+        g.identities.push(IdentityRecord {
+            id: agent_id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            role,
+            scopes: agent_scopes(role),
+            cert_sha256: cert.cert_sha256,
+            revoked: false,
+            valid_until: None,
+        });
+        ready(Ok(true))
+    }
+
+    fn revoke_agent(
+        &self,
+        tenant_id: &str,
+        role: Role,
+        agent_id: &str,
+        reason: Reason,
+        now: i64,
+    ) -> StoreFuture<'_, Option<Vec<String>>> {
+        let mut guard = self.lock();
+        let g = &mut *guard;
+        let Some(agent) = g
+            .agents
+            .iter_mut()
+            .find(|a| a.tenant_id == tenant_id && a.role == role && a.id == agent_id)
+        else {
+            return ready(Ok(None));
+        };
+        agent.status = AgentStatus::Revoked;
+        agent.revoked_at.get_or_insert(now);
+        agent.revoke_reason = Some(reason);
+        let mut fps = Vec::new();
+        for i in g.identities.iter_mut() {
+            if i.tenant_id == tenant_id && i.id == agent_id {
+                i.revoked = true;
+                fps.push(i.cert_sha256.clone());
+            }
+        }
+        for t in g.enrolment_tokens.iter_mut() {
+            if t.tenant_id == tenant_id && t.agent_id == agent_id && t.used_at.is_none() {
+                t.used_at = Some(now);
+            }
+        }
+        let refs = fps
+            .iter()
+            .filter_map(|fp| g.issuer_refs.get(fp).cloned())
+            .collect();
+        ready(Ok(Some(refs)))
+    }
+
+    fn record_agent_seen(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        seen: SeenFrom,
+        network_changed: bool,
+        now: i64,
+    ) -> StoreFuture<'_, ()> {
+        if let Some(a) = self
+            .lock()
+            .agents
+            .iter_mut()
+            .find(|a| a.tenant_id == tenant_id && a.id == agent_id)
+        {
+            a.last_seen_at = Some(now);
+            a.last_ip = seen.ip;
+            a.last_asn = seen.asn;
+            if network_changed {
+                a.network_changed_at = Some(now);
+            }
+        }
         ready(Ok(()))
     }
 }

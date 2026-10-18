@@ -67,6 +67,7 @@ fn harness() -> Harness {
         scopes: vec![Scope::HostLease, Scope::Admin, Scope::DecoysWrite],
         cert_sha256: "aa".repeat(32),
         revoked: false,
+        valid_until: None,
     });
     let clock = Arc::new(AtomicI64::new(NOW));
     let counter = Arc::new(AtomicU64::new(0));

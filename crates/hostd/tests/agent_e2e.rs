@@ -64,6 +64,7 @@ fn control_plane_state() -> (Arc<MemoryStore>, AppState) {
         scopes: vec![Scope::HostLease, Scope::HostReport, Scope::HostIngest],
         cert_sha256: "01".repeat(32),
         revoked: false,
+        valid_until: None,
     });
     let mut state = AppState::new(store.clone(), Arc::new(|| NOW));
     state.job_signer = Some(Arc::new(JobSigner::from_seed_hex("k1", SEED).unwrap()));

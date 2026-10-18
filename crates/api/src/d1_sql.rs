@@ -6,12 +6,13 @@
 pub const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/d1/0001_init.sql"),
     include_str!("../../../migrations/d1/0002_host_jobs.sql"),
+    include_str!("../../../migrations/d1/0003_enrolment.sql"),
 ];
 
 pub const TOKEN_BY_ID: &str = "SELECT id, tenant_id, role, scopes, secret_sha256, expires_at, revoked \
      FROM api_tokens WHERE id = ?1";
 
-pub const IDENTITY_BY_CERT: &str = "SELECT id, tenant_id, role, scopes, cert_sha256, revoked \
+pub const IDENTITY_BY_CERT: &str = "SELECT id, tenant_id, role, scopes, cert_sha256, revoked, valid_until \
      FROM identities WHERE cert_sha256 = ?1";
 
 pub const INSERT_DECOY: &str = "INSERT INTO decoys (id, tenant_id, catalogue_id, decoy_kind, label, state, host_id, \
@@ -59,12 +60,13 @@ pub fn job_by_idempotency_key() -> String {
 }
 
 /// Lease jobs for a host in one statement, so two hosts cannot take the same
-/// unplaced job. `?1` tenant, `?2` host, `?3` now, `?4` lease ms, `?5` limit.
+/// unplaced job. `?1` tenant, `?2` host, `?3` now, `?4` lease ms, `?5` limit,
+/// `?6` 1 to take unplaced jobs (research hosts) or 0 (edge sensors).
 pub fn lease_jobs() -> String {
     format!(
         "UPDATE jobs SET host_id = ?2, status = 'leased', leased_until = ?3 + ?4 \
          WHERE id IN (SELECT id FROM jobs WHERE tenant_id = ?1 \
-             AND (host_id IS NULL OR host_id = ?2) \
+             AND ((host_id IS NULL AND ?6 = 1) OR host_id = ?2) \
              AND (status = 'queued' OR (status = 'leased' AND leased_until <= ?3)) \
              AND expires_at > ?3 \
              ORDER BY created_at, id LIMIT ?5) \
@@ -102,6 +104,85 @@ pub const RATE_COUNT: &str = "SELECT count FROM rate_limits WHERE key = ?1 AND w
 pub const RATE_LIMIT_HIT: &str = "INSERT INTO rate_limits (key, window_start, count) VALUES (?1, ?2, 1) \
      ON CONFLICT (key, window_start) DO UPDATE SET count = count + 1 \
      RETURNING count";
+
+// Enrolment and the sensor and host registry (#31).
+
+pub const AGENT_COLUMNS: &str = "id, tenant_id, role, label, status, sandbox_allowed, share_opt_in, \
+     created_at, created_by, enrolled_at, cert_sha256, cert_expires_at, last_seen_at, last_ip, \
+     last_asn, network_changed_at, revoked_at, revoke_reason_code, revoke_reason_text";
+
+pub const INSERT_AGENT: &str = "INSERT INTO agents (id, tenant_id, role, label, status, sandbox_allowed, share_opt_in, \
+     created_at, created_by, enrolled_at, cert_sha256, cert_expires_at, last_seen_at, last_ip, \
+     last_asn, network_changed_at, revoked_at, revoke_reason_code, revoke_reason_text) \
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
+
+/// `?1` tenant, `?2` role, `?3` id.
+pub fn agent_by_id() -> String {
+    format!("SELECT {AGENT_COLUMNS} FROM agents WHERE tenant_id = ?1 AND role = ?2 AND id = ?3")
+}
+
+/// Resolve a list cursor (an agent id) to its keyset position.
+pub const AGENT_CURSOR: &str =
+    "SELECT created_at, id FROM agents WHERE tenant_id = ?1 AND role = ?2 AND id = ?3";
+
+/// `?1` tenant, `?2` role, `?3`/`?4` keyset cursor or NULL, `?5` limit.
+pub fn list_agents() -> String {
+    format!(
+        "SELECT {AGENT_COLUMNS} FROM agents WHERE tenant_id = ?1 AND role = ?2 \
+           AND (?3 IS NULL OR created_at < ?3 OR (created_at = ?3 AND id < ?4)) \
+         ORDER BY created_at DESC, id DESC LIMIT ?5"
+    )
+}
+
+pub const INSERT_ENROLMENT_TOKEN: &str = "INSERT INTO enrolment_tokens (id, tenant_id, agent_id, role, secret_sha256, \
+     created_at, expires_at, created_by, used_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+
+/// Close every unused token for an agent. `?1` tenant, `?2` agent, `?3` now.
+pub const CLOSE_UNUSED_TOKENS: &str = "UPDATE enrolment_tokens SET used_at = ?3 \
+     WHERE tenant_id = ?1 AND agent_id = ?2 AND used_at IS NULL";
+
+pub const ENROLMENT_TOKEN_BY_ID: &str = "SELECT id, tenant_id, agent_id, role, secret_sha256, created_at, \
+     expires_at, created_by, used_at FROM enrolment_tokens WHERE id = ?1";
+
+/// Single use, enforced in one statement. `?1` id, `?2` now.
+pub const CONSUME_ENROLMENT_TOKEN: &str = "UPDATE enrolment_tokens SET used_at = ?2 \
+     WHERE id = ?1 AND used_at IS NULL AND expires_at > ?2 RETURNING id";
+
+/// Shorten the life of an identity's live certificates to `?3`.
+/// `?1` tenant, `?2` identity id.
+pub const RETIRE_CERTS: &str = "UPDATE identities SET valid_until = ?3 \
+     WHERE tenant_id = ?1 AND id = ?2 AND revoked = 0 AND (valid_until IS NULL OR valid_until > ?3)";
+
+/// Insert a certificate only while its agent is not revoked, so a revoke
+/// racing an enrolment can never leave a live certificate behind.
+/// `?1` fingerprint, `?2` id, `?3` tenant, `?4` role, `?5` scopes,
+/// `?6` now, `?7` issuer ref, `?8` expires at.
+pub const INSERT_AGENT_IDENTITY: &str = "INSERT INTO identities (cert_sha256, id, tenant_id, role, scopes, created_at, \
+     issuer_ref, expires_at) SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 \
+     WHERE EXISTS (SELECT 1 FROM agents WHERE tenant_id = ?3 AND role = ?4 AND id = ?2 AND status != 'revoked')";
+
+/// `?1` tenant, `?2` role, `?3` id, `?4` now, `?5` fingerprint, `?6` expires at.
+pub const ACTIVATE_AGENT: &str = "UPDATE agents SET status = 'active', enrolled_at = COALESCE(enrolled_at, ?4), \
+     cert_sha256 = ?5, cert_expires_at = ?6 \
+     WHERE tenant_id = ?1 AND role = ?2 AND id = ?3 AND status != 'revoked' RETURNING id";
+
+/// `?1` tenant, `?2` role, `?3` id, `?4` now, `?5` reason code, `?6` reason text.
+pub const REVOKE_AGENT: &str = "UPDATE agents SET status = 'revoked', revoked_at = COALESCE(revoked_at, ?4), \
+     revoke_reason_code = ?5, revoke_reason_text = ?6 \
+     WHERE tenant_id = ?1 AND role = ?2 AND id = ?3 RETURNING id";
+
+/// `?1` tenant, `?2` identity id.
+pub const REVOKE_IDENTITIES: &str =
+    "UPDATE identities SET revoked = 1 WHERE tenant_id = ?1 AND id = ?2";
+
+/// `?1` tenant, `?2` identity id.
+pub const ISSUER_REFS: &str = "SELECT issuer_ref FROM identities \
+     WHERE tenant_id = ?1 AND id = ?2 AND issuer_ref IS NOT NULL ORDER BY created_at";
+
+/// `?1` tenant, `?2` id, `?3` now, `?4` ip, `?5` asn, `?6` 1 if the network jumped.
+pub const RECORD_AGENT_SEEN: &str = "UPDATE agents SET last_seen_at = ?3, last_ip = ?4, last_asn = ?5, \
+     network_changed_at = CASE WHEN ?6 = 1 THEN ?3 ELSE network_changed_at END \
+     WHERE tenant_id = ?1 AND id = ?2";
 
 #[cfg(test)]
 mod tests {
@@ -321,7 +402,7 @@ mod tests {
     fn lease(c: &Connection, host: &str, now: i64, limit: i64) -> Vec<String> {
         let mut st = c.prepare(&lease_jobs()).unwrap();
         let mut ids: Vec<String> = st
-            .query_map(params!["t1", host, now, 1000, limit], |r| r.get(0))
+            .query_map(params!["t1", host, now, 1000, limit, 1], |r| r.get(0))
             .unwrap()
             .map(Result::unwrap)
             .collect();
@@ -433,5 +514,254 @@ mod tests {
             )
             .unwrap();
         assert_eq!((hb.as_str(), skew), ("{\"x\":1}", 7));
+    }
+
+    #[test]
+    fn identities_migration_keeps_existing_rows() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(MIGRATIONS[0]).unwrap();
+        c.execute_batch(MIGRATIONS[1]).unwrap();
+        c.execute(
+            "INSERT INTO identities (id, tenant_id, role, scopes, cert_sha256, created_at, revoked) \
+             VALUES ('h1', 't1', 'host', 'host:lease', 'ab', 1, 1)",
+            [],
+        )
+        .unwrap();
+        for m in &MIGRATIONS[2..] {
+            c.execute_batch(m).unwrap();
+        }
+        let (id, revoked, valid): (String, i64, Option<i64>) = c
+            .query_row(IDENTITY_BY_CERT, params!["ab"], |r| {
+                Ok((r.get(0)?, r.get(5)?, r.get(6)?))
+            })
+            .unwrap();
+        assert_eq!((id.as_str(), revoked, valid), ("h1", 1, None));
+    }
+
+    fn insert_agent(c: &Connection, id: &str, tenant: &str, role: &str, created: i64) {
+        c.execute(
+            INSERT_AGENT,
+            params![
+                id,
+                tenant,
+                role,
+                None::<String>,
+                "pending",
+                0,
+                None::<i64>,
+                created,
+                "tok1",
+                None::<i64>,
+                None::<String>,
+                None::<i64>,
+                None::<i64>,
+                None::<String>,
+                None::<i64>,
+                None::<i64>,
+                None::<i64>,
+                None::<String>,
+                None::<String>
+            ],
+        )
+        .unwrap();
+    }
+
+    fn insert_token(c: &Connection, id: &str, agent: &str, expires: i64) {
+        c.execute(
+            INSERT_ENROLMENT_TOKEN,
+            params![
+                id,
+                "t1",
+                agent,
+                "sensor",
+                "ff",
+                1,
+                expires,
+                "tok1",
+                None::<i64>
+            ],
+        )
+        .unwrap();
+    }
+
+    fn consume(c: &Connection, id: &str, now: i64) -> bool {
+        c.query_row(CONSUME_ENROLMENT_TOKEN, params![id, now], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()
+        .unwrap()
+        .is_some()
+    }
+
+    #[test]
+    fn enrolment_tokens_are_single_use_and_expire() {
+        let c = db();
+        insert_agent(&c, "s1", "t1", "sensor", 1);
+        insert_token(&c, "e1", "s1", 1_000);
+        insert_token(&c, "e2", "s1", 1_000);
+        assert!(!consume(&c, "e1", 1_000), "expired at 1000");
+        assert!(consume(&c, "e2", 999));
+        assert!(!consume(&c, "e2", 999), "second redemption fails");
+        insert_token(&c, "e3", "s1", 5_000);
+        c.execute(CLOSE_UNUSED_TOKENS, params!["t1", "s1", 10])
+            .unwrap();
+        assert!(!consume(&c, "e3", 20), "closed by a re-enrolment or revoke");
+        let used: Option<i64> = c
+            .query_row(ENROLMENT_TOKEN_BY_ID, params!["e2"], |r| r.get(8))
+            .unwrap();
+        assert_eq!(used, Some(999));
+    }
+
+    fn bind(c: &Connection, fp: &str, agent: &str, now: i64, retire: i64) -> bool {
+        c.execute(RETIRE_CERTS, params!["t1", agent, retire])
+            .unwrap();
+        c.execute(
+            INSERT_AGENT_IDENTITY,
+            params![
+                fp,
+                agent,
+                "t1",
+                "sensor",
+                "sensor:ingest",
+                now,
+                format!("ref-{fp}"),
+                now + 100
+            ],
+        )
+        .unwrap();
+        c.query_row(
+            ACTIVATE_AGENT,
+            params!["t1", "sensor", agent, now, fp, now + 100],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .unwrap()
+        .is_some()
+    }
+
+    #[test]
+    fn certificates_bind_rotate_and_revoke() {
+        let c = db();
+        insert_agent(&c, "s1", "t1", "sensor", 1);
+        assert!(bind(&c, "aa", "s1", 10, 10));
+        assert!(bind(&c, "bb", "s1", 20, 50), "renewal with grace");
+        let valid = |fp: &str| -> Option<i64> {
+            c.query_row(IDENTITY_BY_CERT, params![fp], |r| r.get(6))
+                .unwrap()
+        };
+        assert_eq!(
+            valid("aa"),
+            Some(50),
+            "old certificate retires after the grace"
+        );
+        assert_eq!(valid("bb"), None);
+        let (status, fp): (String, String) = c
+            .query_row(&agent_by_id(), params!["t1", "sensor", "s1"], |r| {
+                Ok((r.get(4)?, r.get(10)?))
+            })
+            .unwrap();
+        assert_eq!((status.as_str(), fp.as_str()), ("active", "bb"));
+        assert!(
+            c.query_row(&agent_by_id(), params!["t1", "host", "s1"], |r| r
+                .get::<_, String>(0))
+                .optional()
+                .unwrap()
+                .is_none(),
+            "role is part of the key"
+        );
+
+        let revoked: Option<String> = c
+            .query_row(
+                REVOKE_AGENT,
+                params!["t1", "sensor", "s1", 60, "operator_manual", "stolen"],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert!(revoked.is_some());
+        c.execute(REVOKE_IDENTITIES, params!["t1", "s1"]).unwrap();
+        let n: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM identities WHERE id = 's1' AND revoked = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+        let mut st = c.prepare(ISSUER_REFS).unwrap();
+        let refs: Vec<String> = st
+            .query_map(params!["t1", "s1"], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(refs, vec!["ref-aa", "ref-bb"]);
+        assert!(
+            !bind(&c, "cc", "s1", 70, 70),
+            "a revoked agent binds nothing"
+        );
+        assert!(
+            c.query_row(IDENTITY_BY_CERT, params!["cc"], |r| r.get::<_, String>(0))
+                .optional()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn agents_list_per_tenant_and_role_and_record_sightings() {
+        let c = db();
+        insert_agent(&c, "a", "t1", "sensor", 100);
+        insert_agent(&c, "b", "t1", "sensor", 200);
+        insert_agent(&c, "h", "t1", "host", 300);
+        insert_agent(&c, "z", "t2", "sensor", 400);
+        let ids = |p: &[&dyn rusqlite::ToSql]| -> Vec<String> {
+            let mut st = c.prepare(&list_agents()).unwrap();
+            st.query_map(p, |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let none_i: Option<i64> = None;
+        let none: Option<String> = None;
+        assert_eq!(
+            ids(&[&"t1", &"sensor", &none_i, &none, &10]),
+            vec!["b", "a"]
+        );
+        assert_eq!(
+            ids(&[&"t1", &"sensor", &Some(200), &Some("b"), &10]),
+            vec!["a"]
+        );
+        c.execute(
+            RECORD_AGENT_SEEN,
+            params!["t1", "a", 7, "192.0.2.1", 64500, 1],
+        )
+        .unwrap();
+        c.execute(
+            RECORD_AGENT_SEEN,
+            params!["t1", "a", 9, "192.0.2.2", 64500, 0],
+        )
+        .unwrap();
+        let (seen, changed): (i64, Option<i64>) = c
+            .query_row(&agent_by_id(), params!["t1", "sensor", "a"], |r| {
+                Ok((r.get(12)?, r.get(15)?))
+            })
+            .unwrap();
+        assert_eq!((seen, changed), (9, Some(7)));
+    }
+
+    #[test]
+    fn sensors_never_lease_unplaced_jobs() {
+        let c = db();
+        insert_decoy(&c, "d1", "t1", 1, "pending");
+        insert_decoy(&c, "d2", "t1", 2, "pending");
+        job(&c, "j1", "d1", None, 1, 10_000);
+        job(&c, "j2", "d2", Some("sensor-1"), 2, 10_000);
+        let mut st = c.prepare(&lease_jobs()).unwrap();
+        let ids: Vec<String> = st
+            .query_map(params!["t1", "sensor-1", 100, 1000, 10, 0], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(ids, vec!["j2"]);
     }
 }
