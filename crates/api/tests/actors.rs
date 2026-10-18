@@ -81,6 +81,12 @@ async fn harness() -> (AppState, Arc<MemoryStore>) {
             "t2",
             vec![Scope::CampaignsRead, Scope::ReviewWrite],
         ),
+        ("exporter", "t1", vec![Scope::ExportsRead]),
+        (
+            "exportreviewer",
+            "t1",
+            vec![Scope::ExportsRead, Scope::ReviewWrite],
+        ),
     ] {
         store.add_token(TokenRecord {
             id: id.into(),
@@ -214,8 +220,28 @@ async fn fleet_wave_gets_one_medium_link_and_geo_only_gets_none() {
     let golden = read_json("testdata/actors/expected/fleet-wave-00.json");
     assert_eq!(*l, golden);
 
-    // The campaign carries the suggestion; the geo-only wave does not.
+    // A plain campaign list does not run the matcher.
     let (_, c) = get(&s, "analyst", "/v0/campaigns").await;
+    assert!(
+        items(&c)
+            .iter()
+            .all(|c| c["suggested_actor_links"].as_array().unwrap().is_empty())
+    );
+    let (st, _) = get(&s, "analyst", "/v0/campaigns?include=everything").await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    // Campaign detail does, for that campaign.
+    let (st, one) = get(
+        &s,
+        "analyst",
+        &format!("/v0/campaigns/{}", l["subject_id"].as_str().unwrap()),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{one}");
+    assert_eq!(one["suggested_actor_links"][0]["link_id"], l["link_id"]);
+
+    // With include=actors the campaign carries the suggestion; the geo-only
+    // wave does not.
+    let (_, c) = get(&s, "analyst", "/v0/campaigns?include=actors").await;
     for camp in items(&c) {
         let sugg = camp["suggested_actor_links"].as_array().unwrap();
         if camp["campaign_id"] == l["subject_id"] {
@@ -292,6 +318,16 @@ async fn decisions_are_audited_scoped_and_change_the_link() {
     )
     .await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
+    // A note may not make the claim the link never makes.
+    let (st, nb) = send(
+        &s,
+        "reviewer",
+        "POST",
+        &path,
+        json!({"decision": "confirm", "note": "This wave was carried out by EXAMPLE."}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{nb}");
     let (st, _) = send(
         &s,
         "reviewer",
@@ -331,7 +367,7 @@ async fn decisions_are_audited_scoped_and_change_the_link() {
     assert_eq!(rec.detail["score_before"], items(&b)[0]["score"]);
 
     // Persisted: later reads see it, and the campaign suggestion says so.
-    let (_, c) = get(&s, "analyst", "/v0/campaigns").await;
+    let (_, c) = get(&s, "analyst", "/v0/campaigns?include=actors").await;
     let sugg: Vec<&Value> = items(&c)
         .iter()
         .flat_map(|c| c["suggested_actor_links"].as_array().unwrap())
@@ -351,7 +387,7 @@ async fn decisions_are_audited_scoped_and_change_the_link() {
         (l["status"].as_str(), l["score"].as_u64()),
         (Some("rejected"), Some(0))
     );
-    let (_, c) = get(&s, "analyst", "/v0/campaigns").await;
+    let (_, c) = get(&s, "analyst", "/v0/campaigns?include=actors").await;
     assert!(
         items(&c)
             .iter()
@@ -382,4 +418,107 @@ async fn decisions_are_audited_scoped_and_change_the_link() {
             "actor_link.reopen"
         ]
     );
+}
+
+fn objects<'a>(b: &'a Value, ty: &str) -> Vec<&'a Value> {
+    b["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| o["type"] == ty)
+        .collect()
+}
+
+fn misp_actors(e: &Value) -> usize {
+    e["Event"]["Attribute"]
+        .as_array()
+        .map(|a| a.iter().filter(|x| x["type"] == "threat-actor").count())
+        .unwrap_or(0)
+}
+
+#[tokio::test]
+async fn only_confirmed_actor_links_reach_exports() {
+    let (s, _) = harness().await;
+    let (_, b) = get(&s, "analyst", "/v0/actor-links").await;
+    let link = items(&b)[0].clone();
+    let id = link["link_id"].as_str().unwrap().to_string();
+
+    // Pending: nothing, even with the opt-in and unreviewed material.
+    for (tok, q) in [
+        ("exporter", "include_actors=true"),
+        (
+            "exportreviewer",
+            "include_actors=true&include_unreviewed=true",
+        ),
+    ] {
+        let (st, bundle) = get(&s, tok, &format!("/v0/exports/stix?{q}")).await;
+        assert_eq!(st, StatusCode::OK, "{bundle}");
+        assert!(objects(&bundle, "intrusion-set").is_empty(), "{q}");
+        let (_, event) = get(&s, tok, &format!("/v0/exports/misp?{q}")).await;
+        assert_eq!(misp_actors(&event), 0, "{q}");
+    }
+
+    let (st, _) = send(
+        &s,
+        "reviewer",
+        "POST",
+        &format!("/v0/actor-links/{id}/decision"),
+        json!({"decision": "confirm", "note": "Callback host matches the advisory."}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    // Confirmed, but no opt-in: still nothing.
+    let (_, bundle) = get(&s, "exporter", "/v0/exports/stix").await;
+    assert!(objects(&bundle, "intrusion-set").is_empty());
+
+    // Confirmed and opted in: one intrusion-set, one relationship per member.
+    let (_, bundle) = get(&s, "exporter", "/v0/exports/stix?include_actors=true").await;
+    let sets = objects(&bundle, "intrusion-set");
+    assert_eq!(sets.len(), 1, "{bundle}");
+    let set = sets[0];
+    assert_eq!(set["name"], link["label"]);
+    assert_eq!(set["x_foiled_actor_id"], "report:example-cluster-01");
+    assert_eq!(
+        set["external_references"][0]["url"],
+        "https://advisories.example.org/ex-2026-001"
+    );
+    let set_id = set["id"].as_str().unwrap();
+    let rels: Vec<&Value> = objects(&bundle, "relationship")
+        .into_iter()
+        .filter(|r| r["target_ref"] == set_id)
+        .collect();
+    assert_eq!(rels.len(), 2);
+    for r in rels {
+        assert_eq!(r["x_foiled_wording"], "confirmed association");
+        assert!(
+            r["description"]
+                .as_str()
+                .unwrap()
+                .starts_with("Confirmed association with")
+        );
+        assert_eq!(r["confidence"], 100);
+    }
+    let problems = foiled_core::intel::stix::problems(&bundle);
+    assert!(problems.is_empty(), "{problems:#?}");
+    let (_, event) = get(&s, "exporter", "/v0/exports/misp?include_actors=true").await;
+    assert!(misp_actors(&event) >= 1, "{event}");
+
+    // Rejected: gone again.
+    let (st, _) = send(
+        &s,
+        "reviewer",
+        "POST",
+        &format!("/v0/actor-links/{id}/decision"),
+        json!({"decision": "reject", "note": ""}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, bundle) = get(
+        &s,
+        "exportreviewer",
+        "/v0/exports/stix?include_actors=true&include_unreviewed=true",
+    )
+    .await;
+    assert!(objects(&bundle, "intrusion-set").is_empty());
 }

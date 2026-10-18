@@ -58,24 +58,37 @@ pub fn cve_rules() -> &'static Rules {
     })
 }
 
-/// The actor reference catalogue (#29): ATT&CK groups from the pinned
-/// sidecar plus the curated reports in `catalogue/actors/`, both validated
-/// by `foiled-lint` in CI. Example reports are never bundled. Built once
+/// The actor catalogue source bundled at build time (#29): ATT&CK groups
+/// from the pinned sidecar plus the curated reports in `catalogue/actors/`,
+/// both validated by `foiled-lint` in CI. Example reports are never
+/// bundled.
+pub struct BundledActors;
+
+impl foiled_core::actor::CatalogueSource for BundledActors {
+    fn attack_groups(&self) -> Option<foiled_core::actor::AttackGroups> {
+        Some(serde_json::from_str(ATTACK_GROUPS).expect("bundled ATT&CK groups parse"))
+    }
+
+    fn reports(&self) -> Vec<foiled_core::actor::ActorReport> {
+        serde_json::from_str::<Vec<foiled_core::actor::ActorReport>>(ACTOR_REPORTS)
+            .expect("bundled actor reports parse")
+            .into_iter()
+            .filter(|r| !r.example)
+            .collect()
+    }
+}
+
+/// The actor reference catalogue (#29) from [`BundledActors`], built once
 /// per isolate.
 pub fn bundled_actor_catalogue() -> std::sync::Arc<foiled_core::actor::ActorCatalogue> {
-    use foiled_core::actor::{ActorCatalogue, ActorReport, AttackGroups};
+    use foiled_core::actor::ActorCatalogue;
     static BUILT: OnceLock<std::sync::Arc<ActorCatalogue>> = OnceLock::new();
     BUILT
         .get_or_init(|| {
-            let techniques = attack_sidecar();
-            let groups: AttackGroups =
-                serde_json::from_str(ATTACK_GROUPS).expect("bundled ATT&CK groups parse");
-            let reports: Vec<ActorReport> = serde_json::from_str::<Vec<ActorReport>>(ACTOR_REPORTS)
-                .expect("bundled actor reports parse")
-                .into_iter()
-                .filter(|r| !r.example)
-                .collect();
-            std::sync::Arc::new(ActorCatalogue::build(Some(&groups), techniques, reports))
+            std::sync::Arc::new(ActorCatalogue::from_source(
+                &BundledActors,
+                attack_sidecar(),
+            ))
         })
         .clone()
 }

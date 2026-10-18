@@ -33,8 +33,8 @@ use crate::AppState;
 use crate::auth::Auth;
 use crate::error::ApiError;
 use crate::routes::attempts::{
-    Campaigns, ClusterInputs, Iocs, WindowModel, canonical_window, newest_source_facts,
-    window_bounds, window_model,
+    Campaigns, ClusterInputs, Iocs, WindowModel, canonical_window, newest_facts_for, window_bounds,
+    window_model,
 };
 use crate::routes::page_limit;
 
@@ -168,10 +168,11 @@ pub(crate) struct ActorModel {
     decisions: BTreeMap<(String, String), Override>,
 }
 
-/// Match the campaigns and lone attempts of a window against the
-/// catalogue, read the analyst decisions for the subjects that matched, and
-/// fill `suggested_actor_links` on `campaigns`. Subjects with no candidate
-/// link cost no store read.
+/// Match campaigns (and, when `attempts` is not empty, the lone attempts
+/// among them) against the catalogue and fill `suggested_actor_links` on
+/// `campaigns`. Store reads (source countries for the explanation, and
+/// analyst decisions) happen only for subjects that matched a profile, so
+/// a window with no candidate costs no extra read.
 pub(crate) async fn match_window(
     state: &AppState,
     tenant_id: &str,
@@ -187,12 +188,6 @@ pub(crate) async fn match_window(
     ),
     ApiError,
 > {
-    let countries = newest_source_facts(state, tenant_id, attempts, "geo.country", |v| {
-        v.as_str()
-            .filter(|c| c.len() == 2 && c.bytes().all(|b| b.is_ascii_uppercase()))
-            .map(str::to_string)
-    })
-    .await?;
     let cfg = ConfidenceConfig::default();
     let all = actor::subjects(&SubjectInput {
         tenant_id,
@@ -201,36 +196,73 @@ pub(crate) async fn match_window(
         signals: &inputs.signals,
         iocs,
         asns: &inputs.asns,
-        countries: &countries,
+        countries: &BTreeMap::new(),
     });
     let first = actor::suggest(&state.actors, &cfg, &all, &BTreeMap::new());
     let linked: BTreeSet<&str> = first.iter().map(|l| l.subject_id.as_str()).collect();
-    let subjects: Vec<Subject> = all
+    let mut subjects: Vec<Subject> = all
         .into_iter()
         .filter(|s| linked.contains(s.id.as_str()))
         .collect();
-    let decisions: BTreeMap<(String, String), Override> = if subjects.is_empty() {
-        BTreeMap::new()
-    } else {
-        state
-            .store
-            .actor_decisions(tenant_id, subjects.iter().map(|s| s.id.clone()).collect())
-            .await?
-            .into_iter()
-            .map(|d| ((d.subject_id, d.actor_id), d.decision))
-            .collect()
-    };
-    let links = if decisions.is_empty() {
-        first
-    } else {
-        actor::suggest(&state.actors, &cfg, &subjects, &decisions)
-    };
+    if subjects.is_empty() {
+        actor::attach_suggestions(campaigns, &[]);
+        return Ok((Vec::new(), Vec::new(), BTreeMap::new()));
+    }
+    let countries = newest_facts_for(
+        state,
+        tenant_id,
+        subjects
+            .iter()
+            .flat_map(|s| s.sources.iter().map(String::as_str)),
+        "geo.country",
+        |v| {
+            v.as_str()
+                .filter(|c| c.len() == 2 && c.bytes().all(|b| b.is_ascii_uppercase()))
+                .map(str::to_string)
+        },
+    )
+    .await?;
+    for s in subjects.iter_mut() {
+        s.set_countries(&countries);
+    }
+    let decisions: BTreeMap<(String, String), Override> = state
+        .store
+        .actor_decisions(tenant_id, subjects.iter().map(|s| s.id.clone()).collect())
+        .await?
+        .into_iter()
+        .map(|d| ((d.subject_id, d.actor_id), d.decision))
+        .collect();
+    let links = actor::suggest(&state.actors, &cfg, &subjects, &decisions);
     actor::attach_suggestions(campaigns, &links);
     Ok((links, subjects, decisions))
 }
 
-/// Fill `suggested_actor_links` on the campaigns of a full window model
-/// (#33 routes).
+/// Fill `suggested_actor_links` on one campaign of a full window model
+/// (campaign detail, #33). Lone attempts are not matched.
+pub(crate) async fn attach_to_campaign(
+    state: &AppState,
+    tenant_id: &str,
+    m: &WindowModel,
+    campaign: &mut Campaign,
+) -> Result<(), ApiError> {
+    let Some(inputs) = m.inputs.as_ref() else {
+        return Ok(());
+    };
+    match_window(
+        state,
+        tenant_id,
+        std::slice::from_mut(campaign),
+        &[],
+        &m.iocs,
+        inputs,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Fill `suggested_actor_links` on every campaign of a full window model
+/// (the campaign list with `include=actors`). Lone attempts are not
+/// matched.
 pub(crate) async fn attach_to_model(
     state: &AppState,
     tenant_id: &str,
@@ -243,7 +275,7 @@ pub(crate) async fn attach_to_model(
         state,
         tenant_id,
         &mut m.campaigns.campaigns,
-        &m.attempts,
+        &[],
         &m.iocs,
         inputs,
     )
@@ -412,6 +444,15 @@ pub(crate) async fn record_decision(
     if note.chars().count() > MAX_NOTE_CHARS {
         return Err(ApiError::bad_request(format!(
             "note must be at most {MAX_NOTE_CHARS} characters"
+        )));
+    }
+    // The note travels with the link in the audit log and the console; it
+    // must not make the attribution claim the link itself never makes.
+    let problems = actor::wording_problems(&note, true);
+    if !problems.is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "note: {}",
+            problems.join("; ")
         )));
     }
     if decision == Decision::Confirm && note.trim().is_empty() {
