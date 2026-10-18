@@ -314,7 +314,7 @@ pub(crate) async fn cluster_inputs(
         crate::links::attack_rules(),
         crate::links::cve_rules(),
     );
-    let asns = source_asns(state, tenant_id, attempts).await?;
+    let asns = source_asns(state, attempts).await;
     let advisories = crate::links::cve_rules()
         .advisories
         .iter()
@@ -418,36 +418,41 @@ pub(crate) async fn load_registry(
     Ok(registry)
 }
 
-/// Source address to ASN number, from the newest cached `asn.number` Fact
-/// for each address. Addresses with no Fact are left out.
+/// Source address to ASN number, from the newest usable cached
+/// `asn.number` Fact for each address (`crate::enrichment::cached_facts`,
+/// #11). Addresses with no Fact are left out. If the cache cannot be read,
+/// clustering goes on without ASN features rather than failing.
 async fn source_asns(
     state: &AppState,
-    tenant_id: &str,
     attempts: &[Attempt],
-) -> Result<std::collections::BTreeMap<String, u32>, ApiError> {
+) -> std::collections::BTreeMap<String, u32> {
     use foiled_core::enrichment::Observable;
     use std::collections::BTreeMap;
     let mut by_observable: BTreeMap<Observable, Vec<&str>> = BTreeMap::new();
-    for a in attempts {
+    // Newest activity first, so a tight lookup budget drops the oldest.
+    let mut ordered: Vec<&Attempt> = attempts.iter().collect();
+    ordered.sort_by_key(|a| std::cmp::Reverse(a.last_seen));
+    let mut observables = Vec::new();
+    for a in ordered {
         if let Ok(o) = Observable::ip(&a.src) {
+            if !by_observable.contains_key(&o) {
+                observables.push(o.clone());
+            }
             by_observable.entry(o).or_default().push(a.src.as_str());
         }
     }
-    if by_observable.is_empty() {
-        return Ok(BTreeMap::new());
+    if observables.is_empty() {
+        return BTreeMap::new();
     }
-    let observed = state
-        .store
-        .enrichment_facts(tenant_id, by_observable.keys().cloned().collect())
-        .await?;
+    let cached = crate::enrichment::cached_facts(state, observables).await;
     let mut newest: BTreeMap<Observable, (i64, u32)> = BTreeMap::new();
-    for o in observed {
-        for f in o.facts.iter().filter(|f| f.key == "asn.number") {
+    for (observable, facts) in &cached.facts {
+        for f in facts.iter().filter(|f| f.key == "asn.number") {
             let Some(n) = f.value.as_u64().and_then(|n| u32::try_from(n).ok()) else {
                 continue;
             };
             let e = newest
-                .entry(o.observable.clone())
+                .entry(observable.clone())
                 .or_insert((f.observed_at, n));
             if (f.observed_at, n) > *e {
                 *e = (f.observed_at, n);
@@ -460,7 +465,7 @@ async fn source_asns(
             out.insert((*src).to_string(), n);
         }
     }
-    Ok(out)
+    out
 }
 
 /// `since` and `until` with defaults: the 7 days up to now.

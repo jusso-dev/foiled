@@ -11,10 +11,10 @@
 use std::collections::BTreeMap;
 
 use axum::extract::{Path, Query, State};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use foiled_core::auth::Scope;
-use foiled_core::enrichment::{Fact, Observable};
 use foiled_core::ioc::{
     Ioc, IocRole, IocType, MAX_VALUE_CHARS, address_observables, apply_enrichment, refang,
 };
@@ -60,6 +60,9 @@ pub struct IocList {
     pub items: Vec<Ioc>,
     /// True when the window held more events than the cap; narrow it.
     pub truncated: bool,
+    /// True when the enrichment cache could not be read, so `enrichment`
+    /// is empty for this response (#11).
+    pub enrichment_unavailable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,25 +72,26 @@ pub struct AttemptIocList {
     pub notes: Vec<String>,
     pub items: Vec<Ioc>,
     pub truncated: bool,
+    pub enrichment_unavailable: bool,
 }
 
-/// Add ASN context to the IOCs about to be returned.
+/// Add ASN context to the IOCs about to be returned. Never fails: if the
+/// cache cannot be read the IOCs go out without context, flagged.
 pub(crate) async fn enrich(
     state: &AppState,
-    tenant_id: &str,
+    _tenant_id: &str,
     iocs: &mut [Ioc],
-) -> Result<(), ApiError> {
-    let observables = address_observables(iocs);
-    if observables.is_empty() {
-        return Ok(());
-    }
-    // The store may answer once per provider for the same observable.
-    let mut facts: BTreeMap<Observable, Vec<Fact>> = BTreeMap::new();
-    for o in state.store.enrichment_facts(tenant_id, observables).await? {
-        facts.entry(o.observable).or_default().extend(o.facts);
-    }
-    apply_enrichment(iocs, &facts);
-    Ok(())
+) -> crate::enrichment::CachedFacts {
+    // Newest first, so a tight lookup budget drops the oldest.
+    let mut ordered: Vec<&Ioc> = iocs.iter().collect();
+    ordered.sort_by_key(|a| std::cmp::Reverse(a.last_seen));
+    let observables: Vec<_> = ordered
+        .into_iter()
+        .flat_map(|i| address_observables(std::slice::from_ref(i)))
+        .collect();
+    let cached = crate::enrichment::cached_facts(state, observables).await;
+    apply_enrichment(iocs, &cached.facts);
+    cached
 }
 
 fn value_matches(ioc: &Ioc, wanted: &str) -> bool {
@@ -99,7 +103,7 @@ async fn search(
     State(state): State<AppState>,
     auth: Auth,
     Query(q): Query<IocQuery>,
-) -> Result<Json<IocList>, ApiError> {
+) -> Result<Response, ApiError> {
     let who = auth.require(Scope::IocsRead)?;
     if q.value
         .as_deref()
@@ -151,11 +155,16 @@ async fn search(
     // Newest activity first.
     items.sort_by(|a, b| (b.last_seen, &b.ioc_id).cmp(&(a.last_seen, &a.ioc_id)));
     items.truncate(page_limit(q.limit));
-    enrich(&state, &who.tenant_id, &mut items).await?;
-    Ok(Json(IocList {
-        items,
-        truncated: m.truncated,
-    }))
+    let cached = enrich(&state, &who.tenant_id, &mut items).await;
+    Ok((
+        cached.headers(),
+        Json(IocList {
+            items,
+            truncated: m.truncated,
+            enrichment_unavailable: cached.unavailable,
+        }),
+    )
+        .into_response())
 }
 
 fn valid_ioc_id(id: &str) -> bool {
@@ -171,7 +180,7 @@ async fn get_one(
     auth: Auth,
     Path(ioc_id): Path<String>,
     Query(q): Query<WindowQuery>,
-) -> Result<Json<Ioc>, ApiError> {
+) -> Result<Response, ApiError> {
     let who = auth.require(Scope::IocsRead)?;
     if !valid_ioc_id(&ioc_id) {
         return Err(ApiError::not_found("ioc"));
@@ -192,10 +201,10 @@ async fn get_one(
         .into_iter()
         .filter(|i| i.ioc_id == ioc_id)
         .collect();
-    enrich(&state, &who.tenant_id, &mut found).await?;
+    let cached = enrich(&state, &who.tenant_id, &mut found).await;
     found
         .pop()
-        .map(Json)
+        .map(|i| (cached.headers(), Json(i)).into_response())
         .ok_or_else(|| ApiError::not_found("ioc"))
 }
 
@@ -204,7 +213,7 @@ async fn for_attempt(
     auth: Auth,
     Path(attempt_id): Path<String>,
     Query(q): Query<WindowQuery>,
-) -> Result<Json<AttemptIocList>, ApiError> {
+) -> Result<Response, ApiError> {
     let who = auth.require(Scope::IocsRead)?;
     let (since, until) = window_bounds(&state, q.since, q.until);
     let m = window_model(
@@ -232,14 +241,19 @@ async fn for_attempt(
         .iter()
         .filter_map(|id| by_id.remove(id))
         .collect();
-    enrich(&state, &who.tenant_id, &mut items).await?;
-    Ok(Json(AttemptIocList {
-        attempt_id: summary.attempt_id,
-        file_ioc_limited: summary.file_ioc_limited,
-        notes: summary.notes,
-        items,
-        truncated: m.truncated,
-    }))
+    let cached = enrich(&state, &who.tenant_id, &mut items).await;
+    Ok((
+        cached.headers(),
+        Json(AttemptIocList {
+            attempt_id: summary.attempt_id,
+            file_ioc_limited: summary.file_ioc_limited,
+            notes: summary.notes,
+            items,
+            truncated: m.truncated,
+            enrichment_unavailable: cached.unavailable,
+        }),
+    )
+        .into_response())
 }
 
 #[cfg(test)]

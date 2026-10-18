@@ -12,6 +12,7 @@ use foiled_core::auth::{Role, agent_scopes, parse_scopes};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::catalogue::DecoyKind;
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
+use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
 use foiled_core::sigv4::Credentials;
 use serde::Deserialize;
@@ -290,6 +291,17 @@ fn wrap<'a, T: 'a>(
     fut: impl std::future::Future<Output = Result<T, StoreError>> + 'a,
 ) -> StoreFuture<'a, T> {
     Box::pin(SendFuture::new(fut))
+}
+
+/// One `enrich_cache` row. D1 returns integers as JavaScript numbers.
+#[derive(Deserialize)]
+struct EnrichRow {
+    provider: String,
+    kind: String,
+    value: String,
+    fetched_at: f64,
+    ttl_secs: f64,
+    facts: String,
 }
 
 #[derive(Deserialize)]
@@ -955,6 +967,57 @@ impl Store for CfStore {
                 .await
                 .map_err(err)?;
             Ok(())
+        })
+    }
+
+    fn enrichment_cache(
+        &self,
+        observables: Vec<Observable>,
+        now_ms: i64,
+        max_statements: usize,
+    ) -> StoreFuture<'_, Vec<CacheEntry>> {
+        wrap(async move {
+            // One D1 batch: one statement per kind and chunk of values, each
+            // under the bound parameter limit, within the statement budget
+            // (d1_sql::enrich_lookup_plan).
+            let plan = sql::enrich_lookup_plan(&observables, max_statements);
+            if plan.is_empty() {
+                return Ok(Vec::new());
+            }
+            let mut statements = Vec::with_capacity(plan.len());
+            for (kind, values) in &plan {
+                let mut args = Vec::with_capacity(values.len() + 2);
+                args.push(s(kind));
+                args.push(n(now_ms));
+                args.extend(values.iter().map(|v| s(v)));
+                statements.push(
+                    self.db
+                        .prepare(sql::enrich_cache_lookup(values.len()))
+                        .bind(&args)
+                        .map_err(err)?,
+                );
+            }
+            let mut out = Vec::new();
+            for result in self.db.batch(statements).await.map_err(err)? {
+                for row in result.results::<EnrichRow>().map_err(err)? {
+                    // A row that does not parse is skipped, never trusted.
+                    match CacheEntry::from_row(
+                        &row.provider,
+                        &row.kind,
+                        &row.value,
+                        row.fetched_at as i64,
+                        row.ttl_secs as i64,
+                        &row.facts,
+                    ) {
+                        Some(e) => out.push(e),
+                        None => worker::console_warn!(
+                            "store: skipped unreadable enrich_cache row for {}",
+                            row.provider
+                        ),
+                    }
+                }
+            }
+            Ok(out)
         })
     }
 

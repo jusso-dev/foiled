@@ -1,6 +1,6 @@
 # Enrichment
 
-Status: Fact contract, provider config, response parsers, the local ASN table and export redaction in place. The `foiled-enrich` Queue consumer, the D1 tables and the YARA batch job land with the data layer. Owner: #11.
+Status: Fact contract, provider config, response parsers, the local ASN table, export redaction, the D1 `enrich_cache` table and the API's read path in place. The `foiled-enrich` Queue consumer that writes the cache, the `enrich_budget` table and the YARA batch job land with the data layer; until the consumer runs, the cache is empty and reads return no context. Owner: #11.
 
 Related: capture layer ([ADR 0005](adr/0005-capture-layer.md), #9), attempts and the noise score (#25), ATT&CK mapping (#26), confidence layer (#27), actor matching (#29), campaigns (#33), exports (#13), contribute-back ([contribute-back.md](contribute-back.md), #37), retention ([privacy-and-retention.md](privacy-and-retention.md), #16), licence and data-terms register ([compliance/licence-register.md](compliance/licence-register.md), #38), research notes ([research/landscape.md](research/landscape.md#enrichment-integrations)).
 
@@ -238,21 +238,9 @@ Budget goes first to observables from attempts in `exploit` or `post-exploitatio
 
 Third-party Facts are **not** copied into Postgres. Exports (#13) read Postgres, so keeping provider data in D1 means an export cannot pick it up by accident. Only derived numbers, such as the noise score on an attempt, are stored with the attempt.
 
-Sketch (the migration lands with the consumer):
+`enrich_cache` is created by [migrations/d1/0004_enrich_cache.sql](../migrations/d1/0004_enrich_cache.sql) (with a `CHECK` on `kind` and `ttl_secs`). `enrich_budget` is still a sketch and lands with the consumer that uses it:
 
 ```sql
-CREATE TABLE enrich_cache (
-  cache_key  TEXT PRIMARY KEY,      -- provider:kind:value
-  provider   TEXT NOT NULL,
-  kind       TEXT NOT NULL,
-  value      TEXT NOT NULL,
-  fetched_at INTEGER NOT NULL,      -- unix ms
-  ttl_secs   INTEGER NOT NULL,
-  facts      TEXT NOT NULL          -- JSON array of Facts, [] for "knows nothing"
-);
-CREATE INDEX enrich_cache_observable ON enrich_cache (kind, value);
-CREATE INDEX enrich_cache_age ON enrich_cache (provider, fetched_at);
-
 CREATE TABLE enrich_budget (
   provider     TEXT NOT NULL,
   window       TEXT NOT NULL,       -- minute | day
@@ -267,6 +255,18 @@ CREATE TABLE enrich_budget (
 **TTLs:** each provider has `ttl_secs` in [configs/enrichment.yaml](../configs/enrichment.yaml): a day for reputation providers, seven days for ASN. An empty answer uses `cache.negative_ttl_secs` (six hours). After an error or a spent budget the provider is not asked again for `cache.error_backoff_secs`. The retention planner's `enrichment_cache` TTLs in [configs/retention.yaml](../configs/retention.yaml) are an upper bound on how long a row is kept at all; a Fact past its own `ttl_secs` is not used for scoring even if the row still exists.
 
 **Rate limits:** `rate_limit.per_minute` and `rate_limit.per_day` per provider. The shipped numbers are conservative placeholders for free tiers; set them to your plan.
+
+### Reading the cache
+
+The API reads cached Facts for the addresses it is about to show: ASN refs on IOCs ([iocs.md](iocs.md#asn-context), #34) and the `asn`, `as_org` and `country` columns of `GET /v0/exports/iocs.csv`. Campaign clustering (#33) reads source-address ASN numbers the same way, and clusters without ASN features if the cache cannot be read.
+
+- **One store call per response.** `Store::enrichment_cache(observables, now, max_statements)` returns the raw rows; the Worker store builds a plan with `d1_sql::enrich_lookup_plan` and sends it as **one D1 batch**. The plan removes duplicates first, keeps the first `max_statements * 98` observables (routes pass them newest first, so the oldest go without context when the budget runs out), groups them by kind and chunks them at 98 values per `SELECT ... WHERE kind = ?1 AND value IN (...) AND fetched_at + ttl_secs * 1000 > ?2` (D1 binds at most 100 parameters). The budget is `Limits::enrichment_lookup_statements`, 20 by default (1,960 observables), which leaves room for the request's other queries inside the D1 Free plan's 50 queries per Worker invocation; raise it on a paid plan (1,000). An IOC page (`limit`, up to 200 addresses) needs at most three statements; a CSV export of a month's source addresses needs one per 98.
+- **The rules live in one function.** `foiled_core::enrichment::usable_facts` (called through `foiled_api::enrichment::cached_facts`) keeps a row only while it is fresh (`fetched_at + ttl_secs`) and younger than the retention cap for its provider (`enrichment_cache` in [configs/retention.yaml](../configs/retention.yaml)), keeps a Fact only while it is fresh (`observed_at + ttl_secs`) and only when it names the row's own provider, and drops third-party providers (and Facts keyed under a known third-party namespace such as `greynoise.`) while `show_to_tenants` is false. Third party is decided by an **allowlist**: only `local_asn` (the operator's own table) and `yara` (Foiled's own rules) are first party (`enrichment::FIRST_PARTY`), so a provider added to the config later is hidden until someone decides otherwise. The retention config and `show_to_tenants` come from `configs/retention.yaml` and `configs/enrichment.yaml`, bundled into the Worker at build time like `configs/mcp.yaml`; if a bundled file does not parse, the shipped defaults apply.
+- **A cache failure never fails the response.** If D1 cannot be read the store logs it, the route returns its normal answer without enrichment context, sets `x-foiled-enrichment: unavailable`, and IOC lists also set `enrichment_unavailable: true`.
+- **Exports add the never-resell rule.** The CSV's ASN columns pass through `ioc::export_refs`, which drops every provider on `NEVER_REDISTRIBUTE`, `local_asn` included, so with the shipped providers they stay empty. IOC responses mark such refs `shareable: false` and `ioc::redact_for_export` drops them.
+- **Bad rows are skipped.** A row with an unknown kind, an invalid value, negative numbers or Facts that do not parse (`CacheEntry::from_row`) is logged and ignored, never trusted.
+
+The cache is shared by every tenant of a deployment, but a tenant only ever asks about observables from its own events, so reading it reveals nothing about other tenants.
 
 ## Failure and degradation
 
@@ -302,7 +302,7 @@ In code:
 - `redact_for_export(facts)` drops every Fact whose provider is in `NEVER_REDISTRIBUTE` (`greynoise`, `crowdsec`, `dshield`, `shadowserver`, `huntio`, `abuseipdb`, `local_asn`), and also every Fact whose key is namespaced under one of them, so relabelled data is still caught. Every export, public page and share path (#13, #35, #37) calls it before serialising Facts.
 - `local_asn` is on the list because its dataset may be GeoLite2, which the register keeps out of exports until a row there says otherwise. YARA Facts are Foiled-origin and pass.
 - `strip_non_shareable` in `foiled_core::share` removes provider-named fields from contribute-back records ([contribute-back.md](contribute-back.md)).
-- `show_to_tenants: false` keeps third-party Facts visible to operator roles only in central mode. Turning it on is the operator's call under their own provider terms.
+- `show_to_tenants: false` (the shipped value) keeps third-party Facts out of every API response today, whoever asks: the API has no separate operator role yet, so there is no caller it could show them to. The planned operator console (#14) is where an operator-only view belongs. Setting `show_to_tenants: true` shows them to every caller of the tenant-facing routes, which is the operator's call under their own provider terms.
 - Adding a provider means adding it to the config schema, to `NEVER_REDISTRIBUTE` unless the register says its data may be shared, and a row to the register. The config schema rejects providers it does not list, and a lint test checks that every configured provider is on the never-redistribute list.
 
 This describes the design constraints Foiled follows. It is not legal advice; operators should check provider terms with their own counsel.
@@ -323,6 +323,7 @@ This describes the design constraints Foiled follows. It is not legal advice; op
 - each parser against hand-written response fixtures in [testdata/enrichment/providers/](../testdata/enrichment/providers/) (documentation IPs and ASNs, fake CVE ids, no real data), including not-found answers, provider errors, wrong types and clipping;
 - the ASN table on [testdata/enrichment/asn.csv](../testdata/enrichment/asn.csv): IPv4, IPv6, IPv4-mapped input, inclusive edges, gaps, overlaps, bad rows and a thousand-range binary search;
 - cache freshness, Fact freshness and overflow at extreme TTLs;
+- reading cache rows (`CacheEntry::from_row`, `usable_facts`): expired rows and Facts, the retention cap, Facts under another provider's name and third-party visibility; and in `crates/api` the D1 lookup SQL against SQLite (freshness, chunking under the bound parameter limit, the overall cap, a hostile value) and the IOC and export routes over cached rows;
 - `noise_inputs` and `redact_for_export`;
 - a fake provider and an always-failing provider run over attempts built from the capture fixtures: the fake provider's Facts attach to the attempt through its source IP, the failing provider is recorded, and no event is lost;
 - the Fact fixtures in [testdata/enrichment/facts/](../testdata/enrichment/facts/) pass both the schema and the Rust type, and the shipped config passes its schema with every third-party provider off.
@@ -333,6 +334,7 @@ No test or code path makes a network call.
 
 - Verify current endpoints, quotas and terms for each provider before turning it on (marked **verify** in the register).
 - Parsers for Shadowserver, Hunt.io and AbuseIPDB.
-- The D1 migration, the consumer and the sweep cron, with the API routes the lead integrates.
+- The `foiled-enrich` consumer that writes `enrich_cache`, the `enrich_budget` migration and the sweep cron. The read path and the table are in place.
+- An operator-only view of third-party Facts (needs an operator role, #14).
 - The YARA runner and the `rules/yara/` directory.
 - Counsel review of the derived-fields rule for the exported noise score (register, "Never include in a paid feed or public dump").

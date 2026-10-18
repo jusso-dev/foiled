@@ -952,6 +952,122 @@ impl Provider for AsnTable {
 }
 
 // ---------------------------------------------------------------------------
+// Reading the cache
+// ---------------------------------------------------------------------------
+
+/// Providers whose data is the operator's own or Foiled's: `local_asn` is
+/// the operator's own table (still never redistributed) and `yara` runs
+/// Foiled's own rules. This is an allowlist: every other provider, including
+/// one added to the config later, is treated as third party.
+pub const FIRST_PARTY: &[&str] = &[LOCAL_ASN, "yara"];
+
+/// Known third-party provider names, used to catch their data relabelled
+/// under another provider's name (`greynoise.noise` as a key).
+pub const KNOWN_THIRD_PARTY: &[&str] = &[
+    GREYNOISE,
+    CROWDSEC,
+    DSHIELD,
+    "shadowserver",
+    "huntio",
+    "abuseipdb",
+];
+
+/// True unless `provider` is on [`FIRST_PARTY`]. Ignores ASCII case.
+pub fn is_third_party(provider: &str) -> bool {
+    !FIRST_PARTY.iter().any(|p| p.eq_ignore_ascii_case(provider))
+}
+
+/// True if a Fact key's namespace names a known third-party provider.
+fn third_party_namespace(key: &str) -> bool {
+    let ns = key.split('.').next().unwrap_or("");
+    KNOWN_THIRD_PARTY.iter().any(|p| p.eq_ignore_ascii_case(ns))
+}
+
+impl CacheEntry {
+    /// A cache row as stored in D1 (`enrich_cache`). `None` for a row that
+    /// does not parse (unknown kind, invalid value, bad Facts JSON, negative
+    /// numbers), which is skipped rather than trusted.
+    pub fn from_row(
+        provider: &str,
+        kind: &str,
+        value: &str,
+        fetched_at: i64,
+        ttl_secs: i64,
+        facts_json: &str,
+    ) -> Option<Self> {
+        let kind: ObservableKind = serde_json::from_value(Value::String(kind.to_owned())).ok()?;
+        let observable = Observable::new(kind, value).ok()?;
+        let facts: Vec<Fact> = serde_json::from_str(facts_json).ok()?;
+        Some(CacheEntry {
+            provider: provider.to_owned(),
+            observable,
+            fetched_at,
+            ttl_secs: u64::try_from(ttl_secs).ok()?,
+            facts,
+        })
+    }
+}
+
+/// Who is reading cached Facts and when.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadPolicy {
+    pub now_ms: i64,
+    /// `show_to_tenants` in `configs/enrichment.yaml`. When false (the
+    /// shipped default) third-party Facts are left out of anything a tenant
+    /// user can read.
+    pub show_third_party: bool,
+}
+
+/// The Facts that may be used from cache rows, grouped by observable:
+///
+/// - the row is fresh at `now` (`fetched_at + ttl_secs`), and younger than
+///   the retention cap for its provider (`enrichment_cache` TTLs, #16), so
+///   a row the purge job has not reached yet is not used either;
+/// - each Fact is fresh at `now` (`observed_at + ttl_secs`);
+/// - each Fact belongs to the row's provider, so a row cannot carry
+///   another provider's data under its name;
+/// - third-party providers (anything not on [`FIRST_PARTY`]), and Facts
+///   keyed under a known third-party namespace (`greynoise.noise`), only
+///   when `show_third_party` is set.
+///
+/// Observables are in order, with no duplicates; Facts keep row order.
+pub fn usable_facts(
+    entries: &[CacheEntry],
+    policy: ReadPolicy,
+    retention: &crate::retention::RetentionConfig,
+) -> Vec<ObservedFacts> {
+    let mut by: BTreeMap<Observable, Vec<Fact>> = BTreeMap::new();
+    for e in entries {
+        if !e.is_fresh(policy.now_ms) {
+            continue;
+        }
+        let cap_days = retention.ttl_days_for(
+            crate::retention::DataClass::EnrichmentCache,
+            Some(&e.provider),
+        );
+        let cap_ms = i64::from(cap_days).saturating_mul(86_400_000);
+        if policy.now_ms.saturating_sub(e.fetched_at) >= cap_ms {
+            continue;
+        }
+        if !policy.show_third_party && is_third_party(&e.provider) {
+            continue;
+        }
+        let facts = e.facts.iter().filter(|f| {
+            f.provider.eq_ignore_ascii_case(&e.provider)
+                && f.is_fresh(policy.now_ms)
+                && (policy.show_third_party || !third_party_namespace(&f.key))
+        });
+        by.entry(e.observable.clone())
+            .or_default()
+            .extend(facts.cloned());
+    }
+    by.into_iter()
+        .filter(|(_, facts)| !facts.is_empty())
+        .map(|(observable, facts)| ObservedFacts { observable, facts })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Consumers
 // ---------------------------------------------------------------------------
 
@@ -1719,5 +1835,163 @@ mod tests {
         assert_eq!(run.failures.len(), observables.len());
         let ids: Vec<&String> = attempts.iter().flat_map(|a| &a.event_ids).collect();
         assert_eq!(ids.len(), 3);
+    }
+
+    fn row(provider: &str, ip: &str, fetched_at: i64, ttl: u64, facts: Vec<Fact>) -> CacheEntry {
+        CacheEntry {
+            provider: provider.into(),
+            observable: Observable::ip(ip).unwrap(),
+            fetched_at,
+            ttl_secs: ttl,
+            facts,
+        }
+    }
+
+    fn fact_at(provider: &str, key: &str, v: Value, at: i64, ttl: u64) -> Fact {
+        Fact {
+            provider: provider.into(),
+            key: key.into(),
+            value: v,
+            confidence: 90,
+            observed_at: at,
+            ttl_secs: ttl,
+            raw_ref: None,
+        }
+    }
+
+    #[test]
+    fn cache_rows_parse_and_bad_rows_are_skipped() {
+        let facts = serde_json::to_string(&vec![fact_at(
+            LOCAL_ASN,
+            "asn.number",
+            Value::from(64498),
+            NOW,
+            DAY,
+        )])
+        .unwrap();
+        let e = CacheEntry::from_row(LOCAL_ASN, "ip", "::ffff:203.0.113.7", NOW, 86_400, &facts)
+            .unwrap();
+        assert_eq!(e.observable.value, "203.0.113.7");
+        assert_eq!(e.facts.len(), 1);
+        assert!(CacheEntry::from_row(LOCAL_ASN, "ipv9", "203.0.113.7", NOW, 1, "[]").is_none());
+        assert!(CacheEntry::from_row(LOCAL_ASN, "ip", "nope", NOW, 1, "[]").is_none());
+        assert!(CacheEntry::from_row(LOCAL_ASN, "ip", "203.0.113.7", NOW, -1, "[]").is_none());
+        assert!(CacheEntry::from_row(LOCAL_ASN, "ip", "203.0.113.7", NOW, 1, "{").is_none());
+    }
+
+    #[test]
+    fn usable_facts_honour_ttls_retention_provider_and_visibility() {
+        let ret = crate::retention::RetentionConfig::default();
+        let now = NOW + 1000;
+        let policy = ReadPolicy {
+            now_ms: now,
+            show_third_party: false,
+        };
+        let entries = vec![
+            // Fresh row, one fresh and one expired Fact, one Fact that
+            // claims another provider.
+            row(
+                LOCAL_ASN,
+                "203.0.113.7",
+                NOW,
+                DAY,
+                vec![
+                    fact_at(LOCAL_ASN, "asn.number", Value::from(64498), NOW, DAY),
+                    fact_at(
+                        LOCAL_ASN,
+                        "asn.org",
+                        Value::from("old"),
+                        NOW - 2 * 86_400_000,
+                        DAY,
+                    ),
+                    fact_at(GREYNOISE, "greynoise.noise", Value::Bool(true), NOW, DAY),
+                ],
+            ),
+            // Expired row.
+            row(
+                LOCAL_ASN,
+                "198.51.100.23",
+                NOW - 2 * 86_400_000,
+                DAY,
+                vec![fact_at(
+                    LOCAL_ASN,
+                    "asn.number",
+                    Value::from(64497),
+                    NOW - 2 * 86_400_000,
+                    10 * DAY,
+                )],
+            ),
+            // Row TTL longer than the retention cap (7 days by default).
+            row(
+                LOCAL_ASN,
+                "192.0.2.1",
+                NOW - 8 * 86_400_000,
+                30 * DAY,
+                vec![fact_at(
+                    LOCAL_ASN,
+                    "asn.number",
+                    Value::from(64496),
+                    NOW - 8 * 86_400_000,
+                    30 * DAY,
+                )],
+            ),
+            // Third-party row, and a relabelled third-party key.
+            row(
+                GREYNOISE,
+                "203.0.113.7",
+                NOW,
+                DAY,
+                vec![fact_at(
+                    GREYNOISE,
+                    "greynoise.noise",
+                    Value::Bool(true),
+                    NOW,
+                    DAY,
+                )],
+            ),
+            row(
+                "team_asn",
+                "203.0.113.7",
+                NOW,
+                DAY,
+                vec![
+                    fact_at("team_asn", "greynoise.noise", Value::Bool(true), NOW, DAY),
+                    fact_at("team_asn", "geo.country", Value::from("US"), NOW, DAY),
+                ],
+            ),
+            // First party, with a relabelled third-party key.
+            row(
+                "yara",
+                "203.0.113.7",
+                NOW,
+                DAY,
+                vec![
+                    fact_at("yara", "greynoise.noise", Value::Bool(true), NOW, DAY),
+                    fact_at("yara", "yara.rule", Value::from("demo_rule"), NOW, DAY),
+                ],
+            ),
+        ];
+        // A provider nobody listed is third party by default.
+        assert!(is_third_party("team_asn") && is_third_party("brand_new_provider"));
+        assert!(!is_third_party("LOCAL_ASN") && !is_third_party("yara"));
+        let got = usable_facts(&entries, policy, &ret);
+        assert_eq!(got.len(), 1);
+        let keys: Vec<(&str, &str)> = got[0]
+            .facts
+            .iter()
+            .map(|f| (f.provider.as_str(), f.key.as_str()))
+            .collect();
+        assert_eq!(keys, vec![(LOCAL_ASN, "asn.number"), ("yara", "yara.rule")]);
+
+        let shown = usable_facts(
+            &entries,
+            ReadPolicy {
+                now_ms: now,
+                show_third_party: true,
+            },
+            &ret,
+        );
+        assert_eq!(shown[0].facts.len(), 6);
+        assert!(shown[0].facts.iter().any(|f| f.provider == GREYNOISE));
     }
 }

@@ -1118,6 +1118,8 @@ paths:
       responses:
         "200":
           description: The attempt's IOCs.
+          headers:
+            x-foiled-enrichment: { $ref: "#/components/headers/EnrichmentUnavailable" }
           content:
             application/json:
               schema:
@@ -1131,6 +1133,7 @@ paths:
                     type: array
                     items: { $ref: "../schemas/ioc.schema.json" }
                   truncated: { type: boolean }
+                  enrichment_unavailable: { type: boolean, description: "The enrichment cache could not be read; `enrichment` is empty (#11)." }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1440,6 +1443,8 @@ paths:
       responses:
         "200":
           description: Matching IOCs.
+          headers:
+            x-foiled-enrichment: { $ref: "#/components/headers/EnrichmentUnavailable" }
           content:
             application/json:
               schema:
@@ -1450,6 +1455,7 @@ paths:
                     type: array
                     items: { $ref: "../schemas/ioc.schema.json" }
                   truncated: { type: boolean }
+                  enrichment_unavailable: { type: boolean, description: "The enrichment cache could not be read; `enrichment` is empty (#11)." }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1470,6 +1476,8 @@ paths:
       responses:
         "200":
           description: The IOC.
+          headers:
+            x-foiled-enrichment: { $ref: "#/components/headers/EnrichmentUnavailable" }
           content:
             application/json:
               schema: { $ref: "../schemas/ioc.schema.json" }
@@ -1590,6 +1598,8 @@ paths:
       responses:
         "200":
           description: CSV.
+          headers:
+            x-foiled-enrichment: { $ref: "#/components/headers/EnrichmentUnavailable" }
           content:
             text/csv:
               schema: { type: string }
@@ -2106,6 +2116,11 @@ components:
         WAF rule and again in the Worker from `cf.tlsClientAuth`; the
         certificate's SHA-256 fingerprint maps to one identity, role and
         tenant in D1. Certificates are issued through `POST /v0/enrol` (#31).
+
+  headers:
+    EnrichmentUnavailable:
+      description: "`unavailable` when the enrichment cache (#11) could not be read. The response is complete otherwise; enrichment context is just missing. Absent when the cache was read."
+      schema: { type: string, enum: [unavailable] }
 
   parameters:
     Limit:
