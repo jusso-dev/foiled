@@ -8,4 +8,4 @@ state post-exploitation  first seen 2026-10-18T01:03:03Z  last seen 2026-10-18T0
    4  +   1.020s  hook        high     hook demo-app.upload-path-traversal fired at post_exploit (FOILED-DEMO-0001)
                    state -> post-exploitation (hook_post_exploit)
    5  +   2.000s  egress      info     egress to 192.0.2.80:80 (blocked)
-pcap filter 'host 203.0.113.7' from 2026-10-18T01:02:58Z to 2026-10-18T01:03:10Z
+pcap filter 'host 203.0.113.7 or host 192.0.2.80' from 2026-10-18T01:02:58Z to 2026-10-18T01:03:10Z

@@ -181,12 +181,19 @@ async fn timeline(
 ) -> Result<Response, ApiError> {
     let who = auth.require(Scope::AttemptsRead)?;
     let (since, until) = window(&state, &q);
-    let (attempts, events, _) = attempts_and_events(&state, &who.tenant_id, since, until).await?;
+    let (attempts, events, truncated) =
+        attempts_and_events(&state, &who.tenant_id, since, until).await?;
     let attempt = attempts
         .iter()
         .find(|a| a.attempt_id == attempt_id)
         .ok_or_else(|| ApiError::not_found("attempt"))?;
-    let t = foiled_core::timeline::build_timeline(attempt, &events);
+    let mut t = foiled_core::timeline::build_timeline(attempt, &events);
+    if truncated {
+        t.notes.push(format!(
+            "The window held more than {MAX_WINDOW_EVENTS} events, so this attempt may be cut \
+             short. Narrow since and until."
+        ));
+    }
     Ok(match f.format {
         TimelineFormat::Json => Json(t).into_response(),
         TimelineFormat::Text => (

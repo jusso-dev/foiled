@@ -1,6 +1,6 @@
 # Attempt timeline
 
-The timeline answers "what did this source do to this decoy?" without anyone logging in to a dead guest (#10). It is the read model of one [attempt](attempts.md) (#25): the attempt's capture events in time order, the points where its state moved, the payloads and IOCs linked to it, and a recipe for cutting the matching pcap slice for Wireshark. Earlier drafts called this "session replay"; [session-replay.md](session-replay.md) now points here.
+The timeline answers "what did this source do to this decoy?" without anyone logging in to a dead guest (#10). It is the read model of one [attempt](attempts.md) (#25): the attempt's capture events in time order, the points where its state moved, the payloads (and, with #34, IOCs) linked to it, and a recipe for cutting the matching pcap slice for Wireshark. Earlier drafts called this "session replay"; [session-replay.md](session-replay.md) now points here.
 
 The timeline is **read-only**. It never changes or deletes capture events, and Foiled never re-sends captured traffic onto any network. Active replay against live systems is out of scope for this project for good.
 
@@ -28,10 +28,10 @@ curl -sS -H "authorization: Bearer $FOILED_TOKEN" \
 | `attempt_id`, `decoy_id`, `catalogue_id`, `src` | From the attempt. |
 | `first_seen`, `last_seen`, `state` | From the attempt. Unix ms. |
 | `entries[]` | One per event: `seq` (from 1), `ts`, `t_offset_ms` since the first event, `channel`, `severity`, a one-line `summary`, `state_change` when the attempt moved state at this event, and the unchanged capture envelope as `event`. |
-| `payload_refs`, `ioc_refs` | R2 objects and IOCs linked to the attempt (#9, #34). |
+| `payload_refs`, `ioc_refs` | R2 objects linked to the attempt (#9). `ioc_refs` stays empty until IOC extraction (#34) fills it. |
 | `pcap` | How to cut the pcap slice (below). |
-| `notes` | Caveats for the reader, such as TLS without keys. |
-| `missing_event_ids` | Events the attempt lists that are no longer stored, for example after the retention purge (#16). |
+| `notes` | Caveats for the reader: TLS without keys, a source that is not an IP address, too many egress destinations, or a window that hit the 20,000-event cap. |
+| `missing_event_ids` | Events the attempt lists that are no longer stored, for example after the retention purge (#16). Always empty while the API builds attempts on request from the stored events; it matters once attempts are materialised. |
 
 One entry from the demo exploit, in full in the [golden file](../testdata/attempts/timeline/demo-fleet-2.json):
 
@@ -61,14 +61,14 @@ state post-exploitation  first seen 2026-10-18T01:03:03Z  last seen 2026-10-18T0
    4  +   1.020s  hook        high     hook demo-app.upload-path-traversal fired at post_exploit (FOILED-DEMO-0001)
                    state -> post-exploitation (hook_post_exploit)
    5  +   2.000s  egress      info     egress to 192.0.2.80:80 (blocked)
-pcap filter 'host 203.0.113.7' from 2026-10-18T01:02:58Z to 2026-10-18T01:03:10Z
+pcap filter 'host 203.0.113.7 or host 192.0.2.80' from 2026-10-18T01:02:58Z to 2026-10-18T01:03:10Z
 ```
 
 Times are UTC. Through the API the state moves to `exploit` one event earlier, at event 2 with signal `matcher`, because the API passes tier 1 signature hits into the grouping ([exploit-attribution.md](exploit-attribution.md)). The golden file is built without them.
 
 ### Attacker text
 
-Paths, commands, headers and file names in summaries are attacker-controlled. Summaries are built only from known envelope fields, control characters (including CR and LF) and bidi overrides are escaped as `\u{..}`, and each summary is capped at 160 characters. A request line cannot forge an extra timeline row or reverse the reading direction of a file name. The full envelope in `event` is unchanged, so consumers that render it must escape it themselves.
+Paths, commands, headers and file names in summaries are attacker-controlled. Summaries are built only from known envelope fields, control characters (including CR and LF) and bidi marks, zero-width characters and the Unicode line and paragraph separators are escaped as `\u{..}`, and each summary is capped at 160 characters. A request line cannot forge an extra timeline row or reverse the reading direction of a file name. The full envelope in `event` is unchanged, so consumers that render it must escape it themselves.
 
 ## Pcap extract
 
@@ -78,7 +78,7 @@ The `pcap` block gives everything needed to cut one attempt out of that:
 
 | Field | Example | Meaning |
 | --- | --- | --- |
-| `filter` | `host 203.0.113.7` | BPF filter. Built only when `src` parses as an IP address; otherwise empty, with a note. |
+| `filter` | `host 203.0.113.7 or host 192.0.2.80` | BPF filter: the source plus the guest's egress and DNS destinations (at most 16), so second-stage fetches stay in the slice. Built only when `src` parses as an IP address; otherwise empty, with a note. |
 | `from_ms`, `to_ms` | | The attempt's window padded by 5 seconds on each side. |
 | `host_glob` | `dcy-demo-1/ring.pcap*` | Ring files still on the host, relative to `/var/lib/foiled/capture`. |
 | `r2_prefix` | `t1/dcy-demo-1/_/network/` | Where uploaded ring files are in the evidence bucket. |
@@ -97,11 +97,11 @@ Steps, with Wireshark's `mergecap` and `editcap` and `tcpdump`:
    OUT=$(jq -r .pcap.output_path timeline.json)
    ```
 
-2. Get the ring files that cover the window. For recent attempts they may still be on the host under `host_glob`. Otherwise copy the objects under `r2_prefix` from the evidence bucket with an R2 token that can read it; there is no download endpoint in the MVP. Each uploaded file is also referenced by the `payload_ref` of its `network` capture event.
+2. Put the ring files that cover the window in a `rings/` directory. For recent attempts they may still be on the host under `host_glob`. Otherwise copy the objects under `r2_prefix` from the evidence bucket with an R2 token that can read it; there is no download endpoint in the MVP. Uploaded objects are named by SHA-256, not `ring.pcapNN`, and each is referenced by the `payload_ref` of its `network` capture event.
 3. Merge them and cut the window. `jq` prints UTC and `editcap` reads these times as local time, so run it in UTC.
 
    ```sh
-   mergecap -w merged.pcap rings/ring.pcap*
+   mergecap -w merged.pcap rings/*
    TZ=UTC editcap -A "$FROM" -B "$TO" merged.pcap window.pcap
    ```
 

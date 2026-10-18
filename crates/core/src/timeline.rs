@@ -16,6 +16,9 @@ use crate::sigv4::amz_date;
 /// Longest summary kept, in characters, before `…` is appended.
 pub const MAX_SUMMARY_CHARS: usize = 160;
 
+/// Most egress and DNS destinations added to the pcap filter.
+pub const MAX_FILTER_HOSTS: usize = 16;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateMark {
     pub state: AttemptState,
@@ -82,7 +85,8 @@ pub struct Timeline {
     pub missing_event_ids: Vec<String>,
 }
 
-/// Escape control, bidi and line-break characters and cap the length.
+/// Escape control, bidi, line-break and zero-width characters and cap the
+/// length.
 pub fn printable(s: &str) -> String {
     let mut out = String::new();
     for (n, c) in s.chars().enumerate() {
@@ -90,8 +94,18 @@ pub fn printable(s: &str) -> String {
             out.push('…');
             break;
         }
-        let bidi = matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}');
-        if c.is_control() || bidi {
+        // Bidi marks and overrides, zero-width characters, and the Unicode
+        // line and paragraph separators, none of which `is_control` covers.
+        let invisible = matches!(
+            c,
+            '\u{061C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{2069}'
+                | '\u{FEFF}'
+        );
+        if c.is_control() || invisible {
             out.push_str(&c.escape_unicode().to_string());
         } else {
             out.push(c);
@@ -244,7 +258,34 @@ pub fn build_timeline(attempt: &Attempt, events: &[CaptureEvent]) -> Timeline {
         );
     }
     let filter = match attempt.src.parse::<std::net::IpAddr>() {
-        Ok(ip) => format!("host {ip}"),
+        Ok(ip) => {
+            // The guest's own outbound traffic (second stages, callbacks) is
+            // part of the attempt, so its destinations join the filter.
+            let mut hosts = vec![ip];
+            for e in &mine {
+                if !matches!(e.channel, Channel::Egress | Channel::Dns) {
+                    continue;
+                }
+                let Some(dst) = e.dst.as_ref().and_then(|d| d.ip.parse().ok()) else {
+                    continue;
+                };
+                if !hosts.contains(&dst) {
+                    hosts.push(dst);
+                }
+            }
+            if hosts.len() > MAX_FILTER_HOSTS + 1 {
+                notes.push(format!(
+                    "The guest contacted {} destinations; the pcap filter keeps the first {MAX_FILTER_HOSTS}.",
+                    hosts.len() - 1
+                ));
+                hosts.truncate(MAX_FILTER_HOSTS + 1);
+            }
+            hosts
+                .iter()
+                .map(|h| format!("host {h}"))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        }
         Err(_) => {
             notes.push("Source is not an IP address, so no pcap filter was built.".to_string());
             String::new()
@@ -308,8 +349,8 @@ pub fn render_text(t: &Timeline) -> String {
         "attempt {}  {} -> {} ({})\nstate {}  first seen {}  last seen {}  {} event(s)\n",
         t.attempt_id,
         printable(&t.src),
-        t.decoy_id,
-        t.catalogue_id,
+        printable(&t.decoy_id),
+        printable(&t.catalogue_id),
         label(&t.state),
         iso(t.first_seen),
         iso(t.last_seen),
@@ -379,6 +420,9 @@ mod tests {
         let s = summarise(&e);
         assert!(!s.contains('\n') && !s.contains('\r') && !s.contains('\u{202E}'));
         assert!(s.contains("\\u{d}\\u{a}") && s.contains("\\u{202e}"), "{s}");
+        for c in ['\u{2028}', '\u{2029}', '\u{200B}', '\u{061C}', '\u{FEFF}'] {
+            assert!(!printable(&format!("a{c}b")).contains(c), "{c:?}");
+        }
         let long = ev(
             "b",
             1_000,
@@ -423,6 +467,11 @@ mod tests {
         assert_eq!(t.missing_event_ids, ["purged"]);
         assert_eq!(t.notes.len(), 2, "TLS and retention notes: {:?}", t.notes);
         assert_eq!(t.pcap.filter, "host 203.0.113.7");
+        let mut events = events;
+        events.push(ev("c", 2_500, "egress", json!({"verdict": "blocked"})));
+        let attempt = build(&events, DEFAULT_IDLE_GAP_MS, &extra).remove(0);
+        let t = build_timeline(&attempt, &events);
+        assert_eq!(t.pcap.filter, "host 203.0.113.7 or host 10.85.1.2");
         assert_eq!(t.pcap.from_ms, 1_000 - PCAP_PAD_MS);
         assert_eq!(t.pcap.host_glob, "d1/ring.pcap*");
         assert_eq!(t.pcap.r2_prefix, "t1/d1/_/network/");

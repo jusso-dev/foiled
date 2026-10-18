@@ -267,7 +267,7 @@ async fn timeline_orders_events_and_renders_text() {
             .any(|e| e["state_change"]["state"] == "post-exploitation"),
         "{t}"
     );
-    assert_eq!(t["pcap"]["filter"], "host 203.0.113.7");
+    assert_eq!(t["pcap"]["filter"], "host 203.0.113.7 or host 192.0.2.80");
     assert_eq!(t["pcap"]["r2_prefix"], "t1/dcy-demo-1/_/network/");
 
     let (st, ct, text) = get_text(

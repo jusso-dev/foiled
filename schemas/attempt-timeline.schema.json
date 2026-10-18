@@ -56,7 +56,7 @@
       "additionalProperties": false,
       "required": ["filter", "from_ms", "to_ms", "host_glob", "r2_prefix", "output_path"],
       "properties": {
-        "filter": { "type": "string", "pattern": "^(host [0-9A-Fa-f.:]+)?$", "description": "BPF filter; empty when the source is not an IP address." },
+        "filter": { "type": "string", "pattern": "^(host [0-9A-Fa-f.:]+( or host [0-9A-Fa-f.:]+)*)?$", "description": "BPF filter over the source and the guest's egress and DNS destinations; empty when the source is not an IP address." },
         "from_ms": { "type": "integer" },
         "to_ms": { "type": "integer" },
         "host_glob": { "type": "string", "description": "Ring files not yet uploaded, relative to /var/lib/foiled/capture on the host." },

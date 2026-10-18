@@ -181,7 +181,7 @@
   "payload_refs": [],
   "ioc_refs": [],
   "pcap": {
-    "filter": "host 203.0.113.7",
+    "filter": "host 203.0.113.7 or host 192.0.2.80",
     "from_ms": 1792285378000,
     "to_ms": 1792285390000,
     "host_glob": "dcy-demo-1/ring.pcap*",
