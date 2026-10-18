@@ -110,6 +110,14 @@ pub const BINDINGS: &[Binding] = &[
         schema: "schemas/ioc.schema.json",
     },
     Binding {
+        data_dir: "testdata/campaigns/expected",
+        schema: "schemas/campaign.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/campaigns/actions",
+        schema: "schemas/campaign-action.schema.json",
+    },
+    Binding {
         data_dir: "testdata/agent/jobs",
         schema: "schemas/agent/job.schema.json",
     },

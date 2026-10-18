@@ -1,0 +1,10 @@
+{
+  "action_id": "act-demo-0001",
+  "kind": "label",
+  "campaign_id": "cmp_2eb2760245d4b65e168cb56f",
+  "anchor_attempt_id": "att_01b0403bb68495616e0632d7",
+  "title": "Demo upload wave, sensors and sandbox",
+  "note": "Same loader family across the edge sensors and the sandbox decoys; illustrative only.",
+  "analyst_id": "analyst-demo",
+  "at": 1792303323000
+}

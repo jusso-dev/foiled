@@ -1,0 +1,94 @@
+{
+  "description": "Generic probes from two addresses in the same ASN, one of them touching two decoys (#33 validation). Only the ASN and a generic probe are shared, so no campaign forms.",
+  "now": 1792288923000,
+  "asns": {
+    "203.0.113.60": 64501,
+    "203.0.113.61": 64501
+  },
+  "events": [
+    {
+      "event_id": "asn-p1",
+      "ts": 1792285323000,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "info",
+      "src": {
+        "ip": "203.0.113.60"
+      },
+      "dst": {
+        "ip": "10.85.1.2",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "data": {
+        "method": "GET",
+        "path": "/",
+        "status": 200,
+        "user_agent": "Mozilla/5.0"
+      }
+    },
+    {
+      "event_id": "asn-p2",
+      "ts": 1792285353000,
+      "decoy_id": "dcy-demo-2",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "info",
+      "src": {
+        "ip": "203.0.113.61"
+      },
+      "dst": {
+        "ip": "10.85.1.3",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "data": {
+        "method": "GET",
+        "path": "/",
+        "status": 200,
+        "user_agent": "Mozilla/5.0"
+      }
+    },
+    {
+      "event_id": "asn-p3",
+      "ts": 1792285383000,
+      "decoy_id": "dcy-demo-3",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "info",
+      "src": {
+        "ip": "203.0.113.60"
+      },
+      "dst": {
+        "ip": "10.85.1.4",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-1"
+      },
+      "data": {
+        "method": "GET",
+        "path": "/",
+        "status": 200,
+        "user_agent": "Mozilla/5.0"
+      }
+    }
+  ]
+}

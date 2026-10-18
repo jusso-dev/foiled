@@ -1,0 +1,799 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/campaign.schema.json",
+  "title": "Foiled campaign",
+  "description": "Attempts clustered across decoys and sensors by shared infrastructure, TTPs, targeting and payloads (#33, docs/campaigns.md). Every member lists the features that joined it. Confidence comes from the #27 layer and is worded possible until an analyst confirms. Display strings are defanged and escaped; never parse them. Mirrors Campaign in crates/core/src/campaign.rs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "campaign_id",
+    "tenant_id",
+    "tenant_scope",
+    "title",
+    "status",
+    "first_seen",
+    "last_seen",
+    "seed",
+    "attempt_ids",
+    "decoy_ids",
+    "sensor_ids",
+    "catalogue_ids",
+    "members",
+    "feature_summary",
+    "shared_ioc_ids",
+    "confidence_ref",
+    "confidence",
+    "suggested_actor_links",
+    "analyst",
+    "notes"
+  ],
+  "properties": {
+    "campaign_id": {
+      "type": "string",
+      "pattern": "^cmp_[a-f0-9]{24}$",
+      "description": "SHA-256 over tenant and seed attempt (or tenant and split action), truncated. Stable for the same evidence and actions."
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_scope": {
+      "const": "tenant",
+      "description": "Only tenant scope exists. A fleet scope for shared research sensors needs an explicit research operator first (docs/campaigns.md#tenant-isolation-and-shared-research-sensors)."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Analyst title when set, otherwise generated from the strongest shared feature. Escaped."
+    },
+    "status": {
+      "$ref": "#/$defs/status"
+    },
+    "first_seen": {
+      "type": "integer",
+      "description": "Unix ms."
+    },
+    "last_seen": {
+      "type": "integer",
+      "description": "Unix ms."
+    },
+    "seed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "features"
+      ],
+      "properties": {
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^att_[a-f0-9]{24}$"
+        },
+        "features": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/feature"
+          }
+        }
+      }
+    },
+    "attempt_ids": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^att_[a-f0-9]{24}$"
+      }
+    },
+    "decoy_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "sensor_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "catalogue_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "members": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/member"
+      }
+    },
+    "feature_summary": {
+      "$ref": "#/$defs/feature_summary"
+    },
+    "shared_ioc_ids": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "pattern": "^ioc_[a-f0-9]{24}$"
+      },
+      "description": "IOC ids (#34) seen in at least two members."
+    },
+    "confidence_ref": {
+      "type": "string",
+      "pattern": "^/v0/campaigns/cmp_[a-f0-9]{24}/evidence$",
+      "description": "The full #27 explanation: the campaign link and one link per member."
+    },
+    "confidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "score",
+        "band",
+        "wording",
+        "publishable",
+        "evidence",
+        "caps_applied"
+      ],
+      "description": "The #27 score for the campaign (link kind attempt_campaign, attempt: the seed). Clustering alone stays below publish_min and high.",
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "band": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "wording": {
+          "enum": [
+            "possible",
+            "confirmed"
+          ]
+        },
+        "publishable": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "signal_id",
+              "source",
+              "weight",
+              "summary"
+            ],
+            "properties": {
+              "signal_id": {
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "rule",
+                  "sequence",
+                  "vuln_path_hook",
+                  "catalogue_prior",
+                  "vendor_desc",
+                  "predisclosure_backmatch",
+                  "enrichment",
+                  "llm",
+                  "analyst",
+                  "campaign_cluster",
+                  "noise_score"
+                ]
+              },
+              "weight": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "summary": {
+                "type": "string"
+              },
+              "ref": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "caps_applied": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "suggested_actor_links": {
+      "type": "array",
+      "description": "Attachment point for actor possible-association (#29). Clustering never fills it.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "label",
+          "wording",
+          "confidence_ref",
+          "report_urls"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "wording": {
+            "enum": [
+              "possible association",
+              "confirmed association"
+            ]
+          },
+          "confidence_ref": {
+            "type": "string"
+          },
+          "report_urls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        }
+      }
+    },
+    "analyst": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "status",
+        "feedback",
+        "merged_from",
+        "split_from",
+        "action_ids"
+      ],
+      "properties": {
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/status"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "feedback": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "feedback",
+                "analyst_id",
+                "at",
+                "note"
+              ],
+              "properties": {
+                "feedback": {
+                  "enum": [
+                    "true_positive",
+                    "false_positive",
+                    "unsure"
+                  ]
+                },
+                "analyst_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "at": {
+                  "type": "integer"
+                },
+                "note": {
+                  "type": "string",
+                  "maxLength": 1000
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "merged_from": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^cmp_[a-f0-9]{24}$"
+          }
+        },
+        "split_from": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^cmp_[a-f0-9]{24}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "action_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "status": {
+      "enum": [
+        "emerging",
+        "active",
+        "closed"
+      ]
+    },
+    "feature": {
+      "enum": [
+        "payload_sha256",
+        "file_sha256",
+        "stage2_url",
+        "callback_domain",
+        "callback_ip",
+        "behaviour_fingerprint",
+        "cmdline",
+        "request_substring",
+        "src_ip",
+        "asn_cve",
+        "asn_techniques",
+        "request_shape"
+      ]
+    },
+    "counted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "values"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "values": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string"
+          },
+          "description": "Defanged and escaped. Never parse."
+        }
+      }
+    },
+    "join": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "signal_id",
+        "feature",
+        "families",
+        "strength",
+        "weight",
+        "display",
+        "with_attempt_id"
+      ],
+      "properties": {
+        "signal_id": {
+          "type": "string",
+          "pattern": "^campaign:[a-z0-9_]+:[a-f0-9]{12}$"
+        },
+        "feature": {
+          "$ref": "#/$defs/feature"
+        },
+        "families": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "infrastructure",
+              "ttp",
+              "targeting",
+              "payload"
+            ]
+          }
+        },
+        "strength": {
+          "enum": [
+            "strong",
+            "medium",
+            "weak"
+          ]
+        },
+        "weight": {
+          "enum": [
+            100,
+            70,
+            40
+          ]
+        },
+        "display": {
+          "type": "string"
+        },
+        "with_attempt_id": {
+          "type": "string",
+          "pattern": "^att_[a-f0-9]{24}$"
+        },
+        "ioc_id": {
+          "type": "string",
+          "pattern": "^ioc_[a-f0-9]{24}$"
+        }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "decoy_id",
+        "catalogue_id",
+        "sensor_id",
+        "src",
+        "first_seen",
+        "last_seen",
+        "state",
+        "noise_score",
+        "joined_by"
+      ],
+      "description": "A member attempt and every feature (up to 8) that joined it. A member with no joins is there by an analyst action (added_by).",
+      "properties": {
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^att_[a-f0-9]{24}$"
+        },
+        "decoy_id": {
+          "type": "string"
+        },
+        "catalogue_id": {
+          "type": "string"
+        },
+        "sensor_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "type": "string"
+        },
+        "first_seen": {
+          "type": "integer"
+        },
+        "last_seen": {
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "probe",
+            "exploit",
+            "post-exploitation"
+          ]
+        },
+        "noise_score": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "joined_by": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/join"
+          }
+        },
+        "added_by": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action_id",
+            "kind",
+            "analyst_id",
+            "at"
+          ],
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "label",
+                "status",
+                "merge",
+                "split",
+                "feedback"
+              ]
+            },
+            "analyst_id": {
+              "type": "string"
+            },
+            "at": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "joined_by": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "added_by"
+          ]
+        }
+      ]
+    },
+    "feature_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "infrastructure",
+        "ttp",
+        "targeting",
+        "payload"
+      ],
+      "description": "Values seen in at least two members, except src_ips and asns, which list every member's.",
+      "properties": {
+        "infrastructure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "src_ips",
+            "asns",
+            "stage2_urls",
+            "callback_domains",
+            "callback_ips"
+          ],
+          "properties": {
+            "src_ips": {
+              "$ref": "#/$defs/counted"
+            },
+            "asns": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "stage2_urls": {
+              "$ref": "#/$defs/counted"
+            },
+            "callback_domains": {
+              "$ref": "#/$defs/counted"
+            },
+            "callback_ips": {
+              "$ref": "#/$defs/counted"
+            }
+          }
+        },
+        "ttp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "techniques",
+            "behaviour_fingerprints",
+            "cmdlines"
+          ],
+          "properties": {
+            "techniques": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$"
+              }
+            },
+            "behaviour_fingerprints": {
+              "$ref": "#/$defs/counted"
+            },
+            "cmdlines": {
+              "$ref": "#/$defs/counted"
+            }
+          }
+        },
+        "targeting": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pattern",
+            "attempts",
+            "sources",
+            "decoys_touched",
+            "sensors_touched",
+            "products_touched",
+            "visible_decoys",
+            "coverage_pct",
+            "noise_bands",
+            "catalogue_ids",
+            "cves",
+            "advisory_timing",
+            "evidence"
+          ],
+          "description": "Mass versus selective targeting (docs/campaigns.md#targeting-pattern).",
+          "properties": {
+            "pattern": {
+              "enum": [
+                "mass",
+                "mixed",
+                "selective"
+              ]
+            },
+            "attempts": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "sources": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "decoys_touched": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sensors_touched": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "products_touched": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "visible_decoys": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "coverage_pct": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "noise_bands": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "targeted",
+                "mixed",
+                "mass",
+                "unknown"
+              ],
+              "properties": {
+                "targeted": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "mixed": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "mass": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unknown": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "catalogue_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cves": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "advisory_timing": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "cve_id",
+                  "published_at",
+                  "first_seen",
+                  "offset_hours",
+                  "before_disclosure"
+                ],
+                "properties": {
+                  "cve_id": {
+                    "type": "string"
+                  },
+                  "published_at": {
+                    "type": "integer"
+                  },
+                  "first_seen": {
+                    "type": "integer"
+                  },
+                  "offset_hours": {
+                    "type": "integer"
+                  },
+                  "before_disclosure": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "evidence": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "payload_sha256",
+            "file_sha256",
+            "request_substrings",
+            "request_shapes"
+          ],
+          "properties": {
+            "payload_sha256": {
+              "$ref": "#/$defs/counted"
+            },
+            "file_sha256": {
+              "$ref": "#/$defs/counted"
+            },
+            "request_substrings": {
+              "$ref": "#/$defs/counted"
+            },
+            "request_shapes": {
+              "$ref": "#/$defs/counted"
+            }
+          }
+        }
+      }
+    }
+  }
+}

