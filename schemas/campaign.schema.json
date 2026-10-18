@@ -238,6 +238,7 @@
           "score",
           "band",
           "status",
+          "review_queue",
           "confidence_ref",
           "report_urls"
         ],
@@ -277,6 +278,10 @@
               "pending",
               "confirmed"
             ]
+          },
+          "review_queue": {
+            "type": "boolean",
+            "description": "Needs analyst attention: pending at or above radar_queue_min, or confirmed with attempts the confirmation does not cover. The review queue filters on this, not on status."
           },
           "confidence_ref": {
             "type": "string"

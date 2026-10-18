@@ -1491,7 +1491,9 @@ paths:
         `high` and never publishable until an analyst confirms. Wording is
         "possible association" unless confirmed; `statement` is the only
         sentence clients may show. The review queue (#35) reads
-        `status=pending&review_queue=true`. Strongest first.
+        `review_queue=true` with no `status` filter, so confirmed links
+        with attempts the confirmation does not cover come back for review.
+        Strongest first.
       x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [campaigns:read]
@@ -1502,7 +1504,7 @@ paths:
         - { name: subject_kind, in: query, schema: { type: string, enum: [campaign, attempt] } }
         - { name: subject_id, in: query, description: "A campaign or attempt id.", schema: { type: string } }
         - { name: actor_id, in: query, schema: { type: string } }
-        - { name: review_queue, in: query, description: "Only pending links at or above radar_queue_min (#35).", schema: { type: boolean } }
+        - { name: review_queue, in: query, description: "Only links that need analyst attention (#35), whatever their status: pending at or above radar_queue_min, or confirmed with attempts the confirmation does not cover (new_since_confirmation). Do not combine with status=pending.", schema: { type: boolean } }
         - { name: min_confidence, in: query, schema: { type: integer, minimum: 0, maximum: 100 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
       responses:

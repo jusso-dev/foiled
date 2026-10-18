@@ -551,6 +551,9 @@ pub struct ActorSuggestion {
     pub band: Band,
     /// `pending` or `confirmed`; rejected links are left out.
     pub status: crate::actor::LinkStatus,
+    /// Needs analyst attention (`ActorLink::review_queue`): the review
+    /// queue (#35) filters on this, not on `status`.
+    pub review_queue: bool,
     /// Where the full explanation lives (`/v0/actor-links/{link_id}`).
     pub confidence_ref: String,
     pub report_urls: Vec<String>,

@@ -9,9 +9,12 @@
 //! publishes without an analyst. Only the decisions are stored. Every route
 //! is scoped to the caller's tenant.
 //!
-//! The review queue (#35) lists pending links with
-//! `GET /v0/actor-links?status=pending&review_queue=true` (or
-//! [`actor_model`]) and records decisions through [`record_decision`].
+//! The review queue (#35) lists every link that needs analyst attention
+//! with `GET /v0/actor-links?review_queue=true` (no `status` filter: a
+//! confirmed link with new members needs review too), or from
+//! [`actor_model`] filtered on `ActorLink::review_queue`, or from
+//! `Campaign::suggested_actor_links` filtered on `review_queue`, and records
+//! decisions through [`record_decision`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -395,8 +398,9 @@ pub struct LinkQuery {
     /// A campaign or attempt id.
     pub subject_id: Option<String>,
     pub actor_id: Option<String>,
-    /// Only links the review queue should show (#35): pending and at or
-    /// above `radar_queue_min`.
+    /// Only links that need analyst attention (#35), whatever their
+    /// status: pending at or above `radar_queue_min`, or confirmed with
+    /// attempts the confirmation does not cover.
     pub review_queue: Option<bool>,
     /// 0 to 100.
     pub min_confidence: Option<u8>,
