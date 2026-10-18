@@ -13,4 +13,4 @@ Each ADR lives in `docs/adr/NNNN-slug.md` and has the sections Status, Context, 
 | 0007 | Edge ingest | Planned | #31 |
 | [0008](0008-sandbox-host-agent.md) | [Sandbox host agent](0008-sandbox-host-agent.md) | Accepted (18 Oct 2026) | #41 |
 | [0009](0009-axum-workers-and-front-end.md) | [Axum on Workers and front end](0009-axum-workers-and-front-end.md) | Accepted (17 Oct 2026) | #40 |
-| 0010 | LLM provider and AI Gateway | Planned | #28 |
+| [0010](0010-llm-provider-and-ai-gateway.md) | [LLM provider and AI Gateway](0010-llm-provider-and-ai-gateway.md) | Accepted (18 Oct 2026) | #28 |

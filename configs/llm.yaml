@@ -1,0 +1,107 @@
+# LLM correlation worker (#28). Design: docs/llm-correlation.md and
+# docs/adr/0010-llm-provider-and-ai-gateway.md.
+# Validated by schemas/llm-config.schema.json (foiled-lint) and parsed into
+# foiled_core::llm::LlmConfig.
+#
+# The worker is optional and ships off. It proposes CVE and ATT&CK links for
+# analysts to review. Its evidence is capped below `high` in the confidence
+# layer (#27) and LLM-only links never auto-publish.
+#
+# Never put a key, an account id or a gateway token in this file. Only the
+# NAMES of the Worker variables and secrets that hold them go here, for
+# example: wrangler secret put ANTHROPIC_API_KEY.
+
+version: 1
+
+# Off by default. Turn on only after reading docs/llm-correlation.md.
+enabled: false
+
+# Queue the attempt pipeline (#25) feeds. One message per attempt.
+queue: foiled-llm
+
+gateway:
+  # Worker variable holding the AI Gateway id.
+  id_env: AI_GATEWAY_ID
+  # Worker variable holding the Cloudflare account id used in gateway URLs.
+  account_id_env: CF_ACCOUNT_ID
+  # Worker secret for an authenticated gateway (cf-aig-authorization).
+  token_env: AI_GATEWAY_TOKEN
+  # Must stay false. Prompts hold attacker data; a cached answer could be
+  # replayed for a different attempt. The worker also sends
+  # cf-aig-skip-cache: true on every request.
+  cache_responses: false
+  # Must stay false. Gateway logs would keep prompt text, which can hold
+  # personal information (#16). The worker also sends cf-aig-collect-log: false.
+  collect_logs: false
+  # Set the same values on the gateway itself. Request count, not tokens.
+  rate_limit:
+    requests: 60
+    period_secs: 60
+    technique: sliding
+  # Sent as cf-aig-max-attempts, cf-aig-retry-delay, cf-aig-backoff and
+  # cf-aig-request-timeout. The gateway allows at most 5 attempts.
+  request:
+    max_attempts: 2
+    retry_delay_ms: 1000
+    backoff: exponential
+    request_timeout_ms: 60000
+
+# Tried in order. The next provider is used only when the previous one
+# errors (rate limit, timeout, refusal), never when its output is dropped.
+# Model ids are examples: set whatever your account offers.
+providers:
+  # Open model on Workers AI, through the gateway. Data stays on Cloudflare.
+  - id: workers-ai
+    wire: open_ai_chat
+    enabled: true
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+    api_key_env: WORKERS_AI_TOKEN
+    open_model: true
+  # Commercial model through the gateway's anthropic provider route. Sends
+  # redacted extracts to a third party: opt in deliberately.
+  - id: anthropic
+    wire: anthropic
+    enabled: false
+    model: claude-sonnet-5-5
+    api_key_env: ANTHROPIC_API_KEY
+    open_model: false
+
+# Cost caps. The D1 daily counter is authoritative; the gateway rate limit
+# is a backstop.
+budgets:
+  tokens_per_day: 2000000
+  calls_per_day: 300
+  input_tokens_per_attempt: 8000
+  output_tokens_per_attempt: 1000
+  # Primary plus one fallback.
+  calls_per_attempt: 2
+
+# Which attempts get a model call.
+sampling:
+  # probe | exploit | post-exploitation
+  min_state: exploit
+  # A probe still qualifies when a matcher, ATT&CK rule, hook or YARA rule fired.
+  rule_signal_admits: true
+  # Share of qualifying attempts, by a stable hash of the attempt id.
+  sample_percent: 100
+
+retrieval:
+  store: vectorize
+  index: foiled-llm-docs
+  embedding_model: "@cf/baai/bge-base-en-v1.5"
+  top_k: 6
+  max_chunk_chars: 1200
+  # Reference material only. Attacker data is never indexed.
+  sources: [catalogue, matcher, kev, osv, attack, advisory]
+
+# Weight of each LLM proposed link as #27 evidence (source: llm). Set here,
+# never by the model. max_weight cannot exceed 40.
+evidence:
+  weight: 25
+  max_weight: 40
+
+# Live eval against a real provider runs only when this variable is 1 and a
+# provider key is present. Off in normal CI.
+eval:
+  dir: testdata/llm-eval
+  enable_env: LLM_EVAL

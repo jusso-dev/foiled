@@ -1,0 +1,54 @@
+{
+  "case_id": "demo-upload-traversal",
+  "description": "MVP demo exploit of the synthetic FOILED-DEMO-0001 upload path traversal (#22). Retrieval contains the matcher advisory, the catalogue entry, an ATT&CK snippet and an unrelated KEV distractor. Expected: the demo id and the catalogue's expected techniques, citing only the matcher and catalogue documents.",
+  "attempt": {
+    "attempt_id": "att-demo-1",
+    "catalogue_id": "foiled/demo-app/1.0.0",
+    "state": "exploit",
+    "rule_signals": [
+      { "source": "matcher", "id": "foiled-demo-0001-upload-traversal" },
+      { "source": "hook", "id": "demo-app.upload-path-traversal" }
+    ],
+    "observables": [
+      "src_ip 203.0.113.7",
+      "request_slice_sha256 061f6e75bb4f65a2b379124cefacf9feca6570cf5b52e88419d4ab06189f13b2"
+    ],
+    "extracts": [
+      { "label": "request_line", "text": "POST /api/upload?path=../../../tmp/x.sh HTTP/1.1" },
+      { "label": "user_agent", "text": "python-requests/2.31.0" },
+      { "label": "hook_note", "text": "resolved path escaped the upload root: /tmp/x.sh" }
+    ]
+  },
+  "retrieved": [
+    {
+      "doc_id": "matcher:foiled-demo-0001-upload-traversal",
+      "source": "matcher",
+      "title": "Tier 1 signature for FOILED-DEMO-0001",
+      "text": "Synthetic advisory FOILED-DEMO-0001 for the Foiled demo app. Matches POST /api/upload where the path parameter climbs out of the upload directory (dot-dot segments or their encoded forms) or is absolute. A probe can match this too; the vulnerable-path hook is the stronger signal."
+    },
+    {
+      "doc_id": "catalogue:foiled/demo-app/1.0.0",
+      "source": "catalogue",
+      "title": "Foiled demo app 1.0.0",
+      "text": "Catalogue entry foiled/demo-app/1.0.0 for the synthetic FOILED-DEMO-0001: unauthenticated arbitrary file write via POST /api/upload with a crafted path parameter. Severity critical. Expected techniques: T1190, T1505.003."
+    },
+    {
+      "doc_id": "attack:T1190",
+      "source": "attack",
+      "title": "T1190 Exploit Public-Facing Application",
+      "text": "Adversaries may attempt to exploit a weakness in an Internet-facing host or system to initially access a network. Tactic: initial-access."
+    },
+    {
+      "doc_id": "kev:CVE-2099-0002",
+      "source": "kev",
+      "title": "CVE-2099-0002 example router login bypass",
+      "text": "Example vendor router firmware allows authentication bypass through crafted requests to /cgi-bin/luci/admin. Fictional entry for tests."
+    }
+  ],
+  "known_cves": ["FOILED-DEMO-0001", "CVE-2099-0002"],
+  "labels": {
+    "cve_ids": ["FOILED-DEMO-0001"],
+    "technique_ids": ["T1190", "T1505.003"]
+  },
+  "fake": "grounded"
+}

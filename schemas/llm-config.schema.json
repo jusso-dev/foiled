@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/llm-config.schema.json",
+  "title": "Foiled LLM correlation config",
+  "description": "Providers, AI Gateway settings, budgets, sampling, retrieval and evidence weight for the LLM correlation worker (#28). See docs/llm-correlation.md and docs/adr/0010-llm-provider-and-ai-gateway.md. Keys, account ids and gateway tokens are never stored here, only the names of the Worker variables and secrets that hold them. Mirrored by foiled_core::llm::LlmConfig.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "enabled", "queue", "gateway", "providers", "budgets", "sampling", "retrieval", "evidence", "eval"],
+  "$defs": {
+    "env_name": {
+      "description": "Name of a Worker variable or secret, never its value.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,63}$"
+    }
+  },
+  "properties": {
+    "version": { "const": 1 },
+    "enabled": {
+      "type": "boolean",
+      "description": "The worker is optional. Ships false."
+    },
+    "queue": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,63}$",
+      "description": "Queue with one message per attempt to correlate."
+    },
+    "gateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id_env", "account_id_env", "token_env", "cache_responses", "collect_logs", "rate_limit", "request"],
+      "properties": {
+        "id_env": { "$ref": "#/$defs/env_name" },
+        "account_id_env": { "$ref": "#/$defs/env_name" },
+        "token_env": { "$ref": "#/$defs/env_name" },
+        "cache_responses": {
+          "const": false,
+          "description": "Caching stays off for this gateway: prompts hold attacker data."
+        },
+        "collect_logs": {
+          "const": false,
+          "description": "Gateway logging stays off: prompts can hold personal information (#16)."
+        },
+        "rate_limit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requests", "period_secs", "technique"],
+          "properties": {
+            "requests": { "type": "integer", "minimum": 1, "maximum": 10000 },
+            "period_secs": { "type": "integer", "minimum": 1, "maximum": 86400 },
+            "technique": { "enum": ["fixed", "sliding"] }
+          }
+        },
+        "request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_attempts", "retry_delay_ms", "backoff", "request_timeout_ms"],
+          "properties": {
+            "max_attempts": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "retry_delay_ms": { "type": "integer", "minimum": 0, "maximum": 60000 },
+            "backoff": { "enum": ["constant", "linear", "exponential"] },
+            "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 600000 }
+          }
+        }
+      }
+    },
+    "providers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "wire", "enabled", "model", "api_key_env", "open_model"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" },
+          "wire": {
+            "enum": ["anthropic", "open_ai_chat"],
+            "description": "Request and response shape: Anthropic Messages, or OpenAI-compatible chat completions (Workers AI)."
+          },
+          "enabled": { "type": "boolean" },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Model id as the provider names it. Examples only in the shipped file."
+          },
+          "api_key_env": { "$ref": "#/$defs/env_name" },
+          "open_model": { "type": "boolean" }
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokens_per_day", "calls_per_day", "input_tokens_per_attempt", "output_tokens_per_attempt", "calls_per_attempt"],
+      "properties": {
+        "tokens_per_day": { "type": "integer", "minimum": 1000, "maximum": 100000000 },
+        "calls_per_day": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "input_tokens_per_attempt": { "type": "integer", "minimum": 1000, "maximum": 32000 },
+        "output_tokens_per_attempt": { "type": "integer", "minimum": 200, "maximum": 4000 },
+        "calls_per_attempt": { "type": "integer", "minimum": 1, "maximum": 3 }
+      }
+    },
+    "sampling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_state", "rule_signal_admits", "sample_percent"],
+      "properties": {
+        "min_state": { "enum": ["probe", "exploit", "post-exploitation"] },
+        "rule_signal_admits": { "type": "boolean" },
+        "sample_percent": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["store", "index", "embedding_model", "top_k", "max_chunk_chars", "sources"],
+      "properties": {
+        "store": { "const": "vectorize" },
+        "index": { "type": "string", "pattern": "^[a-z0-9-]{1,32}$" },
+        "embedding_model": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "top_k": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "max_chunk_chars": { "type": "integer", "minimum": 200, "maximum": 4000 },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["catalogue", "matcher", "kev", "osv", "attack", "advisory"] }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["weight", "max_weight"],
+      "properties": {
+        "weight": { "type": "integer", "minimum": 0, "maximum": 40 },
+        "max_weight": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 40,
+          "description": "Hard cap on LLM evidence weight. #27 keeps high and publish_min above it."
+        }
+      }
+    },
+    "eval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dir", "enable_env"],
+      "properties": {
+        "dir": { "const": "testdata/llm-eval" },
+        "enable_env": { "$ref": "#/$defs/env_name" }
+      }
+    }
+  }
+}
