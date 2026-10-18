@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use foiled_api::catalogue::Catalogue;
 use foiled_api::links::{attack_rules, attack_sidecar, cve_rules, matcher_signals};
-use foiled_api::routes::exports::{OverrideIndex, export_input};
+use foiled_api::routes::exports::{OverrideIndex, WindowLinks, export_input};
 use foiled_core::actor::{
     ActorCatalogue, ActorLink, ActorReport, AttackGroups, LinkStatus, SubjectInput, export_links,
     subjects, suggest,
@@ -124,8 +124,10 @@ fn selection(confirm: &[&str], opts: &ExportOptions) -> (Selection, Vec<ActorLin
         &x,
         x.iocs.clone(),
         &OverrideIndex::new(),
-        &clustering.campaigns,
-        &export_links(&links),
+        WindowLinks {
+            campaigns: &clustering.campaigns,
+            actors: Some(&export_links(&links)),
+        },
     );
     (select(input, opts), links)
 }
@@ -202,7 +204,7 @@ fn confirmed_actor_links_export_with_cautious_wording_and_mitre_notice() {
         .expect("MITRE notice marking")["id"]
         .clone();
     for set in &sets {
-        let from_attack = set["x_foiled_actor_id"] == Value::from(attack_id.clone());
+        let from_attack = set["x_foiled_actor_id"].as_str() == Some(attack_id.as_str());
         let marked = set["object_marking_refs"]
             .as_array()
             .unwrap()

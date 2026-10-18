@@ -153,6 +153,17 @@ pub fn index_overrides(list: Vec<LinkOverride>) -> OverrideIndex {
     out
 }
 
+/// Links that come from clustering and matching rather than from one
+/// attempt's own events.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowLinks<'a> {
+    /// Campaigns over the same window (#33); each member gets its own link.
+    pub campaigns: &'a [foiled_core::campaign::Campaign],
+    /// Actor links per attempt (#29), from `actor::export_links`, so only
+    /// confirmed ones.
+    pub actors: Option<&'a BTreeMap<String, Vec<foiled_core::confidence::ConfidenceLink>>>,
+}
+
 /// The export input for attempts built from `events`: links scored with
 /// the bundled rules and catalogue (with overrides applied) and IOC notes
 /// from `extraction`. Pure, so golden tests build exactly what the routes
@@ -164,9 +175,9 @@ pub fn export_input(
     extraction: &Extraction,
     iocs: Vec<Ioc>,
     overrides: &OverrideIndex,
-    campaigns: &[foiled_core::campaign::Campaign],
-    actor_links: &BTreeMap<String, Vec<foiled_core::confidence::ConfidenceLink>>,
+    window: WindowLinks<'_>,
 ) -> ExportInput {
+    let (campaigns, actor_links) = (window.campaigns, window.actors);
     let cfg_links = ConfidenceConfig::default();
     // Each member's own link (#33): its joins, carried-over state and noise,
     // so a weak or carried-over member is never exported with the
@@ -205,7 +216,7 @@ pub fn export_input(
             }
             // Actor possible-associations (#29), already reduced by
             // `actor::export_links` to confirmed (the only publishable) ones.
-            if let Some(list) = actor_links.get(&attempt.attempt_id) {
+            if let Some(list) = actor_links.and_then(|m| m.get(&attempt.attempt_id)) {
                 links.extend(list.iter().cloned());
             }
             let summary = extraction.for_attempt(&attempt.attempt_id);
@@ -349,8 +360,10 @@ pub(crate) async fn selection_capped(
         &m.iocs,
         iocs,
         &overrides,
-        &m.campaigns.campaigns,
-        &actor_links,
+        WindowLinks {
+            campaigns: &m.campaigns.campaigns,
+            actors: Some(&actor_links),
+        },
     );
     let scope = {
         use sha2::{Digest, Sha256};

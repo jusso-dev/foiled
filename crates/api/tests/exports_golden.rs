@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use foiled_api::catalogue::Catalogue;
 use foiled_api::links::matcher_signals;
-use foiled_api::routes::exports::{OverrideIndex, export_input, index_overrides};
+use foiled_api::routes::exports::{OverrideIndex, WindowLinks, export_input, index_overrides};
 use foiled_api::store::LinkOverride;
 use foiled_core::attempt::{DEFAULT_IDLE_GAP_MS, build};
 use foiled_core::capture::CaptureEvent;
@@ -104,8 +104,7 @@ fn input_with(
         &x,
         iocs,
         &overrides,
-        &[],
-        &Default::default(),
+        WindowLinks::default(),
     )
 }
 
