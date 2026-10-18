@@ -17,7 +17,10 @@ Every route except `/login` and `/design` needs a signed-in operator. Scopes are
 | `/launch` | Launch wizard: choose an entry, placement and lifetime, confirm. | `GET /v0/catalogue/entries`, `GET /v0/sensors`, `POST /v0/decoys`, `GET /v0/audit` | `catalogue:read`, `decoys:write`, `decoys:elevate` for drafts |
 | `/decoys`, `/decoys/:id` | Decoy list; status until healthy, actions and teardown with a reason, audit trail. | `GET /v0/decoys`, `GET /v0/decoys/{id}`, `POST /v0/decoys/{id}:{action}`, `GET /v0/audit?target=` | `decoys:read`, `decoys:write` |
 | `/attempts`, `/attempts/:id` | Attempt list with filters; detail with timeline, confidence explainability, analyst overrides and IOCs. | `GET /v0/attempts`, `/v0/attempts/{id}`, `/timeline`, `/links`, `/iocs`, `POST /v0/attempts/{id}/links` | `attempts:read`, `attempts:write`, `iocs:read` |
-| `/review` | Review queue: confirm, reject or snooze with a note. | `GET /v0/review-queue`, `PATCH /v0/review-queue/{id}` | `review:read`, `review:write` |
+| `/review` | Review queue: claim, release, approve, reject, snooze and promote to a write-up, with notes. | `GET /v0/review-queue`, `POST /v0/review-queue/{id}/actions` | `review:read`, `review:write` |
+| `/writeups`, `/writeups/:id` | Research write-ups: start, edit drafts, lint findings, submit, second review with checklist, publish, withdraw, versions. | `GET`/`POST /v0/write-ups`, `GET`/`PATCH /v0/write-ups/{id}`, `/transitions`, `/versions` | `review:read`, `review:write`, `review:publish` |
+| `/radar` | Operator radar: counts, trends and headlines for the tenant or the fleet. Trusted side only. | `GET /v0/radar` | `review:read` |
+| `/actors` | Actor possible-associations with what matched, public sources and decisions. | `GET /v0/actor-links`, `POST /v0/actor-links/{id}/decision` | `campaigns:read`, `review:write` |
 | `/campaigns`, `/campaigns/:id` | Campaign list; members, shared features, evidence and bridges, actor associations, analyst actions. | `GET /v0/campaigns`, `/{id}`, `/evidence`, `/actions`, `POST /actions` | `campaigns:read`, `campaigns:write` |
 | `/iocs`, `/iocs/:id` | IOC browser and detail. | `GET /v0/iocs`, `GET /v0/iocs/{id}` | `iocs:read` |
 | `/exports`, `/exports/download` | Export form; the download is proxied through the Worker. | `GET /v0/exports/iocs.csv`, and from #13 `iocs.json`, `stix`, `misp` | `exports:read`, `review:write` for unreviewed |
@@ -38,8 +41,8 @@ This is the list the issue asks to match against #21, #25, #33, #34 and #35.
 | Campaigns and actions | #33 | Served | Served |
 | Hosts and sensors | #31, #41 | Served | Served |
 | Exports | #13 | IOC CSV served; IOC JSON, STIX and MISP downloads in the #13 pull request | All formats in the form; unserved ones report "not served yet" |
-| Review queue | #35 | Planned, no shape published | Built against the proposal in `web/app/lib/api-types.ts` (marked `TODO(#35)`) |
-| Actor associations | #29 | Not started; `attempt_actor` links and `suggested_actor_links` exist in the schemas | Rendered wherever the API returns them, always "possible association" |
+| Review queue, write-ups, radar | #35 | In PR #84, not on `main` yet | Built against PR #84's API and schemas, checked against copies of its golden output (`web/app/test/pr/`); marked `TODO(#35)` |
+| Actor associations | #29 | In PR #83, not on `main` yet | Built against PR #83's API and `actor-link` schema; marked `TODO(#29)`. Campaigns and attempt links show any actor links the API returns, always "possible association" |
 | Quarantine list and download | #9, #14 | Planned | Built against the proposal in `api-types.ts` (marked `TODO`), downloads off by default |
 | Live event stream, `GET /v0/events` | #14 | Planned | Polling backfill now; see [Live feed](#live-feed) |
 
@@ -164,18 +167,32 @@ INDICATORS: type, value (defanged), roles, last seen, sightings, confidence
 ## Review queue
 
 ```text
-REVIEW QUEUE      Status [open v]  Kind [Any v]  [Apply]
+REVIEW QUEUE   2 matching. Highest priority first; overdue items lead.
+Status [pending v]  Kind [Any v]  Window [7 days v]  [ ] Mine  [ ] Overdue only  [Apply]
 +--------------------------------------------------------------------------------+
-| PRE-DISCLOSURE CANDIDATE rq_5e6f7a8b                                     open  |
-| Pre-disclosure candidate on foiled/demo-app/1.0.0                              |
-| Queued 2026-10-18 03:32 . att_43065706a9ac936e970054e5                          |
-| CVE: [PROBABLE 100] We assess as an attempt against FOILED-DEMO-0001 ...       |
-| Note (required, audited) [                                        ]            |
-| Snooze for [7 days v]                       [Confirm] [Reject] [Snooze]         |
+| CVE LINK rq_15a38fb1dc8c423af7110a00                           open  overdue   |
+| We assess as an attempt against FOILED-DEMO-0001 on foiled/demo-app/1.0.0 ...  |
+| [PROBABLE 98] We assess as an attempt against FOILED-DEMO-0001. Score 98 ...   |
+| Queued 2026-10-18 02:02 (5h 00m ago), due 2026-10-19 02:02 (24h SLA) . att_... |
+| Note (audited; required to approve or reject) [                          ]     |
+| Snooze for [7 days v]                                                          |
+| [Claim] [Approve] [Reject] [Snooze] [Start a write-up]                         |
 +--------------------------------------------------------------------------------+
 ```
 
-Items are pre-disclosure candidates, low-confidence high-impact links and campaign suggestions (#35). Confirm, reject and snooze each need a note; snooze takes 1, 7 or 30 days. `TODO(#35)`: the API is planned and has no published shape, so the console uses the proposal in `web/app/lib/api-types.ts` (`ReviewItem`, `PATCH {action, note, snooze_until}`) and shows "not served yet" until `/v0/review-queue` answers. Replace the proposal with #35's shapes when it lands.
+One queue over pending CVE and technique links, pre-disclosure candidates, IOC publication candidates, campaign labels, actor possible-associations and write-ups in review (#35, PR #84). Each item is worded like the link it stands for. Claim and release take an item; approve needs a note (a campaign label also needs the title, a write-up the full second-reviewer checklist); reject needs a note; snooze is 1, 7 or 30 days (the API's limit is 30); "Start a write-up" promotes the item to a draft and opens it. Every action sends the item's `version`, so a stale page gets a 409 instead of overwriting someone else's decision, and is audited by the API as `review.<action>`. An item claimed by someone else shows who holds it and offers no actions.
+
+## Write-ups
+
+Drafts are edited in the console (title, summary, Markdown body, TLP, embargo, CVE and technique ids, redacted payload) with the write-up's `version`. The body is always shown as Markdown source in a text block: the console never renders it as HTML. Lint findings from the API are listed by severity; errors block submit, approve and publish. Moves follow the API: submit, send back (needs a note), approve (a reviewer who is not the author, every checklist item), reopen, publish (needs `review:publish`, TLP:CLEAR and a tick box) and withdraw. The version history lists every change.
+
+## Radar
+
+The operator radar is trusted side only; the console has no public radar. It shows the tenant's own counts or the fleet's (opted-in sensors behind the share policy's minimum sources, sensors and edge tenants), per CVE, technique, campaign and product: wording, best band, attempts, sources, trend and a daily sparkline, plus headline cards built from publishable counts only. The thresholds that applied and any held-back buckets are stated above the data.
+
+## Actor associations
+
+Each link from PR #83's matcher shows the API's own `statement` (the only sentence the API allows for it), the label and whether it is a nexus, cluster or named group, the score as "possible association" (only "confirmed association" after an analyst confirms), what matched (techniques with rarity, indicators shown defanged, targeting), what was not counted, and the public sources with publisher, date and licence. Confirm needs a note; reject and reopen are recorded too, all audited by the API. Example data is labelled. Campaign pages link to the actor evidence for that campaign.
 
 ## Campaign detail
 
@@ -268,7 +285,8 @@ Route tests (`web/app/routes/*.test.tsx`) run the real route config, loaders, ac
 ## Not in this change
 
 - `GET /v0/events` and its Durable Object: the polling feed and its reconnect and backfill rules above are what the stream will plug into.
-- The quarantine list and download endpoints in the API (#9, #14 follow-up), and the review queue API (#35): the console is built against proposals and says "not served yet".
+- The quarantine list and download endpoints in the API (#9, #14 follow-up): the console is built against a proposal and says "not served yet".
+- The review queue, write-up and radar API (#35, PR #84) and actor links (#29, PR #83) are not on `main` yet: the console is built against those pull requests and says "not served yet" until they merge. Swap the copies in `web/app/test/pr/` for imports from `testdata/` and `schemas/` when they do.
 - Attempt labelling, merge and split (`PATCH /v0/attempts/{id}`, #25, planned).
 - Forwarding the Access JWT to the API Worker: the API does not validate Access tokens yet.
 - Full RBAC, mobile layouts beyond reflow, and MCP (#24) are out of scope for #14.
