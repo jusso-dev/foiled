@@ -1153,6 +1153,9 @@ paths:
         scoped. Newest activity first. Confidence is worded "possible" until
         an analyst confirms; clustering alone never publishes. `notes` lists
         analyst actions that did not apply in this window.
+        `suggested_actor_links` (#29) is empty unless `include=actors`, so a
+        plain list never runs the actor matcher; campaign detail always
+        fills it.
       parameters:
         - { name: since, in: query, schema: { type: integer }, description: "Unix ms, inclusive." }
         - { name: until, in: query, schema: { type: integer }, description: "Unix ms, exclusive." }
@@ -1163,6 +1166,7 @@ paths:
         - { name: cve, in: query, schema: { type: string }, description: "Case-insensitive CVE id among the campaign's CVEs." }
         - { name: ioc_id, in: query, schema: { type: string }, description: "An IOC shared by at least two members (#34)." }
         - { name: min_confidence, in: query, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: include, in: query, schema: { type: string, enum: [actors] }, description: "actors: fill suggested_actor_links (#29)." }
         - { $ref: "#/components/parameters/Limit" }
       x-foiled-status: implemented
       x-foiled-store: postgres
@@ -2367,7 +2371,7 @@ components:
       name: include_actors
       in: query
       schema: { type: boolean, default: false }
-      description: Include actor links (#29), worded "possible association" unless high and analyst-confirmed.
+      description: Include actor links (#29). Only analyst-confirmed links are exported, even with `include_unreviewed`; pending and rejected links never leave. Each becomes an `intrusion-set` (with MITRE's notice marking when it is an ATT&CK group) and a relationship worded "confirmed association", or a MISP `threat-actor` attribute.
     ExportIncludePayloads:
       name: include_payloads
       in: query

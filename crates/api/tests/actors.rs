@@ -13,7 +13,7 @@ use foiled_api::{AppState, router};
 use foiled_core::actor::{ActorCatalogue, ActorReport, AttackGroups};
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::CaptureEvent;
-use foiled_core::enrichment::{Fact, Observable, ObservedFacts};
+use foiled_core::enrichment::{CacheEntry, Fact, Observable};
 use http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -108,13 +108,13 @@ async fn harness() -> (AppState, Arc<MemoryStore>) {
         if let Some(asn) = raw["asns"].get(ip) {
             facts.push(fact("asn.number", asn.clone(), now));
         }
-        store.add_facts(
-            "t1",
-            ObservedFacts {
-                observable: Observable::ip(ip).unwrap(),
-                facts,
-            },
-        );
+        store.add_cache_entry(CacheEntry {
+            provider: "local_asn".into(),
+            observable: Observable::ip(ip).unwrap(),
+            fetched_at: now,
+            ttl_secs: 604_800,
+            facts,
+        });
     }
     let mut state = AppState::new(store.clone(), Arc::new(move || now));
     state.actors = Arc::new(catalogue());

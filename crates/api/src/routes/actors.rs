@@ -33,8 +33,7 @@ use crate::AppState;
 use crate::auth::Auth;
 use crate::error::ApiError;
 use crate::routes::attempts::{
-    Campaigns, ClusterInputs, Iocs, WindowModel, canonical_window, newest_facts_for, window_bounds,
-    window_model,
+    Campaigns, ClusterInputs, Iocs, WindowModel, canonical_window, window_bounds, window_model,
 };
 use crate::routes::page_limit;
 
@@ -208,20 +207,13 @@ pub(crate) async fn match_window(
         actor::attach_suggestions(campaigns, &[]);
         return Ok((Vec::new(), Vec::new(), BTreeMap::new()));
     }
-    let countries = newest_facts_for(
+    let countries = source_countries(
         state,
-        tenant_id,
         subjects
             .iter()
             .flat_map(|s| s.sources.iter().map(String::as_str)),
-        "geo.country",
-        |v| {
-            v.as_str()
-                .filter(|c| c.len() == 2 && c.bytes().all(|b| b.is_ascii_uppercase()))
-                .map(str::to_string)
-        },
     )
-    .await?;
+    .await;
     for s in subjects.iter_mut() {
         s.set_countries(&countries);
     }
@@ -235,6 +227,43 @@ pub(crate) async fn match_window(
     let links = actor::suggest(&state.actors, &cfg, &subjects, &decisions);
     actor::attach_suggestions(campaigns, &links);
     Ok((links, subjects, decisions))
+}
+
+/// Source address to the newest cached `geo.country` Fact (#11), for the
+/// `not_counted` explanation only. Geography is never evidence, so if the
+/// cache cannot be read the link is built without it.
+async fn source_countries<'a>(
+    state: &AppState,
+    addresses: impl Iterator<Item = &'a str>,
+) -> BTreeMap<String, String> {
+    use foiled_core::enrichment::Observable;
+    let mut by_observable: BTreeMap<Observable, BTreeSet<&str>> = BTreeMap::new();
+    for a in addresses {
+        if let Ok(o) = Observable::ip(a) {
+            by_observable.entry(o).or_default().insert(a);
+        }
+    }
+    let cached =
+        crate::enrichment::cached_facts(state, by_observable.keys().cloned().collect()).await;
+    let mut out = BTreeMap::new();
+    for (o, facts) in &cached.facts {
+        let newest = facts
+            .iter()
+            .filter(|f| f.key == "geo.country")
+            .filter_map(|f| {
+                f.value
+                    .as_str()
+                    .filter(|c| c.len() == 2 && c.bytes().all(|b| b.is_ascii_uppercase()))
+                    .map(|c| (f.observed_at, c.to_string()))
+            })
+            .max();
+        if let Some((_, c)) = newest {
+            for a in by_observable.get(o).into_iter().flatten() {
+                out.insert((*a).to_string(), c.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Fill `suggested_actor_links` on one campaign of a full window model
