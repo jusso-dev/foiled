@@ -16,6 +16,7 @@ pub mod radar;
 pub mod review;
 pub mod taxii;
 pub mod writeups;
+pub mod whoami;
 
 use foiled_core::audit::{AuditRecord, Outcome};
 use foiled_core::auth::Principal;

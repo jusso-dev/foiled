@@ -200,6 +200,7 @@ fn rest_routes() -> Router<AppState> {
         .merge(routes::writeups::router())
         .merge(routes::public::router())
         .merge(routes::taxii::router())
+        .merge(routes::whoami::router())
 }
 
 /// The REST API alone. MCP tool calls are replayed against this router, so
