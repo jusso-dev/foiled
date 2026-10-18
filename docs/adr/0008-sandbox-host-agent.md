@@ -63,7 +63,7 @@ Envelopes are written to an on-disk segment buffer (default cap 1 GiB) before se
 
 ### Self-update
 
-Only from signed releases, using the #31 signing rules. Not implemented in the MVP; operators update the binary through their own configuration management.
+Only from signed releases, using the rules in [ADR 0007](0007-edge-ingest.md) (#31): `foiled-hostd verify-update` checks the signed manifest and stages the build; the service manager swaps it in.
 
 ### Least privilege
 

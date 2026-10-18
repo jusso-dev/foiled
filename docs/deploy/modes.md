@@ -11,8 +11,8 @@ Foiled has three kinds of deployment. Two run decoys, one runs the trusted side.
 | Whose host | Ours, or the operator's own. | The customer's or a fleet partner's. | Cloudflare. |
 | Trust | Hostile zone. Holds only its own mTLS identity. | Hostile zone on a host we do not control. Holds only its own mTLS identity, bound to one tenant. | Trusted zone. Holds all secrets and data stores. |
 | Talks to the backend | Dials out over HTTPS with mTLS (host role). | Dials out over HTTPS with mTLS (sensor role). | Never dials into a sensor or host. |
-| Offline behaviour | Decoys keep running, events buffer locally (1 GiB, oldest-drop), backlog drains on reconnect (#41). | Same buffer semantics (#31). | Not applicable. |
-| Guide | [vps.md](vps.md) | #31 (`docs/deploy/edge-sensor.md`, planned) | [workers.md](workers.md) |
+| Offline behaviour | Decoys keep running, events buffer locally (1 GiB, oldest-drop), backlog drains on reconnect (#41). | Same buffer semantics, 256 MiB default cap ([edge-sensor.md](edge-sensor.md#offline-buffer)). | Not applicable. |
+| Guide | [vps.md](vps.md) | [edge-sensor.md](edge-sensor.md) (#31) | [workers.md](workers.md) |
 | Milestone | **MVP** | **Not MVP.** v0.2 (#31). | **MVP** |
 
 ## MVP topology
@@ -68,13 +68,13 @@ No edge sensors, no second host, no tenancy beyond a single operator org. Everyt
 
 ## Edge mode (not MVP)
 
-Edge sensors are **not part of the MVP**. Their design lives in #31: enrolment with a one-time bootstrap token, mTLS identity certificates, renew and revoke flows, signed builds and update verification, the offline buffer, and tenancy (`tenant_id` on sensors, decoys and attempts, with token scopes that cannot cross tenants). Do not build edge features before #31's ADR (`docs/adr/0007-edge-ingest.md`, planned) is accepted.
+Edge sensors are **not part of the MVP**. Their design is [ADR 0007](../adr/0007-edge-ingest.md) and the operator guide is [edge-sensor.md](edge-sensor.md) (#31): enrolment with a one-time token, mTLS identity certificates from the Cloudflare-managed CA, renew and revoke flows, signed builds and update verification, the offline buffer, and tenancy (`tenant_id` on sensors, decoys and attempts, with scopes that cannot cross tenants).
 
 ### Tabletop: edge sensor compromise
 
 Scenario: an attacker gets root on a customer's edge sensor host, takes the sensor's private key and certificate, and tries to turn them into control-plane admin access.
 
-Expected outcome: **the stolen identity cannot mint control-plane admin tokens.** It can at most ingest as that one sensor, for that one tenant, until it is revoked. The controls below are expected to be implemented in #31 (with #21 for token scopes). This table is the acceptance test for them.
+Expected outcome: **the stolen identity cannot mint control-plane admin tokens.** It can at most ingest as that one sensor, for that one tenant, until it is revoked. The controls below are implemented in #31 (with #21 for token scopes); [edge-sensor.md](edge-sensor.md#compromise-tabletop-stolen-sensor-certificate) maps each step to the test that covers it. This table is the acceptance test for them.
 
 | Step | Attacker action | Expected control (implemented in #31 unless noted) | Expected result |
 | --- | --- | --- | --- |
@@ -97,4 +97,4 @@ For more research sensors in more regions, see [cloud-sketch.md](cloud-sketch.md
 
 ## Rotation
 
-Decoy rotation and reset (compromised or aged sandboxes) are owned by #8 ([rotation](../rotation.md), planned). Certificate renewal and revocation for hosts and sensors are owned by #31.
+Decoy rotation and reset (compromised or aged sandboxes) are owned by #8 ([rotation](../rotation.md), planned). Certificate renewal and revocation for hosts and sensors are owned by #31 ([edge-sensor.md](edge-sensor.md#renewal-re-enrolment-and-revocation)).

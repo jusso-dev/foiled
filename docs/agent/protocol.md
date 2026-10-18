@@ -1,6 +1,6 @@
 # Host agent protocol
 
-Between the control plane API Worker and `foiled-hostd` on each sandbox host ([ADR 0008](../adr/0008-sandbox-host-agent.md), #41). All calls go from the host to the ingest hostname over HTTPS with the host's mTLS client certificate. JSON Schemas live in [`schemas/agent/`](../../schemas/agent/); example messages in [`testdata/agent/`](../../testdata/agent/), which CI validates against the schemas and parses into the Rust types.
+Between the control plane API Worker and `foiled-hostd` on each sandbox host ([ADR 0008](../adr/0008-sandbox-host-agent.md), #41) or edge sensor ([ADR 0007](../adr/0007-edge-ingest.md), #31). All calls go from the host to the ingest hostname over HTTPS with the host's mTLS client certificate. JSON Schemas live in [`schemas/agent/`](../../schemas/agent/); example messages in [`testdata/agent/`](../../testdata/agent/), which CI validates against the schemas and parses into the Rust types.
 
 ## Endpoints
 
@@ -13,6 +13,15 @@ Between the control plane API Worker and `foiled-hostd` on each sandbox host ([A
 | `POST /v0/uploads` | `host:upload` | `{decoy_id, attempt_id?, channel, sha256, size}` | presigned PUT for one R2 object |
 
 `{host_id}` must be the certificate's own identity, otherwise 403 `wrong_host`.
+
+Edge sensors (`role = "sensor"` in the agent config) use the same calls under `/v0/sensors/{sensor_id}/...` with `sensor:lease` (lease and ack), `sensor:report` (heartbeat and renewal), `sensor:ingest` and `sensor:upload`; a wrong id is 403 `wrong_sensor`. A sensor only leases jobs placed on it, never unplaced ones. The `host_id` field of a job body or heartbeat carries the sensor id.
+
+Identity calls (#31, [edge-sensor.md](../deploy/edge-sensor.md)):
+
+| Call | Auth | Request | Response |
+| --- | --- | --- | --- |
+| `POST /v0/enrol` | one-time enrolment token in the body; no client certificate | [enrol request](../../schemas/agent/enrol-request.schema.json) | [enrol response](../../schemas/agent/enrol-response.schema.json) |
+| `POST /v0/{hosts\|sensors}/{id}/certificate:renew` | mTLS, `host:report` or `sensor:report`, only as itself | `{csr_pem}` | enrol response; the previous certificate works for 24 more hours |
 
 ## Signed job
 
@@ -101,4 +110,4 @@ sequenceDiagram
 
 ## Control plane outage
 
-Running decoys keep running. Envelopes go to the on-disk buffer (default 1 GiB, oldest whole segments dropped first and counted in `dropped_events`). No new jobs run, but a job already leased finishes and its ack is retried. When the control plane returns, the buffer drains in batches of up to 100; ingest ignores any `event_id` it already has, so a crash between send and local commit causes no duplicates. A decoy whose `hard_deadline` passes during the outage is frozen by the host.
+Running decoys keep running. Envelopes go to the on-disk buffer (default 1 GiB on a host, 256 MiB on an edge sensor, oldest whole segments dropped first and counted in `dropped_events`). No new jobs run, but a job already leased finishes and its ack is retried. When the control plane returns, the buffer drains in batches of up to 100; ingest ignores any `event_id` it already has, so a crash between send and local commit causes no duplicates. A 401 or 403 (revoked or retired certificate) stops the drain and keeps the buffer; any other refusal resends the batch one event at a time and drops only the refused events, counted in `dropped_events`. A decoy whose `hard_deadline` passes during the outage is frozen by the host.

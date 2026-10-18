@@ -44,6 +44,7 @@ Vars (not secrets, still kept out of the tree where they identify the account):
 | Worker | Var | Owning issue | Notes |
 | --- | --- | --- | --- |
 | `foiled-api` | `AI_GATEWAY_ID` | #28 | Placeholder in the committed config. |
+| `foiled-api` | `CF_ZONE_ID` | #31 | The ingest zone, for client certificate issue and revocation ([edge-sensor.md](edge-sensor.md)). |
 
 ## Secrets
 
@@ -59,6 +60,7 @@ Proposed names. The owning issue finalises each one.
 | Worker | Secret | Owning issue | Purpose |
 | --- | --- | --- | --- |
 | `foiled-api` | `JOB_SIGNING_KEY` | #41 | Private key that signs host jobs. Hosts hold only the public key. |
+| `foiled-api` | `CF_CLIENT_CERT_API_TOKEN` | #31 | Cloudflare API token with only *Zone, SSL and Certificates, Edit* on the ingest zone. Signs enrolment and renewal CSRs with the Cloudflare-managed CA and revokes certificates. Without it enrolment is disabled; ingest still works. |
 | `foiled-api` | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | #9 | R2 API token, scoped to the `foiled-evidence` bucket with object read and write only, used to mint short-lived single-object upload URLs. The R2 binding cannot presign. |
 | `foiled-api` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #21, #14 | Validate Cloudflare Access JWTs in the Worker. Not strictly secret, but they identify your account, so they stay out of the tree. |
 | `foiled-api` | `TOKEN_PEPPER` | #21 | Pepper for hashing API tokens at rest in D1. |
@@ -125,5 +127,5 @@ export CLOUDFLARE_API_TOKEN=...       # scoped deploy token; never committed
 - Deployment modes and the MVP topology: [modes.md](modes.md).
 - Research sensor bring-up: [vps.md](vps.md).
 - Why decoys are never behind the proxy: [cloudflare.md](cloudflare.md).
-- Enrolment, certificate issue and revocation, sensor and host roles: #31 (`docs/deploy/edge-sensor.md`, planned).
+- Enrolment, certificate issue and revocation, sensor and host roles: [edge-sensor.md](edge-sensor.md) (#31).
 - Token scopes: #21. Threat model controls C30 to C33 (operator credential theft): [threat model](../threat-model.md) (#2).
