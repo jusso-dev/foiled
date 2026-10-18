@@ -1,0 +1,19 @@
+{
+  "alert_id": "alr_b3369897a3733f441792b147",
+  "ts": 1792285363000,
+  "severity": "high",
+  "type": "yara_match",
+  "decoy_id": "dcy-demo-1",
+  "attempt_id": "att_5d0c1e8a2b7f40c19e63aa01",
+  "summary": "YARA rule demo_miner_config matched quarantined file 9f86d081 on dcy-demo-1",
+  "links": [
+    {
+      "kind": "attempt",
+      "href": "/attempts/att_5d0c1e8a2b7f40c19e63aa01"
+    },
+    {
+      "kind": "decoy",
+      "href": "/decoys/dcy-demo-1"
+    }
+  ]
+}

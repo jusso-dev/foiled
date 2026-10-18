@@ -1,0 +1,16 @@
+{
+  "alert_id": "alr_a06aa16f6036dc2cc494b40d",
+  "ts": 1792285623000,
+  "severity": "medium",
+  "type": "campaign_updated",
+  "decoy_id": null,
+  "attempt_id": null,
+  "campaign_id": "cmp_demo_0001",
+  "summary": "Campaign cmp_demo_0001 grew to 14 attempts from 6 sources across 3 decoys",
+  "links": [
+    {
+      "kind": "campaign",
+      "href": "/campaigns/cmp_demo_0001"
+    }
+  ]
+}

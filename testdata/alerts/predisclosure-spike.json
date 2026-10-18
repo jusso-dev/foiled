@@ -1,0 +1,16 @@
+{
+  "alert_id": "alr_34c843128179f57ebf7711ff",
+  "ts": 1792287123000,
+  "severity": "high",
+  "type": "predisclosure_spike",
+  "decoy_id": null,
+  "attempt_id": null,
+  "summary": "Watchlist path /api/v2/upload on foiled/demo-app/1.0.0: 40 requests from 9 sources in 1 h, no matching advisory",
+  "links": [
+    {
+      "kind": "queue_item",
+      "href": "/review-queue/rq_5e6f7a8b"
+    }
+  ],
+  "subject": "wl_demo_upload"
+}

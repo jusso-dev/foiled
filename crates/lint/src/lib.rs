@@ -117,6 +117,14 @@ pub const BINDINGS: &[Binding] = &[
         data_dir: "modules",
         schema: "schemas/module-manifest.schema.json",
     },
+    Binding {
+        data_dir: "configs/alerting.yaml",
+        schema: "schemas/alerting-config.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/alerts",
+        schema: "schemas/alert.schema.json",
+    },
 ];
 
 /// Directories never scanned for schema files.

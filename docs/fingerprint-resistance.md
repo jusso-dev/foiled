@@ -262,7 +262,7 @@ When a score is at or above the threshold:
 
 ## Alert types for #15
 
-Defined here, routed, deduplicated and rate-limited by alerting (#15, `docs/alerting.md`, planned):
+Defined here, routed, deduplicated and rate-limited by alerting (#15, [alerting.md](alerting.md)):
 
 | Event | Default severity | When | Dedupe key | Payload notes |
 | --- | --- | --- | --- | --- |

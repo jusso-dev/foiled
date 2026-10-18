@@ -1,0 +1,16 @@
+{
+  "alert_id": "alr_167c0a19da03f520f7787c5a",
+  "ts": 1792288923000,
+  "severity": "high",
+  "type": "capture_disk_pressure",
+  "decoy_id": null,
+  "attempt_id": null,
+  "summary": "Capture volume on host-demo-syd1 at 82 % (pressure mark 80 %), new decoys paused",
+  "links": [
+    {
+      "kind": "host",
+      "href": "/hosts/host-demo-syd1"
+    }
+  ],
+  "subject": "host-demo-syd1"
+}

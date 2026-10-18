@@ -1,0 +1,24 @@
+{
+  "alert_id": "alr_cf3117c84acdf725dce9d8fa",
+  "ts": 1792285383000,
+  "severity": "critical",
+  "type": "rotation_failed",
+  "decoy_id": "dcy-demo-1",
+  "attempt_id": null,
+  "summary": "Rotation of dcy-demo-1 generation 12 failed at step 2 (capture.flush timed out) on host host-demo-syd1",
+  "links": [
+    {
+      "kind": "queue_item",
+      "href": "/review-queue/rq_7f3a9c2e"
+    },
+    {
+      "kind": "decoy",
+      "href": "/decoys/dcy-demo-1"
+    },
+    {
+      "kind": "host",
+      "href": "/hosts/host-demo-syd1"
+    }
+  ],
+  "subject": "host-demo-syd1"
+}

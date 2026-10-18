@@ -1,0 +1,98 @@
+# Alerting (#15). Design: docs/alerting.md.
+# Schema: schemas/alerting-config.schema.json.
+# Parsed by foiled_core::alerting::AlertingConfig.
+#
+# Secrets never go in this file. Webhook URLs (a Slack incoming webhook URL is
+# itself a secret), HMAC signing keys and SMTP relay credentials live in Worker
+# secrets (wrangler secret put FOILED_ALERT_WEBHOOK_URL). The *_env fields below
+# hold the secret's NAME only, never the value.
+
+version: 1
+
+# Console origin. Alert links are paths such as /attempts/att_... and the
+# delivery worker prefixes this origin when it renders them.
+console_base_url: https://foiled.example.com
+
+# Medium alerts become review queue items (#35) instead of notifications.
+review_queue_for_medium: true
+
+routes:
+  # Log sink: every routed alert as one structured log line on the control
+  # plane. Required, and not rate limited.
+  - id: log
+    kind: log
+    min_severity: info
+
+  # Generic JSON webhook, signed with X-Foiled-Signature (HMAC-SHA256).
+  # Enable once both Worker secrets are set.
+  - id: ops-webhook
+    kind: webhook
+    enabled: false
+    min_severity: high
+    url_env: FOILED_ALERT_WEBHOOK_URL
+    signing_secret_env: FOILED_ALERT_WEBHOOK_SECRET
+    rate_limit:
+      burst: 10
+      per_hour: 30
+
+  # Slack-compatible incoming webhook. Critical and compromise events only.
+  - id: slack-ops
+    kind: slack_webhook
+    enabled: false
+    min_severity: high
+    types:
+      - canary_used
+      - rotation_failed
+      - decoy_compromised
+      - vuln_path_hook_fired
+      - edge_sensor_offline
+      - host_offline
+    url_env: FOILED_ALERT_SLACK_WEBHOOK_URL
+    rate_limit:
+      burst: 5
+      per_hour: 12
+
+  # Email through an operator SMTP relay. Documented only: the delivery
+  # worker does not send email yet, so this route must stay disabled.
+  - id: email-oncall
+    kind: email
+    enabled: false
+    min_severity: critical
+    smtp_relay_env: FOILED_SMTP_RELAY_URL
+    to_env: FOILED_ALERT_EMAIL_TO
+    rate_limit:
+      burst: 3
+      per_hour: 6
+
+# Per-type severity overrides. Defaults are in docs/alerting.md.
+severity_overrides:
+  decoy_rotated: info
+  capture_disk_pressure: high
+
+dedupe:
+  # Bound on remembered dedupe keys per tenant. Oldest-to-expire goes first.
+  max_keys: 10000
+  # Window in seconds per type. Types not listed use their default
+  # (3600 for most types, 86400 for cve_assessed, campaign_updated,
+  # honeyscore_high, decoy_burnt and review_queue_item).
+  windows:
+    vuln_path_hook_fired: 3600
+    campaign_updated: 86400
+    decoy_compromised: 3600
+    honeyscore_high: 86400
+
+# Per-type caps (token bucket). Types not listed use burst 5, 20 per hour.
+# Critical alerts are deduped but never rate limited.
+type_limits:
+  vuln_path_hook_fired:
+    burst: 5
+    per_hour: 20
+  predisclosure_spike:
+    burst: 3
+    per_hour: 6
+  review_queue_item:
+    burst: 20
+    per_hour: 60
+  decoy_rotated:
+    burst: 50
+    per_hour: 500
