@@ -236,6 +236,7 @@ function ActorCard({
           )}{" "}
           ({l.attempt_ids.length} attempts).{" "}
           {l.publishable ? "Publishable." : "Not publishable until confirmed."}
+          {l.restricted ? " From a restricted source: shown here, never exported." : ""}
           {l.new_since_confirmation?.length
             ? ` ${l.new_since_confirmation.length} attempts joined since the confirmation and are not covered by it.`
             : ""}

@@ -279,6 +279,7 @@ const actorLink: Keys<ActorLinkRecord> = {
   matched: true,
   not_counted: true,
   confirmed_attempt_ids: true,
+  restricted: true,
   new_since_confirmation: true,
   sources: true,
   attack_version: true,

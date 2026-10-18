@@ -894,6 +894,8 @@ export interface ActorLinkRecord {
   band: Band;
   publishable: boolean;
   review_queue: boolean;
+  /** From a source that does not allow redistribution or commercial use: shown, never exported. */
+  restricted?: boolean;
   matched: {
     techniques: { id: string; profiles_using: number; rarity: number }[];
     indicators: {
