@@ -10,6 +10,7 @@ pub mod attack;
 pub mod attempt;
 pub mod audit;
 pub mod auth;
+pub mod campaign;
 pub mod canary;
 pub mod capture;
 pub mod catalogue;

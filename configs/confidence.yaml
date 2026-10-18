@@ -20,7 +20,7 @@ weights:
   predisclosure_backmatch: { points: 25, cap: 25 }   # below publish_min until reviewed
   enrichment: { points: 10, cap: 15 }
   llm: { points: 20, cap: 20 }                       # LLM can add at most 20 and never reaches high alone
-  campaign_cluster: { points: 15, cap: 20 }
+  campaign_cluster: { points: 45, cap: 55 }         # clustering alone stays below publish_min and high (#33)
   analyst: { points: 0, cap: 0 }                     # analysts override, they do not add points
   noise_score: { points: 0, cap: 0 }                 # applied as a penalty, see noise_max_penalty
 # A mass-scanning source (noise score 100) loses up to this many points, but

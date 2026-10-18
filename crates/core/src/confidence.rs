@@ -134,7 +134,7 @@ impl Default for ConfidenceConfig {
                 (PredisclosureBackmatch, w(25, 25)),
                 (Enrichment, w(10, 15)),
                 (Llm, w(20, 20)),
-                (CampaignCluster, w(15, 20)),
+                (CampaignCluster, w(45, 55)),
                 (Analyst, w(0, 0)),
                 (NoiseScore, w(0, 0)),
             ]),
@@ -159,6 +159,12 @@ impl ConfidenceConfig {
             && p.cap >= t.publish_min
         {
             out.push("predisclosure_backmatch cap must stay below publish_min".into());
+        }
+        // Clustering alone never publishes a campaign or reaches high (#33).
+        if let Some(c) = self.weights.get(&EvidenceSource::CampaignCluster)
+            && c.cap >= t.publish_min.min(t.high)
+        {
+            out.push("campaign_cluster cap must stay below publish_min and high".into());
         }
         for (s, w) in &self.weights {
             if w.cap > 100 || w.points > 100 {
@@ -403,6 +409,38 @@ mod tests {
     #[test]
     fn default_config_is_consistent() {
         assert!(ConfidenceConfig::default().problems().is_empty());
+    }
+
+    #[test]
+    fn campaign_clustering_alone_stays_below_publish_and_high() {
+        let mut cfg = ConfidenceConfig::default();
+        let l = score(
+            &cfg,
+            LinkKind::AttemptCampaign,
+            "a",
+            "cmp_x",
+            vec![
+                ev("c1", CampaignCluster, 100),
+                ev("c2", CampaignCluster, 100),
+                ev("c3", CampaignCluster, 100),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!((l.score, l.wording.as_str()), (55, "possible"));
+        assert!(!l.publishable);
+        cfg.weights.insert(
+            CampaignCluster,
+            SourceWeight {
+                points: 60,
+                cap: 60,
+            },
+        );
+        assert!(
+            cfg.problems()
+                .iter()
+                .any(|p| p.contains("campaign_cluster"))
+        );
     }
 
     #[test]
