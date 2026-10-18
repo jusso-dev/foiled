@@ -133,7 +133,7 @@ Mirrored from [landscape.md](../research/landscape.md#licence-blockers-and-impli
 The following must never appear, raw or derived, in a paid Foiled feed, a CSV, STIX, MISP or TAXII export, a public IOC dump or a public exploit page:
 
 - Any ThreatSieve answer with a source that is not redistributable, not for commercial use, or of unknown terms (`threatsieve_restricted` Facts), including its reputation, scanner, relationship and network Facts.
-- GreyNoise fields (`noise`, `riot`, `classification`, `name`, tags) and anything computed only from them.
+- GreyNoise fields (`noise`, `riot`, `classification`, `name`, tags) and anything computed only from them, including ThreatSieve's scanner classification (`threatsieve.scanner`, `.benign_service`, `.scanner_name`) when GreyNoise or CrowdSec backs it (it then arrives as `threatsieve_restricted`).
 - CrowdSec CTI fields, Community Blocklist, Platinum blocklists and Live Exploit Tracker data.
 - DShield data: IP counts, attacks, first and last seen, threat feed membership, and any DShield sensor data.
 - Shadowserver report contents and API responses.
@@ -144,7 +144,7 @@ The following must never appear, raw or derived, in a paid Foiled feed, a CSV, S
 - Canary token values, quarantined malware binaries, operator secrets and API keys.
 - Personal information beyond what #16 allows, and data from customer edge sensors that have opted out of sharing (#37).
 
-Derived fields count. A score or flag that is computed mainly from one of these sources (for example "known scanner: yes" when only GreyNoise says so) is treated as that source's data. A Foiled score that merely uses third-party data as one weighted input (#27) may be exported as a number, without the third-party inputs or their values; counsel should confirm this before commercial launch (**verify**).
+Derived fields count. A score or flag that is computed mainly from one of these sources (for example "known scanner: yes" when only GreyNoise says so) is treated as that source's data. A Foiled score that merely uses third-party data as one weighted input (#27) may be exported as a number, without the third-party inputs or their values; counsel should confirm this before commercial launch (**verify**). The attempt noise score (#25) is stricter: a ThreatSieve benign-service flag alone can lift it to 90, so a score with any `threatsieve_restricted` input (`NoiseFacts.restricted`) is treated as that source's data and stays in the requesting tenant's console; exports use a score computed without restricted inputs.
 
 ## Worked answer
 

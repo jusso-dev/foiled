@@ -88,7 +88,7 @@ pub trait Provider {
 
 - **Local providers** (the ASN table, test fakes) implement `Provider` directly in `foiled-core`.
 - **ThreatSieve** is called from the Worker. `enrich_pipeline::lookup_request` builds the batched request, the Worker sends it over the service binding, and `enrich_pipeline::lookup_outcome` turns the status and body into Facts per observable. Neither function touches the network or the clock.
-- `foiled-core` still has parsers for GreyNoise Community, CrowdSec CTI and DShield answers (`parse_greynoise_community` and friends) from before ThreatSieve became the hub. Nothing calls them in production; they remain only because `noise_inputs` and the export-redaction tests use them, and they can go once the noise score (#25) reads ThreatSieve's scanner Facts instead.
+- Foiled has no direct GreyNoise, CrowdSec or DShield parsers any more: those sources reach Foiled only through ThreatSieve. Their provider ids stay on `NEVER_REDISTRIBUTE` and `KNOWN_THIRD_PARTY`, so their data is still caught if it ever turns up under those names or key namespaces.
 
 `Ok(vec![])` means "the provider knows nothing about this observable" and is cached like any other answer. `Err` is never cached as a Fact. `enrich_all` runs a set of providers over a set of observables, collects Facts by observable, and records each failure without stopping the run.
 
@@ -303,7 +303,7 @@ Shared rows are shared by every tenant of a deployment, but a tenant only ever a
 - **A provider failure never drops a capture event.** Events are written to Postgres before any enrichment message exists, and the ingest consumer acknowledges its batch whether or not the enrichment send succeeded.
 - **ThreatSieve failing does not stop `local_asn`.** The consumer records a failure per provider and observable and keeps going.
 - **No binding or no key is not an error.** Without the `THREATSIEVE` service binding or the `THREATSIEVE_API_KEY` secret, ThreatSieve is logged once per batch as not configured, no budget is spent and enrichment runs on `local_asn` alone.
-- **Missing Facts are neutral.** `noise_inputs` returns `None` for a provider that was off or failed, and #25 and #27 treat `None` as no evidence, not as evidence of anything.
+- **Missing Facts are neutral.** `noise_inputs` returns `None` when ThreatSieve was off, failed or knows nothing, and #25 and #27 treat `None` as no evidence, not as evidence of anything.
 - **Bad responses are errors, not Facts.** A body that is not JSON or is too large becomes `ParseError`, and a non-200 answer a `LookupError`; both are recorded and retried after the backoff.
 - **Dead letters** keep the observable and the provider error for an operator to inspect. They never hold a payload.
 
@@ -316,11 +316,13 @@ Shared rows are shared by every tenant of a deployment, but a tenant only ever a
 
 ## How Facts are consumed
 
-**Noise score on attempts (#25).** (Still keyed to the legacy GreyNoise and CrowdSec Facts; moving it to `threatsieve.scanner`, `.benign_service` and `.classification` is an open item.) `noise_inputs(facts)` returns `NoiseFacts { greynoise_noise, greynoise_riot, crowdsec_reputation }` for the attempt's source IP, newest value wins. GreyNoise `noise: true` pushes the attempt toward the `mass` band, `riot: true` marks the source as a known benign service, and a CrowdSec reputation of `malicious` or `suspicious` is recorded as evidence beside the fleet-wide hit count and decoy types touched. All three are optional inputs; the fleet counts still produce a score when every provider is off.
+**Noise score on attempts (#25).** `noise_inputs(usable, ip)` reads ThreatSieve's scanner classification and reputation for the attempt's source IP from `usable`, the output of `usable_facts` for the reading tenant, and returns `NoiseFacts { scanner, benign_service, classification, tags, restricted }`; for each key the newest Fact wins. Only `threatsieve` and `threatsieve_restricted` Facts count. `threatsieve.scanner: true` adds 20 and pushes the attempt toward the `mass` band, `threatsieve.benign_service: true` lifts the score to at least 90 (a known business or research service), and the classification (other than `unknown`) and tags are recorded as evidence beside the fleet-wide hit count and decoy types touched ([attempts.md](attempts.md#noise-score)). Every input is optional; the fleet counts still produce a score when ThreatSieve is off.
 
-**Confidence layer (#27).** Facts reach #27 in two ways. First, through the noise score, as evidence with `source: noise_score`: high noise lowers confidence that the activity is a targeted novel exploit, but cannot alone suppress a vuln-path hook or a sequence fingerprint, and GreyNoise RIOT strongly down-ranks actor and campaign auto-links. Second, directly, as evidence with `source: enrichment`, weighted by the configured weight times the Fact's `confidence / 100`. Enrichment evidence is capped so that it can never alone take a link to `high`, the evidence entry names the provider and Fact key so nothing is hidden, and a Fact past its `ttl_secs` contributes nothing.
+Restricted rows stay in bounds because `noise_inputs` only sees what `usable_facts` lets the reader see: a `threatsieve_restricted` row counts for the tenant whose lookup fetched it, once the operator has opted in with `show_restricted_to_requester`, and never for another tenant. `restricted: true` says an input came from such a row; the score's evidence then reads `ThreatSieve (restricted source, console only)`. The API does not feed cached Facts into attempt scores yet (the read model passes no enrichment, so every score today is from fleet counts alone); when it does, any score that leaves the console in an export must be computed without restricted inputs ([licence register](compliance/licence-register.md#never-include-in-a-paid-feed-or-public-dump)).
 
-**ATT&CK mapping (#26).** Foiled's own technique labels come from what the decoy saw. CrowdSec's `crowdsec.mitre_techniques` and `crowdsec.behaviors` are an outside check on them: when CrowdSec agrees with a technique Foiled already assigned, the `attempt_technique` link gains a small `enrichment` evidence entry; when CrowdSec lists a technique Foiled did not see, it is shown as a hint for the analyst and never creates a link on its own. CrowdSec `cves` are used the same way as a cross-check for CVE mapping (#12).
+**Confidence layer (#27).** Facts reach #27 in two ways. First, through the noise score, as evidence with `source: noise_score`: high noise lowers confidence that the activity is a targeted novel exploit, but cannot alone suppress a vuln-path hook or a sequence fingerprint, and a ThreatSieve benign-service classification strongly down-ranks actor and campaign auto-links. Second, directly, as evidence with `source: enrichment`, weighted by the configured weight times the Fact's `confidence / 100`. Enrichment evidence is capped so that it can never alone take a link to `high`, the evidence entry names the provider and Fact key so nothing is hidden, and a Fact past its `ttl_secs` contributes nothing.
+
+**ATT&CK mapping (#26).** Foiled's own technique labels come from what the decoy saw. The design is for outside technique and CVE hints to check them: when a source agrees with a technique Foiled already assigned, the `attempt_technique` link gains a small `enrichment` evidence entry; when it lists a technique Foiled did not see, it is shown as a hint for the analyst and never creates a link on its own, and CVE hints cross-check CVE mapping (#12) the same way. No Fact feeds this today: the direct CrowdSec parser that produced technique, behaviour and CVE Facts is gone, and ThreatSieve's lookup carries no per-IP technique list yet (open item below).
 
 **Actor matching (#29).** Infrastructure Facts are inputs to actor and campaign matching: `asn.number` and `asn.org`, `geo.country`, and ThreatSieve relationships (`threatsieve.related`) as low-weight context. They raise the score of a "possible association" only alongside behavioural evidence from the capture itself; ASN or country alone never names an actor, and a link supported only by third-party Facts stays internal to the operator's console. YARA matches on quarantined payloads are tool evidence for the same matching (#29) and campaign clustering (#33).
 
@@ -354,11 +356,11 @@ This describes the design constraints Foiled follows. It is not legal advice; op
 `cargo test -p foiled-core enrichment`, `cargo test -p foiled-api` and `cargo test -p foiled-lint` cover:
 
 - observable validation and normalisation (including CVE ids), and the private-address rule;
-- the legacy GreyNoise, CrowdSec and DShield parsers on fixtures in [testdata/enrichment/providers/](../testdata/enrichment/providers/);
 - the ASN table on [testdata/enrichment/asn.csv](../testdata/enrichment/asn.csv): IPv4, IPv6, IPv4-mapped input, inclusive edges, gaps, overlaps, bad rows and a thousand-range binary search;
 - cache freshness, Fact freshness and overflow at extreme TTLs;
 - reading cache rows (`CacheEntry::from_row`, `usable_facts`): expired rows and Facts, the retention cap, Facts under another provider's name, third-party visibility and tenant-scoped rows; and in `crates/api` the D1 lookup SQL against SQLite (freshness, tenant filtering, chunking under the bound parameter limit, the overall cap, a hostile value) and the IOC and export routes over cached rows;
-- `noise_inputs`, `redact_for_export` and `Fact::problems`;
+- `noise_inputs` on ThreatSieve Facts (newest wins, other providers and legacy keys ignored, a tenant's own restricted row counted only with the opt-in and another tenant's never), and the noise score's ThreatSieve evidence in `attempt`;
+- `redact_for_export` on the Facts mapped from the ThreatSieve fixture (restricted answers dropped, CVE and network-only answers kept), legacy and relabelled third-party Facts, and `Fact::problems`;
 - the purge plan and the purge SQL against SQLite: expired rows, per-provider and default retention caps, the dry-run switch, stale failures and the per-statement bound;
 - the pipeline (`enrich_pipeline`): the shipped config, message building and deduplication, the plan with fresh rows, backoff and `Retry-After` (a retry at `Retry-After` is a lookup), folded spellings (`fold_key`, `answer_for`), day budgets by priority, the lookup request (deduplicated, capped at 500, key only in a header), the mapping of [testdata/enrichment/threatsieve/lookup.json](../testdata/enrichment/threatsieve/lookup.json) (restricted and shared answers, unknown terms, network context without `found`, a null `entity_id`, pending sources, a rejected value, an unrequested type, relationships and provenance), and status codes;
 - the D1 budget, cache upsert and failure statements against SQLite (`crates/api/src/d1_sql.rs`);
@@ -382,7 +384,8 @@ Nothing here has been run against a live ThreatSieve by this project.
 ## Open items
 
 - A first run against a live ThreatSieve (ThreatSieve PR #33).
-- Move the noise score inputs (`noise_inputs`, #25) to ThreatSieve's scanner and classification Facts, then delete the legacy GreyNoise, CrowdSec and DShield parsers.
+- Feed `noise_inputs` into the attempts read model in the API (#25), with restricted inputs left out of any exported score (a machine-readable `restricted` marker on `NoiseScore` for exporters to check).
+- Technique and CVE hints for ATT&CK mapping (#26) from ThreatSieve, once its lookup returns them per IP.
 - The sweep cron that re-sends observables of recent attempts with no fresh cache row.
 - Turning providers on without a redeploy (the config is bundled at build time).
 - An operator-only view of third-party Facts (needs an operator role, #14).

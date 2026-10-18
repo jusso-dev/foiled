@@ -10,13 +10,13 @@
     "provider": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]{0,31}$",
-      "description": "Provider id from configs/enrichment.yaml, or yara for the YARA batch job. Facts from greynoise, crowdsec, dshield, shadowserver, huntio, abuseipdb and local_asn are never exported."
+      "description": "Provider id from configs/enrichment.yaml (threatsieve, local_asn), threatsieve_restricted for ThreatSieve answers with a restricted source, or yara for the YARA batch job. Facts from threatsieve_restricted, local_asn and the legacy ids greynoise, crowdsec, dshield, shadowserver, huntio and abuseipdb are never exported."
     },
     "key": {
       "type": "string",
       "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
       "maxLength": 96,
-      "description": "Dotted key namespaced by provider or topic, for example greynoise.noise, crowdsec.mitre_techniques or asn.number."
+      "description": "Dotted key namespaced by provider or topic, for example threatsieve.scanner, cve.kev_listed or asn.number."
     },
     "value": {
       "description": "The asserted value. Provider text is untrusted, clipped to 256 characters and lists to 64 items."

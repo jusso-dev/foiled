@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::capture::{CaptureEvent, Channel, HookStage};
 use crate::catalogue::DecoyKind;
+use crate::enrichment::NoiseFacts;
 
 /// A new attempt starts when the same source has been quiet on the same
 /// decoy for longer than this.
@@ -281,17 +282,12 @@ pub fn group(
     (attempts, orphans)
 }
 
-/// Optional third-party input to the noise score (#11). GreyNoise data is
-/// enrichment only and never exported (#38).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NoiseHints {
-    pub greynoise_noise: Option<bool>,
-    pub greynoise_riot: Option<bool>,
-}
-
 /// Score how much a source looks like mass scanning, from what the visible
-/// fleet saw of it (`events`, any decoys of the tenant in the window).
-pub fn noise_score(src: &str, events: &[CaptureEvent], hints: NoiseHints) -> NoiseScore {
+/// fleet saw of it (`events`, any decoys of the tenant in the window) and,
+/// optionally, ThreatSieve's scanner classification for the source (#11,
+/// from [`crate::enrichment::noise_inputs`]). `NoiseFacts::default()` means no
+/// enrichment, which is neutral.
+pub fn noise_score(src: &str, events: &[CaptureEvent], hints: &NoiseFacts) -> NoiseScore {
     let mine: Vec<&CaptureEvent> = events
         .iter()
         .filter(|e| attacker_facing(e.channel) && e.src.ip == src)
@@ -316,13 +312,28 @@ pub fn noise_score(src: &str, events: &[CaptureEvent], hints: NoiseHints) -> Noi
         score += 10;
         evidence.push(format!("{hits} events in the window"));
     }
-    if hints.greynoise_noise == Some(true) {
+    // A restricted input is the tenant's own lookup: it may move the score
+    // the tenant sees, and the evidence says it must not leave the console.
+    let from = if hints.restricted {
+        "ThreatSieve (restricted source, console only)"
+    } else {
+        "ThreatSieve"
+    };
+    if hints.scanner == Some(true) {
         score += 20;
-        evidence.push("GreyNoise marks the source as internet noise".into());
+        evidence.push(format!(
+            "{from} classifies the source as an internet scanner"
+        ));
     }
-    if hints.greynoise_riot == Some(true) {
+    if hints.benign_service == Some(true) {
         score = score.max(90);
-        evidence.push("GreyNoise RIOT marks the source as a known business service".into());
+        evidence.push(format!("{from} marks the source as a known benign service"));
+    }
+    if let Some(c) = hints.classification.as_deref().filter(|c| *c != "unknown") {
+        evidence.push(format!("{from} classification: {c}"));
+    }
+    if !hints.tags.is_empty() {
+        evidence.push(format!("{from} tags: {}", hints.tags.join(", ")));
     }
     let score = score.clamp(0, 100) as u8;
     let band = match score {
@@ -345,7 +356,7 @@ pub fn noise_score(src: &str, events: &[CaptureEvent], hints: NoiseHints) -> Noi
 pub fn build(events: &[CaptureEvent], idle_gap_ms: i64, extra: &ExtraSignals) -> Vec<Attempt> {
     let (mut attempts, _) = group(events, idle_gap_ms, extra);
     for a in &mut attempts {
-        a.noise = Some(noise_score(&a.src, events, NoiseHints::default()));
+        a.noise = Some(noise_score(&a.src, events, &NoiseFacts::default()));
     }
     attempts
 }
@@ -534,7 +545,7 @@ mod tests {
             "203.0.113.7",
             "application",
         )]);
-        let n = noise_score("203.0.113.7", &one, NoiseHints::default());
+        let n = noise_score("203.0.113.7", &one, &NoiseFacts::default());
         assert_eq!(n.band, NoiseBand::Targeted);
         let wide: Vec<_> = parse(
             (0..5)
@@ -550,18 +561,81 @@ mod tests {
                 })
                 .collect(),
         );
-        let n = noise_score("198.51.100.5", &wide, NoiseHints::default());
+        let n = noise_score("198.51.100.5", &wide, &NoiseFacts::default());
         assert_eq!(n.band, NoiseBand::Mass);
         assert_eq!(n.decoy_types_touched, 5);
-        let riot = noise_score(
+        let benign = noise_score(
             "203.0.113.7",
             &one,
-            NoiseHints {
-                greynoise_noise: None,
-                greynoise_riot: Some(true),
+            &NoiseFacts {
+                benign_service: Some(true),
+                ..NoiseFacts::default()
             },
         );
-        assert_eq!(riot.band, NoiseBand::Mass);
-        assert!(riot.evidence.iter().any(|e| e.contains("RIOT")));
+        assert_eq!(benign.score, 90);
+        assert_eq!(benign.band, NoiseBand::Mass);
+        assert!(
+            benign
+                .evidence
+                .iter()
+                .any(|e| e == "ThreatSieve marks the source as a known benign service")
+        );
+    }
+
+    #[test]
+    fn threatsieve_scanner_facts_move_the_noise_score() {
+        let one = parse(vec![ev(
+            "e1",
+            T0,
+            "d1",
+            "c/1",
+            "203.0.113.7",
+            "application",
+        )]);
+        // Unknown (no scanner Fact) and "not a scanner" are both neutral.
+        let base = noise_score("203.0.113.7", &one, &NoiseFacts::default()).score;
+        let not_scanner = NoiseFacts {
+            scanner: Some(false),
+            benign_service: Some(false),
+            classification: Some("unknown".into()),
+            ..NoiseFacts::default()
+        };
+        let n = noise_score("203.0.113.7", &one, &not_scanner);
+        assert_eq!((base, n.score), (10, 10));
+        assert_eq!(n.evidence.len(), 1);
+
+        let scanner = NoiseFacts {
+            scanner: Some(true),
+            classification: Some("malicious".into()),
+            tags: vec!["bruteforce".into()],
+            ..NoiseFacts::default()
+        };
+        let n = noise_score("203.0.113.7", &one, &scanner);
+        assert_eq!(n.score, 30);
+        assert_eq!(n.band, NoiseBand::Mixed);
+        assert_eq!(
+            n.evidence[1..],
+            [
+                "ThreatSieve classifies the source as an internet scanner",
+                "ThreatSieve classification: malicious",
+                "ThreatSieve tags: bruteforce",
+            ]
+        );
+
+        // The tenant's own restricted answer still counts, and is labelled.
+        let restricted = noise_score(
+            "203.0.113.7",
+            &one,
+            &NoiseFacts {
+                restricted: true,
+                ..scanner
+            },
+        );
+        assert_eq!(restricted.score, 30);
+        assert!(
+            restricted.evidence[1..]
+                .iter()
+                .all(|e| e.starts_with("ThreatSieve (restricted source, console only)"))
+        );
     }
 }
