@@ -110,7 +110,7 @@ export async function signIn(principal: Principal = ADMIN): Promise<{
 
 // ---------- Route tree from app/routes.ts ----------
 
-const modules = import.meta.glob("../routes/*.tsx", { eager: true }) as Record<
+const modules = import.meta.glob("../routes/**/*.{ts,tsx}", { eager: true }) as Record<
   string,
   {
     loader?: RouteObject["loader"];
@@ -121,7 +121,7 @@ const modules = import.meta.glob("../routes/*.tsx", { eager: true }) as Record<
 >;
 
 function toRoute(c: RouteConfigEntry): RouteObject {
-  const id = c.id ?? c.file.replace(/\.tsx$/, "");
+  const id = c.id ?? c.file.replace(/\.tsx?$/, "");
   const m = modules[`../${c.file}`];
   if (!m) throw new Error(`no module for ${c.file}`);
   const base = {
