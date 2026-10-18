@@ -44,7 +44,7 @@ Related: campaigns ([campaigns.md](campaigns.md), #33), the confidence layer ([c
 | [`testdata/actors/expected/`](../testdata/actors/expected/) | Golden links for the fleet-wave fixture. |
 | [`crates/lint/tests/actors.rs`](../crates/lint/tests/actors.rs) | Golden test and catalogue checks. |
 | [`crates/api/src/routes/actors.rs`](../crates/api/src/routes/actors.rs) | The API. |
-| [`migrations/postgres/0007_actor_link_decisions.sql`](../migrations/postgres/0007_actor_link_decisions.sql) | Stored analyst decisions. |
+| [`migrations/postgres/0008_actor_link_decisions.sql`](../migrations/postgres/0008_actor_link_decisions.sql) | Stored analyst decisions. |
 
 ## Sources and the pin process
 
