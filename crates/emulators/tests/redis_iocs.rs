@@ -143,10 +143,10 @@ async fn redis_fixture_is_real_emulator_output_and_extracts_without_secrets() {
         .map(|i| i.value.as_str())
         .collect();
     for want in [
-        "HELLO 3 AUTH default REDACTED",
+        "HELLO 3 AUTH REDACTED REDACTED",
         "CONFIG SET requirepass REDACTED",
         "CONFIG SET dir /var/spool/cron",
-        "MIGRATE 192.0.2.10 6379 k 0 5000 AUTH2 default REDACTED",
+        "MIGRATE 192.0.2.10 6379 k 0 5000 AUTH2 REDACTED REDACTED",
     ] {
         assert!(subs.contains(&want), "{want} not in {subs:?}");
     }

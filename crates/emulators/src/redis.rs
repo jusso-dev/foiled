@@ -13,7 +13,7 @@
 //! keywords in unknown commands) is masked in `args`, `error`, `config_set`
 //! and hook notes, with its hash and length in `redacted_args`. Replies to
 //! the client are unchanged. The positions come from
-//! `foiled_core::ioc::secret_arg_positions`, so events and IOCs agree.
+//! `foiled_core::redact::secret_arg_positions`, so events and IOCs agree.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use foiled_core::capture::{HookEvent, Severity};
-use foiled_core::ioc::{mask_secret_arg, secret_arg_positions};
+use foiled_core::redact::{mask_secret_arg, secret_arg_positions};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -48,6 +48,12 @@ pub const MAX_QUERY_BUFFER: usize = 512 * 1024;
 pub const MAX_KEYS: usize = 1024;
 /// Bytes of each argument kept in an event.
 const ARG_CLIP: usize = 256;
+/// Longest error text kept in an event.
+const ERROR_CLIP: usize = 256;
+/// Error text kept before masking. Every error message is far shorter (the
+/// longest echoes 8 arguments of at most 128 characters), so masking always
+/// sees whole arguments.
+const ERROR_BOUND: usize = 4096;
 /// Arguments kept in an event.
 const LOG_ARGS: usize = 8;
 
@@ -668,6 +674,9 @@ impl Core {
     pub fn execute(&self, conn: &mut Conn, args: &[Vec<u8>]) -> Outcome {
         let mut o = self.run_command(conn, args);
         scrub_secrets(&mut o.data, args);
+        if let Some(Value::String(e)) = o.data.get_mut("error") {
+            *e = clip(e.as_bytes(), ERROR_CLIP);
+        }
         o
     }
 
@@ -757,8 +766,10 @@ impl Core {
     fn fail(&self, mut o: Outcome, msg: &str) -> Outcome {
         o.reply = error(msg);
         o.data.insert("result".into(), json!("error"));
+        // Clipped to ERROR_CLIP only after credentials are masked
+        // (`execute`), so a cut never lands inside a secret.
         o.data
-            .insert("error".into(), json!(clip(msg.as_bytes(), 256)));
+            .insert("error".into(), json!(clip(msg.as_bytes(), ERROR_BOUND)));
         if o.severity < Severity::Low {
             o.severity = Severity::Low;
         }
@@ -1262,7 +1273,7 @@ fn logged_args(args: &[Vec<u8>]) -> Vec<Vec<u8>> {
 
 /// Mask credential arguments in an outcome's logged data: `args` (offset by
 /// the subcommand when it is logged apart), `config_set` values and the
-/// quoted copies in `error` (including one cut short by the error clip).
+/// quoted copies in the unclipped `error`.
 /// Each masked value is recorded as `{index, sha256, len}` in
 /// `redacted_args`, the way AUTH keeps `password_sha256`.
 fn scrub_secrets(data: &mut Map<String, Value>, args: &[Vec<u8>]) {
@@ -1300,19 +1311,11 @@ fn scrub_secrets(data: &mut Map<String, Value>, args: &[Vec<u8>]) {
         let mut e = err.clone();
         for &i in &hits {
             let masked = mask_secret_arg(&tokens[i]);
-            for form in [printable(&args[i], 128), clip(&args[i], ARG_CLIP)] {
-                if form.is_empty() {
-                    continue;
-                }
+            // Errors quote arguments as `'{printable(arg, 128)}'`, whole,
+            // because the error is clipped only after this.
+            let form = printable(&args[i], 128);
+            if !form.is_empty() {
                 e = e.replace(&format!("'{form}'"), &format!("'{masked}'"));
-                // The error is clipped, so the last secret may be cut short.
-                if let Some(q) = e.rfind('\'') {
-                    let tail = &e[q + 1..];
-                    if !tail.is_empty() && tail != masked && form.starts_with(tail) {
-                        e.truncate(q + 1);
-                        e.push_str(&masked);
-                    }
-                }
             }
         }
         *err = e;
@@ -1833,12 +1836,23 @@ mod tests {
         // does, but the logged error and args are masked.
         let o = c.execute(&mut conn, &cmd(&["HELLO", "3", "AUTH", "default", pw]));
         assert!(String::from_utf8_lossy(&o.reply).contains(pw));
-        assert_eq!(o.data["args"], json!(["3", "AUTH", "default", "REDACTED"]));
+        assert_eq!(o.data["args"], json!(["3", "AUTH", "REDACTED", "REDACTED"]));
         assert!(o.data["error"].as_str().unwrap().contains("'REDACTED'"));
         assert_eq!(
             hidden(&o),
-            json!([{"index": 4, "sha256": sha256_hex(pw.as_bytes()), "len": 7}])
+            json!([
+                {"index": 3, "sha256": sha256_hex(b"default"), "len": 7},
+                {"index": 4, "sha256": sha256_hex(pw.as_bytes()), "len": 7}
+            ])
         );
+
+        // Short arity fails closed: everything after the keyword.
+        let o = c.execute(&mut conn, &cmd(&["HELLO", "3", "AUTH", pw]));
+        assert_eq!(o.data["args"], json!(["3", "AUTH", "REDACTED"]));
+        hidden(&o);
+        let o = c.execute(&mut conn, &cmd(&["SENTINEL", "SET", "m", "auth-pass", pw]));
+        assert_eq!(o.data["args"][3], json!("REDACTED"));
+        hidden(&o);
 
         let o = c.execute(
             &mut conn,
@@ -1854,6 +1868,7 @@ mod tests {
                 pw,
             ]),
         );
+        assert_eq!(o.data["args"][6], json!("REDACTED"));
         assert_eq!(o.data["args"][7], json!("REDACTED"));
         hidden(&o);
 
@@ -1872,12 +1887,21 @@ mod tests {
         assert!(!o.data["error"].as_str().unwrap().contains("abc"));
         hidden(&o);
 
-        // A secret cut short by the error clip is still masked.
-        let long = "x".repeat(200);
-        let o = c.execute(&mut conn, &cmd(&["XYZZY", &long, "AUTH", pw]));
-        let err = o.data["error"].as_str().unwrap();
-        assert!(!err.contains("hunt"), "{err}");
-        hidden(&o);
+        // Masking happens before the error is clipped, so a secret that
+        // straddles the clip, or holds quotes, never leaks a part.
+        for pad in 180..230 {
+            for secret in ["hunter2", "it's'hunter2", "'hunter2'"] {
+                let long = "x".repeat(pad);
+                let o = c.execute(&mut conn, &cmd(&["XYZZY", &long, "AUTH", secret]));
+                let err = o.data["error"].as_str().unwrap();
+                assert!(err.len() <= 256);
+                assert!(
+                    !err.contains("hun") && !err.contains("it's"),
+                    "{pad}: {err}"
+                );
+                assert!(!serde_json::to_string(&o.data).unwrap().contains("hunter2"));
+            }
+        }
 
         // CONFIG SET requirepass: masked in args and config_set, applied for
         // real, and still readable by the client.

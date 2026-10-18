@@ -172,7 +172,7 @@ async fn search_filters_by_type_value_role_and_attempt() {
 
     let (_, b) = get(&s, "analyst", "/v0/iocs?type=behaviour_fingerprint").await;
     let bf = &items(&b)[0];
-    assert!(bf["value"].as_str().unwrap().starts_with("bf1:"));
+    assert!(bf["value"].as_str().unwrap().starts_with("bf2:"));
     let attempt = bf["attempt_ids"][0].as_str().unwrap().to_string();
 
     let (_, b) = get(

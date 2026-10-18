@@ -30,6 +30,10 @@ use crate::confidence::{Band, ConfidenceConfig, Evidence, EvidenceSource, LinkKi
 use crate::enrichment::{Fact, Observable, ObservableKind, is_never_redistribute};
 use crate::timeline::printable;
 
+pub use crate::redact::{
+    REDACTED, TextKind, mask_secret_arg, redact, redact_as, secret_arg_positions,
+};
+
 /// Longest value kept, in characters. Longer request strings and command
 /// lines are dropped rather than cut, because a cut value is no longer an
 /// exact indicator; their hashes still become IOCs.
@@ -46,111 +50,11 @@ pub const MAX_FINGERPRINT_STEPS: usize = 64;
 pub const MAX_URLS_PER_TEXT: usize = 8;
 /// Most attempts and decoys that add confidence evidence to one IOC.
 pub const MAX_CONFIDENCE_ITEMS: usize = 16;
-/// Version of the behaviour fingerprint format (`bf1:`).
-pub const FINGERPRINT_VERSION: u32 = 1;
+/// Version of the behaviour fingerprint format (`bf2:`). Version 1 (`bf1:`,
+/// #75) is no longer computed and is not comparable (`docs/iocs.md`).
+pub const FINGERPRINT_VERSION: u32 = 2;
 
-const FINGERPRINT_DOMAIN: &str = "foiled-behaviour-fingerprint/v1";
-const REDACTED: &str = "REDACTED";
-
-/// A parameter, field or header name containing one of these (ignoring
-/// case) names a secret: `password`, `X-Amz-Signature`, `db_passwd`,
-/// `apiToken`, `sessid`.
-const SECRET_KEY_PARTS: &[&str] = &[
-    "secret",
-    "token",
-    "password",
-    "passwd",
-    "api-key",
-    "api_key",
-    "apikey",
-    "private_key",
-    "private-key",
-    "privatekey",
-    "signature",
-    "session",
-    "sessid",
-    "credential",
-    "cookie",
-    "jwt",
-];
-
-/// Name components (split on `-`, `_` and camel case) that name a secret
-/// only as a whole component, because as substrings they would hit
-/// ordinary names: `auth` is a secret in `X-Auth-Token` and `basic_auth`,
-/// not in `author`; `pass` in `db_pass`, not in `passport`.
-const SECRET_KEY_COMPONENTS: &[&str] = &["auth", "authorization", "pass", "pwd", "sig", "sid"];
-
-/// Values after a secret-named key that are settings, not secrets
-/// (`PasswordAuthentication=no`).
-const NOT_SECRET_VALUES: &[&str] = &["yes", "no", "true", "false", "on", "off", "none", "null"];
-
-/// Longest parameter or header name considered.
-const MAX_KEY_CHARS: usize = 48;
-
-fn secret_key(name: &str) -> bool {
-    let k = name.trim_start_matches('-');
-    let lower = k.to_ascii_lowercase();
-    if lower == "key" || SECRET_KEY_PARTS.iter().any(|p| lower.contains(p)) {
-        return true;
-    }
-    // Components: split on separators and lower-to-upper case changes.
-    let mut comps: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    let mut prev_lower = false;
-    for c in k.chars() {
-        if c == '-' || c == '_' {
-            comps.push(std::mem::take(&mut cur));
-            prev_lower = false;
-            continue;
-        }
-        if c.is_ascii_uppercase() && prev_lower {
-            comps.push(std::mem::take(&mut cur));
-        }
-        prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
-        cur.push(c.to_ascii_lowercase());
-    }
-    comps.push(cur);
-    comps
-        .iter()
-        .any(|c| SECRET_KEY_COMPONENTS.contains(&c.as_str()))
-}
-
-/// Flags whose next word is a secret, for any program.
-const SECRET_FLAGS: &[&str] = &[
-    "--api-key",
-    "--apikey",
-    "--pass",
-    "--password",
-    "--secret",
-    "--token",
-    "-pass",
-    "-passin",
-    "-passout",
-    "bearer",
-];
-
-/// Short flags that carry a password for particular programs, either
-/// attached (`-pPW`) or as the next word (`-p PW`): `(program, flag,
-/// attached, separate)`.
-const PROGRAM_SECRET_FLAGS: &[(&str, &str, bool, bool)] = &[
-    ("mysql", "-p", true, false),
-    ("mysqldump", "-p", true, false),
-    ("mysqladmin", "-p", true, false),
-    ("mariadb", "-p", true, false),
-    ("mariadb-dump", "-p", true, false),
-    ("sshpass", "-p", true, true),
-    ("redis-cli", "-a", false, true),
-    ("mosquitto_pub", "-P", false, true),
-    ("mosquitto_sub", "-P", false, true),
-    ("zip", "-P", false, true),
-    ("unzip", "-P", false, true),
-    ("7z", "-p", true, false),
-    ("7za", "-p", true, false),
-];
-
-/// Flags whose next word is `user:password` (or `user%password` for
-/// `smbclient -U`): the password part is redacted, the user kept.
-const USER_PASS_FLAGS: &[&str] = &["-u", "--user", "--proxy-user", "-U"];
+const FINGERPRINT_DOMAIN: &str = "foiled-behaviour-fingerprint/v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -175,7 +79,7 @@ pub enum IocType {
     Cmdline,
     /// A DNS name the decoy was made to look up.
     DnsQuery,
-    /// Stable id over the attempt's normalised steps (`bf1:`).
+    /// Stable id over the attempt's normalised steps (`bf2:`).
     BehaviourFingerprint,
 }
 
@@ -381,347 +285,6 @@ pub fn ioc_id(ty: IocType, value: &str) -> String {
 // Redaction, defanging and refanging
 // ---------------------------------------------------------------------------
 
-/// Remove secrets and personal information from attacker text, keeping its
-/// shape: URL passwords (`scheme://user:REDACTED@host`), values after
-/// secret-named keys, headers and flags (`password=REDACTED`,
-/// `X-Api-Key: REDACTED`, `--password REDACTED`), program password flags
-/// (`mysql -pREDACTED`, `sshpass -p REDACTED`, `curl -u user:REDACTED`),
-/// bearer tokens and the local part of email addresses. Returns the new
-/// text and whether anything changed. Linear in the input.
-pub fn redact(s: &str) -> (String, bool) {
-    let out = redact_emails(&redact_pairs(&redact_flags(&redact_userinfo(s))));
-    let changed = out != s;
-    (out, changed)
-}
-
-/// `scheme://user:pw@host` becomes `scheme://user:REDACTED@host`; userinfo
-/// without a password (often a token, `https://TOKEN@host`) becomes
-/// `REDACTED@host`.
-fn redact_userinfo(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find("://") {
-        let (head, tail) = rest.split_at(i + 3);
-        out.push_str(head);
-        let end = tail
-            .find(|c: char| matches!(c, '/' | '?' | '#' | '\'' | '"') || c.is_whitespace())
-            .unwrap_or(tail.len());
-        let authority = &tail[..end];
-        match authority.rfind('@') {
-            Some(at) => {
-                match authority[..at].split_once(':') {
-                    Some((user, _)) if !user.is_empty() => {
-                        out.push_str(user);
-                        out.push(':');
-                    }
-                    _ => {}
-                }
-                out.push_str(REDACTED);
-                out.push_str(&authority[at..]);
-            }
-            None => out.push_str(authority),
-        }
-        rest = &tail[end..];
-    }
-    out.push_str(rest);
-    out
-}
-
-fn value_end(c: char) -> bool {
-    matches!(c, '&' | ';' | '\'' | '"' | '#' | ',' | '}' | ']') || c.is_whitespace()
-}
-
-fn key_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '-')
-}
-
-/// Redact the value after a secret-named key in query strings
-/// (`password=x`), config lines (`password = x`), JSON (`"Password" : "x"`)
-/// and headers (`X-Api-Key: k1 k2`, the whole value to the end of the line
-/// or quote). Names are matched by [`secret_key`]. A header needs a space
-/// after the colon, so `auth-server:8080` is a host and port, not a header.
-/// Setting words (`PasswordAuthentication=no`) are kept. Look-back is
-/// bounded, so this is linear in the input.
-fn redact_pairs(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        out.push(c);
-        if c != '=' && c != ':' {
-            continue;
-        }
-        let before = &out[..out.len() - 1];
-        let trimmed = before.trim_end_matches([' ', '\t']);
-        // JSON and quoted keys end with a quote before the separator.
-        let quoted = trimmed.ends_with('"') || trimmed.ends_with('\'');
-        let name_end = trimmed.len() - usize::from(quoted);
-        let key_len = trimmed[..name_end]
-            .chars()
-            .rev()
-            .take(MAX_KEY_CHARS + 1)
-            .take_while(|ch| key_char(*ch))
-            .count();
-        if key_len == 0 || key_len > MAX_KEY_CHARS {
-            continue;
-        }
-        let key = &trimmed[name_end - key_len..name_end];
-        let starts_word = trimmed[..name_end - key_len]
-            .chars()
-            .next_back()
-            .is_none_or(|p| {
-                matches!(p, '?' | '&' | ';' | '\'' | '"' | '{' | ',' | '(' | '[')
-                    || p.is_whitespace()
-            });
-        let header = c == ':' && !quoted;
-        if !starts_word
-            || !secret_key(key)
-            || (header && !chars.peek().is_some_and(|n| *n == ' ' || *n == '\t'))
-        {
-            continue;
-        }
-        while chars.peek().is_some_and(|n| *n == ' ' || *n == '\t') {
-            out.push(chars.next().unwrap_or(' '));
-        }
-        let quote = match chars.peek() {
-            Some(&q @ ('"' | '\'')) => {
-                out.push(q);
-                chars.next();
-                Some(q)
-            }
-            _ => None,
-        };
-        let mut value = String::new();
-        while let Some(&n) = chars.peek() {
-            let end = match quote {
-                Some(q) => n == q,
-                None if header => matches!(n, '\n' | '\r' | '\'' | '"'),
-                None => value_end(n),
-            };
-            if end {
-                break;
-            }
-            value.push(n);
-            chars.next();
-        }
-        let setting = NOT_SECRET_VALUES
-            .iter()
-            .any(|w| value.trim().eq_ignore_ascii_case(w));
-        if value.is_empty() || setting {
-            out.push_str(&value);
-        } else {
-            // Keep trailing spaces of a header value outside the redaction.
-            let kept = value.len() - value.trim_end().len();
-            out.push_str(REDACTED);
-            out.push_str(&value[value.len() - kept..]);
-        }
-    }
-    out
-}
-
-/// What a flag says about the next word.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NextWord {
-    Keep,
-    Secret,
-    /// `user:password` or `user%password`: keep the user.
-    UserPass,
-}
-
-/// Wrappers that run the next word as the program.
-const WRAPPERS: &[&str] = &["sudo", "env", "nohup", "exec", "time", "command", "xargs"];
-
-fn command_break(word: &str) -> bool {
-    matches!(word, "|" | "||" | "&&" | ";" | "&")
-        || word.ends_with(';')
-        || word.ends_with('|')
-        || word.ends_with("&&")
-}
-
-/// Replace `inner` within `word` (which may carry quotes around it).
-fn rewrap(word: &str, inner: &str, with: &str) -> String {
-    match word.find(inner) {
-        Some(i) => format!("{}{with}{}", &word[..i], &word[i + inner.len()..]),
-        None => with.to_string(),
-    }
-}
-
-/// Redact the word after secret flags (`--password x`, `-passin x`,
-/// `Bearer x`), the password half of `-u user:pw`, and program-specific
-/// password flags (`mysql -pPW`, `sshpass -p PW`, `redis-cli -a PW`). The
-/// program is the first word of each command, after wrappers such as
-/// `sudo` and inside `sh -c '...'`.
-fn redact_flags(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut next = NextWord::Keep;
-    let mut prog = String::new();
-    let mut at_start = true;
-    let mut after_dash_c = false;
-    for piece in s.split_inclusive(char::is_whitespace) {
-        let word = piece.trim_end();
-        let tail = &piece[word.len()..];
-        if word.is_empty() {
-            out.push_str(piece);
-            continue;
-        }
-        let bare = word.trim_matches(|c| matches!(c, '\'' | '"' | '`' | '(' | ')' | '$'));
-        match std::mem::replace(&mut next, NextWord::Keep) {
-            NextWord::Secret if !bare.is_empty() => {
-                out.push_str(&rewrap(word, bare, REDACTED));
-                out.push_str(tail);
-                continue;
-            }
-            NextWord::UserPass => {
-                if let Some(i) = bare.find([':', '%']) {
-                    let with = format!("{}{REDACTED}", &bare[..=i]);
-                    out.push_str(&rewrap(word, bare, &with));
-                    out.push_str(tail);
-                    continue;
-                }
-            }
-            _ => {}
-        }
-        if at_start || (after_dash_c && word.starts_with(['\'', '"'])) {
-            let base = bare.rsplit('/').next().unwrap_or(bare);
-            prog = base.to_ascii_lowercase();
-            at_start = WRAPPERS.contains(&prog.as_str());
-        } else if prog == "env" && bare.contains('=') {
-            at_start = true;
-        }
-        after_dash_c = bare == "-c";
-        let lw = bare.to_ascii_lowercase();
-        if SECRET_FLAGS.contains(&lw.as_str()) {
-            next = NextWord::Secret;
-        } else if USER_PASS_FLAGS.contains(&bare) {
-            next = NextWord::UserPass;
-        } else if let Some(&(_, flag, attached, separate)) = PROGRAM_SECRET_FLAGS
-            .iter()
-            .find(|(p, f, _, _)| *p == prog && bare.starts_with(f))
-        {
-            if bare == flag && separate {
-                next = NextWord::Secret;
-            } else if attached && bare.len() > flag.len() {
-                out.push_str(&rewrap(word, bare, &format!("{flag}{REDACTED}")));
-                out.push_str(tail);
-                at_start |= command_break(word);
-                continue;
-            }
-        }
-        out.push_str(piece);
-        if command_break(word) {
-            at_start = true;
-        }
-    }
-    out
-}
-
-/// Keywords after which the next argument is a credential, for commands
-/// without a rule of their own (an unknown command carrying `AUTH pw` or
-/// `PASSWORD pw`).
-const SECRET_ARG_KEYWORDS: &[&str] = &[
-    "AUTH",
-    "PASS",
-    "PASSWORD",
-    "REQUIREPASS",
-    "MASTERAUTH",
-    "SECRET",
-    "TOKEN",
-    "APIKEY",
-];
-
-fn secret_config_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name == "requirepass" || name == "masterauth" || name.ends_with("pass") || secret_key(&name)
-}
-
-/// Positions of credential arguments in a protocol command. `tokens` is
-/// the whole command: the command name at 0, then its subcommand and
-/// arguments, as the client sent them. Shared by IOC extraction and the
-/// Redis emulator (#30) so a captured event and its IOCs hide the same
-/// values.
-///
-/// - `AUTH [user] PW`, `LOGIN [user] PW`: the password (every argument
-///   when the arity is wrong); `PASS PW`: every argument.
-/// - `HELLO ... AUTH user PW`; `MIGRATE ... AUTH PW | AUTH2 user PW`.
-/// - `CONFIG SET name value ...`: values of `requirepass`, `masterauth` and
-///   other secret-named parameters.
-/// - `ACL SETUSER name rule...`: password rules (`>pw`, `<pw`, `#hash`,
-///   `!hash`).
-/// - Any other command: the argument after [`SECRET_ARG_KEYWORDS`] (two
-///   after `AUTH2`), and `name=value` arguments with a secret name.
-pub fn secret_arg_positions<S: AsRef<str>>(tokens: &[S]) -> Vec<usize> {
-    let n = tokens.len();
-    let up = |i: usize| tokens.get(i).map(|x| x.as_ref().to_ascii_uppercase());
-    let mut hits: Vec<usize> = Vec::new();
-    match up(0).as_deref() {
-        Some("AUTH" | "LOGIN") if n == 2 || n == 3 => hits.push(n - 1),
-        Some("AUTH" | "LOGIN" | "PASS") => hits.extend(1..n),
-        Some("HELLO") => {
-            if let Some(i) = (1..n).find(|&i| up(i).as_deref() == Some("AUTH")) {
-                hits.push(i + 2);
-            }
-        }
-        Some("MIGRATE") => {
-            for i in 1..n {
-                match up(i).as_deref() {
-                    Some("AUTH") => hits.push(i + 1),
-                    Some("AUTH2") => hits.push(i + 2),
-                    _ => {}
-                }
-            }
-        }
-        Some("CONFIG") if up(1).as_deref() == Some("SET") => {
-            let mut i = 2;
-            while i + 1 < n {
-                if secret_config_name(tokens[i].as_ref()) {
-                    hits.push(i + 1);
-                }
-                i += 2;
-            }
-        }
-        Some("ACL") if up(1).as_deref() == Some("SETUSER") => {
-            for (i, t) in tokens.iter().enumerate().skip(3) {
-                let t = t.as_ref();
-                if t.len() > 1 && t.starts_with(['>', '<', '#', '!']) {
-                    hits.push(i);
-                }
-            }
-        }
-        _ => {
-            for (i, t) in tokens.iter().enumerate().skip(1) {
-                let t = t.as_ref();
-                let u = t.to_ascii_uppercase();
-                if u == "AUTH2" {
-                    hits.push(i + 2);
-                } else if SECRET_ARG_KEYWORDS.contains(&u.as_str()) {
-                    hits.push(i + 1);
-                } else if let Some((name, value)) = t.split_once('=')
-                    && !value.is_empty()
-                    && secret_key(name)
-                {
-                    hits.push(i);
-                }
-            }
-        }
-    }
-    hits.retain(|&i| i >= 1 && i < n);
-    hits.sort_unstable();
-    hits.dedup();
-    hits
-}
-
-/// The masked form of one credential argument, keeping its shape:
-/// `>REDACTED` for an ACL password rule, `name=REDACTED` for a secret
-/// `name=value`, else `REDACTED`.
-pub fn mask_secret_arg(token: &str) -> String {
-    if let Some(first @ ('>' | '<' | '#' | '!')) = token.chars().next() {
-        return format!("{first}{REDACTED}");
-    }
-    match token.split_once('=') {
-        Some((name, _)) if secret_key(name) => format!("{name}={REDACTED}"),
-        _ => REDACTED.to_string(),
-    }
-}
-
 /// Mask credential arguments in place ([`secret_arg_positions`]). Returns
 /// whether any were found, including ones already masked upstream (the
 /// Redis emulator masks before it logs).
@@ -731,49 +294,6 @@ fn redact_command(tokens: &mut [String]) -> bool {
         tokens[i] = mask_secret_arg(&tokens[i]);
     }
     !hits.is_empty()
-}
-
-/// Replace the local part of email addresses, written plainly or with the
-/// `@` URL-encoded (`%40`).
-fn redact_emails(s: &str) -> String {
-    let local_char =
-        |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-');
-    let mut out = String::with_capacity(s.len());
-    for (i, c) in s.char_indices() {
-        let sep = if c == '@' {
-            1
-        } else if c == '%' && s[i..].get(..3).is_some_and(|x| x == "%40") {
-            3
-        } else {
-            0
-        };
-        if sep > 0 {
-            let domain: String = s[i + sep..]
-                .chars()
-                .take(254)
-                .take_while(|d| d.is_ascii_alphanumeric() || matches!(d, '.' | '-'))
-                .collect();
-            let domain = domain.trim_end_matches('.');
-            let tld_ok = domain.rsplit_once('.').is_some_and(|(_, tld)| {
-                tld.len() >= 2 && tld.bytes().all(|b| b.is_ascii_alphabetic())
-            });
-            let local_len = out
-                .chars()
-                .rev()
-                .take(65)
-                .take_while(|ch| local_char(*ch))
-                .count();
-            if tld_ok && (1..=64).contains(&local_len) {
-                let local = &out[out.len() - local_len..];
-                if local != REDACTED {
-                    out.truncate(out.len() - local_len);
-                    out.push_str(REDACTED);
-                }
-            }
-        }
-        out.push(c);
-    }
-    out
 }
 
 /// Replace URL schemes with their defanged forms, ignoring ASCII case.
@@ -958,14 +478,29 @@ fn parse_ipv4_loose(s: &str) -> Option<std::net::Ipv4Addr> {
 /// A host name with the trailing root dots removed and lower case:
 /// `Metadata.Google.Internal.` and `metadata.google.internal` are one name.
 fn host_key(raw: &str) -> String {
-    raw.trim().trim_end_matches('.').to_ascii_lowercase()
+    fold_width(raw.trim())
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
+}
+
+/// Full-width forms (`１６９．２５４`) and ideographic full stops mapped to
+/// ASCII, the way IDNA mapping in URL parsing treats a host.
+fn fold_width(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\u{3002}' | '\u{FF61}' => '.',
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            _ => c,
+        })
+        .collect()
 }
 
 /// Parse an address literal in any form a URL or resolver accepts:
 /// IPv6 (bracketed or not), and loose IPv4 ([`parse_ipv4_loose`]), with
 /// trailing dots ignored.
 fn parse_ip(raw: &str) -> Option<IpAddr> {
-    let raw = raw.trim().trim_start_matches('[').trim_end_matches(']');
+    let folded = fold_width(raw.trim());
+    let raw = folded.trim_start_matches('[').trim_end_matches(']');
     let raw = raw.trim_end_matches('.');
     if let Ok(ip) = raw.parse::<IpAddr>() {
         return Some(ip.to_canonical());
@@ -978,6 +513,24 @@ fn parse_ip(raw: &str) -> Option<IpAddr> {
 /// 169.254.169.254), carrier-grade NAT, unique local (fd00::/8), multicast
 /// and unspecified. These are never IOCs, whether bare or inside a URL.
 fn internal_ip(ip: IpAddr) -> bool {
+    // IPv4 inside IPv6: IPv4-compatible (`::169.254.169.254`) and the NAT64
+    // prefix 64:ff9b::/96 reach the same IPv4 host.
+    if let IpAddr::V6(v6) = ip {
+        let seg = v6.segments();
+        let compatible = seg[..6] == [0; 6] && (seg[6] != 0 || seg[7] > 1);
+        let nat64 = seg[0] == 0x64 && seg[1] == 0xff9b && seg[2..6] == [0; 4];
+        if compatible || nat64 {
+            let v4 = std::net::Ipv4Addr::new(
+                (seg[6] >> 8) as u8,
+                seg[6] as u8,
+                (seg[7] >> 8) as u8,
+                seg[7] as u8,
+            );
+            if internal_ip(IpAddr::V4(v4)) {
+                return true;
+            }
+        }
+    }
     Observable::ip(&ip.to_string()).is_ok_and(|o| !o.is_external_lookup_eligible())
 }
 
@@ -1003,11 +556,12 @@ fn internal_name(d: &str) -> bool {
 }
 
 fn norm_ip(raw: &str) -> Option<(IocType, String)> {
-    let o = Observable::ip(&parse_ip(raw)?.to_string()).ok()?;
+    let ip = parse_ip(raw)?;
     // The decoy's own network (guest, bridge, resolver) is never an IOC.
-    if !o.is_external_lookup_eligible() {
+    if internal_ip(ip) {
         return None;
     }
+    let o = Observable::ip(&ip.to_string()).ok()?;
     let ty = if o.value.contains(':') {
         IocType::Ipv6
     } else {
@@ -1090,7 +644,13 @@ impl Sink<'_> {
         if raw.is_empty() || too_long(raw, max) || names_canary(raw, self.e) {
             return;
         }
-        let (v, redacted) = redact(raw);
+        // Command lines end header values where the shell ends a word.
+        let kind = if ty == IocType::Cmdline {
+            TextKind::CommandLine
+        } else {
+            TextKind::Text
+        };
+        let (v, redacted) = redact_as(raw, kind);
         self.push(ty, v, redacted, role, field);
     }
 
@@ -1642,7 +1202,7 @@ fn steps_for(e: &CaptureEvent) -> Vec<String> {
 }
 
 /// The behaviour fingerprint for an attempt that got past probing:
-/// `bf1:` plus 32 hex characters of SHA-256 over the normalised steps,
+/// `bf2:` plus 32 hex characters of SHA-256 over the normalised steps,
 /// in order, with repeats collapsed. `None` for probe-only attempts and
 /// for fewer than two steps, which would match every scanner.
 fn fingerprint(a: &Attempt, mine: &[&CaptureEvent]) -> Option<Candidate> {
@@ -2142,159 +1702,6 @@ mod tests {
     }
 
     #[test]
-    fn redaction_removes_secrets_and_email_local_parts() {
-        let cases = [
-            // Query strings and config lines, any case, any position.
-            (
-                "/login?user=bob&password=hunter2&x=1",
-                "/login?user=bob&password=REDACTED&x=1",
-            ),
-            ("/a?token=abc", "/a?token=REDACTED"),
-            ("/a?mytoken=abc", "/a?mytoken=REDACTED"),
-            ("/a?PassWord=abc&monkey=1", "/a?PassWord=REDACTED&monkey=1"),
-            (
-                "/a?db_passwd=x&pass=y&key=z",
-                "/a?db_passwd=REDACTED&pass=REDACTED&key=REDACTED",
-            ),
-            (
-                "/a?Api-Key=x&private_key=y&sessid=z",
-                "/a?Api-Key=REDACTED&private_key=REDACTED&sessid=REDACTED",
-            ),
-            (
-                "/a?X-Auth-Token=x&basic_auth=y",
-                "/a?X-Auth-Token=REDACTED&basic_auth=REDACTED",
-            ),
-            (
-                "/b?X-Amz-Credential=AKIDEXAMPLE&X-Amz-Signature=abc123&X-Amz-Date=1",
-                "/b?X-Amz-Credential=REDACTED&X-Amz-Signature=REDACTED&X-Amz-Date=1",
-            ),
-            ("db_password = hunter2", "db_password = REDACTED"),
-            // JSON, with or without spaces around the colon.
-            (
-                r#"{"user":"bob","password":"hunter2","n":1}"#,
-                r#"{"user":"bob","password":"REDACTED","n":1}"#,
-            ),
-            (r#"{"Password" : "x y"}"#, r#"{"Password" : "REDACTED"}"#),
-            (r#"{"apiToken": 12345}"#, r#"{"apiToken": REDACTED}"#),
-            // Headers: the whole value.
-            ("X-Api-Key: abc123", "X-Api-Key: REDACTED"),
-            ("X-Api-Key: k1 k2", "X-Api-Key: REDACTED"),
-            (
-                "curl -H 'X-Api-Key: k1 k2' http://a.example.invalid/",
-                "curl -H 'X-Api-Key: REDACTED' http://a.example.invalid/",
-            ),
-            ("cookie: sid=abc", "cookie: REDACTED"),
-            ("Authorization: Bearer abc.def", "Authorization: REDACTED"),
-            (
-                "Authorization: Basic dXNlcjpwdw==",
-                "Authorization: REDACTED",
-            ),
-            // URL userinfo keeps the user.
-            (
-                "curl http://u:p@203.0.113.9/x",
-                "curl http://u:REDACTED@203.0.113.9/x",
-            ),
-            (
-                "mysql://root:hunter2@db.example.invalid/x",
-                "mysql://root:REDACTED@db.example.invalid/x",
-            ),
-            (
-                "redis://:hunter2@203.0.113.9:6379",
-                "redis://REDACTED@203.0.113.9:6379",
-            ),
-            (
-                "https://ghp_abc@git.example.invalid/x",
-                "https://REDACTED@git.example.invalid/x",
-            ),
-            // Command lines keep their shape.
-            (
-                "mysql --password hunter2 -h db",
-                "mysql --password REDACTED -h db",
-            ),
-            ("app --password=hunter2", "app --password=REDACTED"),
-            (
-                "mysql -uroot -phunter2 -h 203.0.113.9",
-                "mysql -uroot -pREDACTED -h 203.0.113.9",
-            ),
-            (
-                "sudo mysqldump -phunter2 db",
-                "sudo mysqldump -pREDACTED db",
-            ),
-            (
-                "sshpass -p hunter2 ssh root@203.0.113.9",
-                "sshpass -p REDACTED ssh root@203.0.113.9",
-            ),
-            ("sshpass -phunter2 ssh x", "sshpass -pREDACTED ssh x"),
-            (
-                "sh -c 'sshpass -p hunter2 ssh x'",
-                "sh -c 'sshpass -p REDACTED ssh x'",
-            ),
-            (
-                "curl -u admin:hunter2 http://a.example.invalid/",
-                "curl -u admin:REDACTED http://a.example.invalid/",
-            ),
-            (
-                "curl --user 'admin:hunter2' x",
-                "curl --user 'admin:REDACTED' x",
-            ),
-            (
-                "smbclient //h/s -U admin%hunter2",
-                "smbclient //h/s -U admin%REDACTED",
-            ),
-            (
-                "redis-cli -h 203.0.113.9 -a hunter2 info",
-                "redis-cli -h 203.0.113.9 -a REDACTED info",
-            ),
-            (
-                "mosquitto_pub -u x -P hunter2 -t t",
-                "mosquitto_pub -u x -P REDACTED -t t",
-            ),
-            ("unzip -P hunter2 a.zip", "unzip -P REDACTED a.zip"),
-            ("7z x -phunter2 a.7z", "7z x -pREDACTED a.7z"),
-            (
-                "openssl enc -d -pass pass:hunter2",
-                "openssl enc -d -pass REDACTED",
-            ),
-            ("ls | mysql -phunter2", "ls | mysql -pREDACTED"),
-            // Not secrets: -p means something else for these programs.
-            ("mkdir -p /tmp/x", "mkdir -p /tmp/x"),
-            (
-                "ssh -p 2222 root@203.0.113.9",
-                "ssh -p 2222 root@203.0.113.9",
-            ),
-            ("mysql -p db", "mysql -p db"),
-            // Emails, plain and URL-encoded.
-            (
-                "mail admin@example.invalid now",
-                "mail REDACTED@example.invalid now",
-            ),
-            (
-                "/subscribe?to=admin%40example.invalid",
-                "/subscribe?to=REDACTED%40example.invalid",
-            ),
-            // Over-redaction avoided.
-            ("/blog?author=bob", "/blog?author=bob"),
-            ("PasswordAuthentication=no", "PasswordAuthentication=no"),
-            (
-                "sed -i s/x/y/ PasswordAuthentication yes",
-                "sed -i s/x/y/ PasswordAuthentication yes",
-            ),
-            ("curl auth-server:8080/x", "curl auth-server:8080/x"),
-            ("ssh root@203.0.113.9", "ssh root@203.0.113.9"),
-            (
-                "http://stage2.example.invalid:8080/x",
-                "http://stage2.example.invalid:8080/x",
-            ),
-            ("/plain/path", "/plain/path"),
-        ];
-        for (raw, want) in cases {
-            let (got, changed) = redact(raw);
-            assert_eq!(got, want, "{raw}");
-            assert_eq!(changed, raw != want, "{raw}");
-        }
-    }
-
-    #[test]
     fn redaction_is_linear_on_hostile_input() {
         let s = "=".repeat(100_000) + &"@".repeat(100_000) + &"://".repeat(30_000);
         let (out, _) = redact(&s);
@@ -2504,7 +1911,7 @@ mod tests {
         let (_, b) = run(&other, ExtractOptions::default());
         let fa = values(&a, IocType::BehaviourFingerprint);
         assert_eq!(fa, values(&b, IocType::BehaviourFingerprint));
-        assert!(fa[0].starts_with("bf1:") && fa[0].len() == 36);
+        assert!(fa[0].starts_with("bf2:") && fa[0].len() == 36);
         let detail = a.iocs.iter().find_map(|i| i.fingerprint.clone()).unwrap();
         assert_eq!(
             detail.steps,
@@ -2687,7 +2094,7 @@ mod tests {
         assert_eq!(
             fa,
             values(&b, IocType::BehaviourFingerprint),
-            "passwords do not change bf1"
+            "passwords do not change bf2"
         );
         assert_eq!(fa, values(&c, IocType::BehaviourFingerprint));
         let steps = a
@@ -2830,13 +2237,13 @@ mod tests {
                 "AUTH",
                 None,
                 json!(["default", "hunter2"]),
-                "AUTH default REDACTED",
+                "AUTH REDACTED REDACTED",
             ),
             (
                 "HELLO",
                 None,
                 json!(["3", "AUTH", "default", "hunter2"]),
-                "HELLO 3 AUTH default REDACTED",
+                "HELLO 3 AUTH REDACTED REDACTED",
             ),
             (
                 "HELLO",
@@ -2875,7 +2282,7 @@ mod tests {
                     "u",
                     "hunter2"
                 ]),
-                "MIGRATE 192.0.2.10 6379 k 0 5000 AUTH2 u REDACTED",
+                "MIGRATE 192.0.2.10 6379 k 0 5000 AUTH2 REDACTED REDACTED",
             ),
             (
                 "ACL",
@@ -2988,6 +2395,11 @@ mod tests {
             ("0251.0376.0251.0376", "169.254.169.254"),
             ("0177.0.0.1", "127.0.0.1"),
             ("0xa9.0xfe.0xa9.0xfe", "169.254.169.254"),
+            (
+                "\u{FF11}\u{FF16}\u{FF19}\u{FF0E}\u{FF12}\u{FF15}\u{FF14}\u{FF0E}\u{FF11}\u{FF16}\u{FF19}\u{FF0E}\u{FF12}\u{FF15}\u{FF14}",
+                "169.254.169.254",
+            ),
+            ("169\u{3002}254\u{3002}169\u{3002}254", "169.254.169.254"),
             ("127.1", "127.0.0.1"),
             ("169.254.43518", "169.254.169.254"),
             ("2852039166", "169.254.169.254"),
@@ -3012,6 +2424,18 @@ mod tests {
             "4294967296",
         ] {
             assert!(parse_ip(raw).is_none(), "{raw}");
+        }
+        for ip in [
+            "::169.254.169.254",
+            "64:ff9b::a9fe:a9fe",
+            "::ffff:10.0.0.1",
+            "::1",
+            "::",
+        ] {
+            assert!(internal_ip(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["::203.0.113.7", "2001:db8::1", "64:ff9b::cb00:7107"] {
+            assert!(!internal_ip(ip.parse().unwrap()), "{ip}");
         }
         assert!(internal_name("metadata.google.internal."));
         assert!(internal_name("LOCALHOST."));
@@ -3038,6 +2462,7 @@ mod tests {
                     "curl http://0251.0376.0251.0376/a http://0177.0.0.1/b http://0xa9.0xfe.0xa9.0xfe/c",
                     "curl http://127.1/d http://169.254.43518/e http://169.254.169.254./f",
                     "curl http://metadata.google.internal./g http://localhost./h",
+                "curl http://[::169.254.169.254]/i http://\u{FF11}\u{FF16}\u{FF19}\u{FF0E}\u{FF12}\u{FF15}\u{FF14}\u{FF0E}\u{FF11}\u{FF16}\u{FF19}\u{FF0E}\u{FF12}\u{FF15}\u{FF14}/j",
                     "curl http://stage2.example.invalid./ok"
                 ]}),
             ),

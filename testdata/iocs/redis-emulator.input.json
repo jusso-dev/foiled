@@ -11,6 +11,11 @@
         "protocol": "redis",
         "redacted_args": [
           {
+            "index": 1,
+            "len": 7,
+            "sha256": "37a8eec1ce19687d132fe29051dca629d164e2c4958ba141d5f4133a33f0688f"
+          },
+          {
             "index": 2,
             "len": 7,
             "sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7"
@@ -46,13 +51,18 @@
         "args": [
           "3",
           "AUTH",
-          "default",
+          "REDACTED",
           "REDACTED"
         ],
         "command": "HELLO",
-        "error": "ERR unknown command 'HELLO', with args beginning with: '3' 'AUTH' 'default' 'REDACTED' ",
+        "error": "ERR unknown command 'HELLO', with args beginning with: '3' 'AUTH' 'REDACTED' 'REDACTED' ",
         "protocol": "redis",
         "redacted_args": [
+          {
+            "index": 3,
+            "len": 7,
+            "sha256": "37a8eec1ce19687d132fe29051dca629d164e2c4958ba141d5f4133a33f0688f"
+          },
           {
             "index": 4,
             "len": 7,
@@ -305,13 +315,18 @@
           "0",
           "5000",
           "AUTH2",
-          "default",
+          "REDACTED",
           "REDACTED"
         ],
         "command": "MIGRATE",
-        "error": "ERR unknown command 'MIGRATE', with args beginning with: '192.0.2.10' '6379' 'k' '0' '5000' 'AUTH2' 'default' 'REDACTED' ",
+        "error": "ERR unknown command 'MIGRATE', with args beginning with: '192.0.2.10' '6379' 'k' '0' '5000' 'AUTH2' 'REDACTED' 'REDACTED' ",
         "protocol": "redis",
         "redacted_args": [
+          {
+            "index": 7,
+            "len": 7,
+            "sha256": "37a8eec1ce19687d132fe29051dca629d164e2c4958ba141d5f4133a33f0688f"
+          },
           {
             "index": 8,
             "len": 7,

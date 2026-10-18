@@ -1,8 +1,8 @@
 {
-  "ioc_id": "ioc_1a4c34d118d544a59901a8c3",
+  "ioc_id": "ioc_c792dbedda795a56395b28cd",
   "type": "behaviour_fingerprint",
-  "value": "bf1:77ce3f6dfa237e38a2e822c54b183b87",
-  "display": "bf1:77ce3f6dfa237e38a2e822c54b183b87",
+  "value": "bf2:0de7b0e05fd88c37375be5ad651909f0",
+  "display": "bf2:0de7b0e05fd88c37375be5ad651909f0",
   "roles": [
     "behaviour"
   ],
@@ -34,7 +34,7 @@
   ],
   "enrichment": [],
   "fingerprint": {
-    "version": 1,
+    "version": 2,
     "steps": [
       "http POST /api/upload?path",
       "hook demo-app.upload-path-traversal trigger",
@@ -63,7 +63,7 @@
         "ref": "fd-02"
       },
       {
-        "signal_id": "noise:ioc_1a4c34d118d544a59901a8c3",
+        "signal_id": "noise:ioc_c792dbedda795a56395b28cd",
         "source": "noise_score",
         "weight": 10,
         "summary": "lowest source noise score across sightings is 10"

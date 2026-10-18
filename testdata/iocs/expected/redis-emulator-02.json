@@ -1,8 +1,8 @@
 {
-  "ioc_id": "ioc_6a8a6c37d4eb0256e1f4b882",
+  "ioc_id": "ioc_108c1e11fe15dd660e3bf2ef",
   "type": "behaviour_fingerprint",
-  "value": "bf1:53d839413d7ea6364a9d5106cd6d0839",
-  "display": "bf1:53d839413d7ea6364a9d5106cd6d0839",
+  "value": "bf2:9c10084dacbbfa41dff78f67c10a1246",
+  "display": "bf2:9c10084dacbbfa41dff78f67c10a1246",
   "roles": [
     "behaviour"
   ],
@@ -40,7 +40,7 @@
   ],
   "enrichment": [],
   "fingerprint": {
-    "version": 1,
+    "version": 2,
     "steps": [
       "cmd AUTH",
       "cmd HELLO",
@@ -75,7 +75,7 @@
         "ref": "rds-04"
       },
       {
-        "signal_id": "noise:ioc_6a8a6c37d4eb0256e1f4b882",
+        "signal_id": "noise:ioc_108c1e11fe15dd660e3bf2ef",
         "source": "noise_score",
         "weight": 10,
         "summary": "lowest source noise score across sightings is 10"

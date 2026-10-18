@@ -126,7 +126,7 @@ fn memory_only_attempt_matches_golden_and_has_no_file_hash() {
 
     let bf = of(&x, IocType::BehaviourFingerprint);
     assert_eq!(bf.len(), 1);
-    assert!(bf[0].value.starts_with("bf1:"));
+    assert!(bf[0].value.starts_with("bf2:"));
     assert_eq!(of(&x, IocType::Cmdline).len(), 1);
     assert!(x.iocs.iter().all(|i| i.file_ioc_limited));
     let upload = of(&x, IocType::HttpPath)

@@ -1,8 +1,8 @@
 {
-  "ioc_id": "ioc_ac27dabc4aca3ef5522852dd",
+  "ioc_id": "ioc_47aa2293890ac40e616c4bbc",
   "type": "request_substring",
-  "value": "HELLO 3 AUTH default REDACTED",
-  "display": "HELLO 3 AUTH default REDACTED",
+  "value": "HELLO 3 AUTH REDACTED REDACTED",
+  "display": "HELLO 3 AUTH REDACTED REDACTED",
   "roles": [
     "request"
   ],
@@ -49,7 +49,7 @@
         "ref": "rds-04"
       },
       {
-        "signal_id": "noise:ioc_ac27dabc4aca3ef5522852dd",
+        "signal_id": "noise:ioc_47aa2293890ac40e616c4bbc",
         "source": "noise_score",
         "weight": 10,
         "summary": "lowest source noise score across sightings is 10"
