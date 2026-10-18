@@ -392,3 +392,71 @@ async fn campaigns_from_clustering_reach_the_exports() {
             .any(|a| a["type"] == "campaign-id" && a["value"] == cid.as_str())
     );
 }
+
+/// Membership in a campaign whose link did not pass the gate is a claim
+/// too: with default options no unpublished campaign id appears in any
+/// format, while an analyst's unreviewed export does show them.
+#[tokio::test]
+async fn unpublished_campaign_ids_never_leave() {
+    let store = Arc::new(MemoryStore::new());
+    store.add_token(TokenRecord {
+        id: "analyst".into(),
+        tenant_id: "t1".into(),
+        role: Role::Human,
+        scopes: vec![Scope::ExportsRead, Scope::ReviewWrite],
+        secret_sha256: sha256_hex(SECRET),
+        expires_at: None,
+        revoked: false,
+    });
+    let raw: Value = serde_json::from_str(
+        &std::fs::read_to_string(format!(
+            "{}/../../testdata/campaigns/fleet-wave.input.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let events: Vec<CaptureEvent> = serde_json::from_value(raw["events"].clone()).unwrap();
+    store.enqueue_events(events).await.unwrap();
+    let now = raw["now"].as_i64().unwrap();
+    let s = AppState::new(store, Arc::new(move || now));
+
+    let ids = |text: &str| -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let mut rest = text;
+        while let Some(i) = rest.find("cmp_") {
+            let id: String = rest[i..].chars().take(28).collect();
+            out.insert(id);
+            rest = &rest[i + 4..];
+        }
+        out
+    };
+    let (_, _, unreviewed) = call(
+        &s,
+        Some("analyst"),
+        "/v0/exports/iocs.json?include_unreviewed=true",
+        None,
+    )
+    .await;
+    assert!(!ids(&unreviewed).is_empty(), "the fixture clusters");
+
+    let (_, _, stix_body) = call(&s, Some("analyst"), "/v0/exports/stix", None).await;
+    let published: std::collections::BTreeSet<String> = objects_of(&json(&stix_body), "campaign")
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_string())
+        .collect();
+    for path in [
+        "/v0/exports/stix",
+        "/v0/exports/misp",
+        "/v0/exports/iocs.json",
+        "/v0/exports/iocs.csv?fields=ioc",
+    ] {
+        let (st, _, body) = call(&s, Some("analyst"), path, None).await;
+        assert_eq!(st, StatusCode::OK, "{path}");
+        let leaked: Vec<String> = ids(&body).difference(&published).cloned().collect();
+        assert!(
+            leaked.is_empty(),
+            "{path} names unpublished campaigns {leaked:?}"
+        );
+    }
+}

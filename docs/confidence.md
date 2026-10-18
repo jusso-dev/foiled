@@ -45,7 +45,7 @@ Default tier weights (normative, tunable in `configs/confidence.yaml`):
 | `llm` | 20 | 20 |
 | `campaign_cluster` | 45 | 55 |
 
-The config checks itself: the LLM cap must stay below `high`, the pre-disclosure cap below `publish_min`, and the `campaign_cluster` cap below both, so clustering alone never publishes a campaign or reaches `high` (#33).
+The config checks itself: the LLM cap must stay below `high`, the pre-disclosure cap below `publish_min`, and the `campaign_cluster` cap below both, so clustering alone never publishes a campaign or reaches `high` (#33). `campaign_cluster` evidence counts only for `attempt_campaign` links: on any other kind (a CVE, technique, indicator or actor link) it adds nothing and the explanation says so in `caps_applied`, because attempts belonging together says nothing about an actor or a CVE.
 
 ## Bands, wording and thresholds
 

@@ -142,6 +142,9 @@ pub struct Dropped {
     pub actor_links: usize,
     /// Payload request strings left out because `include_payloads` was off.
     pub payload_iocs: usize,
+    /// Attempts whose campaign id was removed because the campaign link
+    /// did not pass the gate.
+    pub campaign_ids: usize,
 }
 
 /// The gated view every serialiser reads.
@@ -240,6 +243,25 @@ pub fn select(input: ExportInput, opts: &ExportOptions) -> Selection {
             .sort_by(|a, b| (a.kind, &a.target).cmp(&(b.kind, &b.target)));
         attempts.push(rec);
     }
+    // Campaign membership is a claim too (#33): only campaigns whose link
+    // passed the gate may be named anywhere in the export.
+    let published_campaigns: BTreeSet<String> = attempts
+        .iter()
+        .flat_map(|r| &r.links)
+        .filter(|l| l.kind == LinkKind::AttemptCampaign)
+        .map(|l| l.target.clone())
+        .collect();
+    for rec in &mut attempts {
+        if rec
+            .attempt
+            .campaign_id
+            .as_ref()
+            .is_some_and(|c| !published_campaigns.contains(c))
+        {
+            rec.attempt.campaign_id = None;
+            dropped.campaign_ids += 1;
+        }
+    }
     let kept: BTreeSet<&str> = attempts
         .iter()
         .map(|r| r.attempt.attempt_id.as_str())
@@ -260,6 +282,8 @@ pub fn select(input: ExportInput, opts: &ExportOptions) -> Selection {
             dropped.iocs_below_gate += 1;
             continue;
         }
+        let mut i = i;
+        i.campaign_ids.retain(|c| published_campaigns.contains(c));
         iocs.push(i);
     }
     // `redact_for_export`, in place.

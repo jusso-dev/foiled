@@ -300,17 +300,77 @@
       {
         "Tag": [
           {
-            "name": "foiled:confidence=\"100\""
+            "name": "foiled:confidence=\"24\""
           },
           {
-            "name": "foiled:band=\"high\""
+            "name": "foiled:band=\"low\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "External analysis",
+        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: We assess as ATT&CK T1059.004 (Unix Shell). Confidence 24 of 100 (low).",
+        "distribution": "5",
+        "to_ids": false,
+        "type": "text",
+        "uuid": "2657b0c1-dc5f-5e5b-82be-54d739ba1069",
+        "value": "T1059.004 Unix Shell"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"22\""
+          },
+          {
+            "name": "foiled:band=\"low\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "External analysis",
+        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: We assess as ATT&CK T1105 (Ingress Tool Transfer). Confidence 22 of 100 (low).",
+        "distribution": "5",
+        "to_ids": false,
+        "type": "text",
+        "uuid": "8233d9e3-f87f-5a75-a6fb-5fe208795975",
+        "value": "T1105 Ingress Tool Transfer"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"38\""
+          },
+          {
+            "name": "foiled:band=\"low\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "External analysis",
+        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: We assess as ATT&CK T1190 (Exploit Public-Facing Application). Confidence 38 of 100 (low).",
+        "distribution": "5",
+        "to_ids": false,
+        "type": "text",
+        "uuid": "93b63e38-f991-526f-889d-0dda39dc7afe",
+        "value": "T1190 Exploit Public-Facing Application"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"22\""
+          },
+          {
+            "name": "foiled:band=\"low\""
           },
           {
             "name": "foiled:wording=\"possible association\""
           }
         ],
         "category": "Attribution",
-        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: Possible association with Example Group. This is not an attribution. Confidence 100 of 100 (high).",
+        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: Possible association with Example Group. This is not an attribution. Confidence 22 of 100 (low).",
         "distribution": "5",
         "to_ids": false,
         "type": "threat-actor",
@@ -320,22 +380,22 @@
       {
         "Tag": [
           {
-            "name": "foiled:confidence=\"100\""
+            "name": "foiled:confidence=\"34\""
           },
           {
-            "name": "foiled:band=\"high\""
+            "name": "foiled:band=\"low\""
           },
           {
             "name": "foiled:wording=\"possible\""
           }
         ],
         "category": "Attribution",
-        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: Possible part of campaign cmp_demo. Confidence 100 of 100 (high).",
+        "comment": "Attempt att_7becbc03c1bf0363d7ce1575: Possible part of campaign cmp_000000000000000000000001. Confidence 34 of 100 (low).",
         "distribution": "5",
         "to_ids": false,
         "type": "campaign-id",
-        "uuid": "3892fd16-1406-5f50-8042-d0060bf24531",
-        "value": "cmp_demo"
+        "uuid": "2b79b728-2005-52e8-9c48-9fdaaca6a1ad",
+        "value": "cmp_000000000000000000000001"
       },
       {
         "category": "Other",
@@ -343,19 +403,31 @@
         "to_ids": false,
         "type": "comment",
         "uuid": "6b6d2faa-db6f-59bd-a0f8-1cdb571cb9b3",
-        "value": "Attempt att_7becbc03c1bf0363d7ce1575: Post-exploitation activity was seen but no file was captured, so the implant may be memory-resident. File IOCs are limited and no file hash is reported; use the command line, behaviour fingerprint and network callback indicators instead.\n\nAttempt att_7becbc03c1bf0363d7ce1575: The capture reported a memory-only implant (data.memory_only), so file hashes may not cover it even where a dropper was captured."
+        "value": "Attempt att_7becbc03c1bf0363d7ce1575: Post-exploitation activity was seen but no file was captured, so the implant may be memory-resident. File IOCs are limited and no file hash is reported; use the command line, behaviour fingerprint and network callback indicators instead.\n\nAttempt att_7becbc03c1bf0363d7ce1575: The capture reported a memory-only implant (data.memory_only), so file hashes may not cover it even where a dropper was captured.\n\nATT&CK v20.0: © 2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation. MITRE ATT&CK and ATT&CK are registered trademarks of The MITRE Corporation. The MITRE Corporation (MITRE) hereby grants you a non-exclusive, royalty-free license to use ATT&CK for research, development, and commercial purposes. Any copy you make for such purposes is authorized provided that you reproduce MITRE's copyright designation and this license in any such copy."
       }
     ],
     "Object": [],
     "Tag": [
       {
-        "name": "tlp:amber"
+        "name": "tlp:amber+strict"
       },
       {
         "name": "foiled:export"
       },
       {
+        "name": "foiled:unreviewed"
+      },
+      {
         "name": "foiled:file-ioc-limited"
+      },
+      {
+        "name": "misp-galaxy:mitre-attack-pattern=\"Exploit Public-Facing Application - T1190\""
+      },
+      {
+        "name": "misp-galaxy:mitre-attack-pattern=\"Ingress Tool Transfer - T1105\""
+      },
+      {
+        "name": "misp-galaxy:mitre-attack-pattern=\"Unix Shell - T1059.004\""
       }
     ],
     "analysis": "1",

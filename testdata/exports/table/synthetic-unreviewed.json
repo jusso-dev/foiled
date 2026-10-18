@@ -19,6 +19,7 @@
     "actor_links": 0,
     "attempts_empty": 0,
     "attempts_filtered": 0,
+    "campaign_ids": 0,
     "iocs_below_gate": 0,
     "links_below_gate": 0,
     "payload_iocs": 0,

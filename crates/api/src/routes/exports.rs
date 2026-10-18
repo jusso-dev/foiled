@@ -166,10 +166,17 @@ pub fn export_input(
     overrides: &OverrideIndex,
     campaigns: &[foiled_core::campaign::Campaign],
 ) -> ExportInput {
-    let by_campaign: HashMap<&str, &foiled_core::campaign::Campaign> = campaigns
-        .iter()
-        .map(|c| (c.campaign_id.as_str(), c))
-        .collect();
+    let cfg_links = ConfidenceConfig::default();
+    // Each member's own link (#33): its joins, carried-over state and noise,
+    // so a weak or carried-over member is never exported with the
+    // campaign's strongest score or an analyst's confirmation of the
+    // campaign as a whole.
+    let member_links: HashMap<(String, String), foiled_core::confidence::ConfidenceLink> =
+        campaigns
+            .iter()
+            .flat_map(|c| foiled_core::campaign::member_links(&cfg_links, c))
+            .map(|l| ((l.attempt_id.clone(), l.target.clone()), l))
+            .collect();
     let by_id: HashMap<&str, &CaptureEvent> =
         events.iter().map(|e| (e.event_id.as_str(), e)).collect();
     let cfg = ConfidenceConfig::default();
@@ -190,16 +197,10 @@ pub fn export_input(
                 overrides.get(&attempt.attempt_id).unwrap_or(&empty),
             );
             let mut links = links;
-            // The attempt's campaign (#33), scored by the campaign's own
-            // evidence and analyst state.
-            if let Some(c) = attempt
-                .campaign_id
-                .as_deref()
-                .and_then(|id| by_campaign.get(id))
-                && let Some(mut l) = foiled_core::campaign::campaign_link(&cfg, c)
+            if let Some(c) = &attempt.campaign_id
+                && let Some(l) = member_links.get(&(attempt.attempt_id.clone(), c.clone()))
             {
-                l.attempt_id = attempt.attempt_id.clone();
-                links.push(l);
+                links.push(l.clone());
             }
             let summary = extraction.for_attempt(&attempt.attempt_id);
             AttemptRecord {

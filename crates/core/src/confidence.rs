@@ -244,6 +244,13 @@ pub fn score(
         if matches!(source, EvidenceSource::NoiseScore | EvidenceSource::Analyst) {
             continue;
         }
+        // Clustering says attempts belong together (#33). That is evidence
+        // for campaign membership only, never for a CVE, technique, actor
+        // or indicator claim.
+        if *source == EvidenceSource::CampaignCluster && kind != LinkKind::AttemptCampaign {
+            caps.push("campaign cluster evidence only counts for campaign links".into());
+            continue;
+        }
         let Some(w) = cfg.weights.get(source) else {
             continue;
         };
@@ -383,6 +390,50 @@ pub fn score(
 mod tests {
     use super::*;
     use EvidenceSource::*;
+
+    #[test]
+    fn cluster_evidence_only_counts_for_campaign_links() {
+        let cluster = || vec![ev("c1", CampaignCluster, 100), ev("h", VulnPathHook, 100)];
+        let cfg = ConfidenceConfig::default();
+        let campaign = score(
+            &cfg,
+            LinkKind::AttemptCampaign,
+            "a",
+            "cmp_x",
+            cluster(),
+            None,
+        )
+        .unwrap();
+        for kind in [
+            LinkKind::AttemptActor,
+            LinkKind::AttemptCve,
+            LinkKind::AttemptTechnique,
+            LinkKind::AttemptIoc,
+        ] {
+            let l = score(&cfg, kind, "a", "t", cluster(), None).unwrap();
+            assert!(
+                l.contributions.iter().all(|c| c.source != CampaignCluster),
+                "{kind:?}"
+            );
+            assert!(l.score < campaign.score, "{kind:?}");
+            assert!(
+                l.caps_applied
+                    .iter()
+                    .any(|c| c.contains("campaign cluster"))
+            );
+        }
+        let only = score(
+            &cfg,
+            LinkKind::AttemptActor,
+            "a",
+            "Example Group",
+            vec![ev("c1", CampaignCluster, 100)],
+            None,
+        )
+        .unwrap();
+        assert_eq!(only.score, 0);
+        assert!(!only.publishable);
+    }
 
     fn ev(id: &str, source: EvidenceSource, weight: u8) -> Evidence {
         Evidence {

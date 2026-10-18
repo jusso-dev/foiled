@@ -17,7 +17,7 @@ use foiled_api::store::LinkOverride;
 use foiled_core::attempt::{DEFAULT_IDLE_GAP_MS, build};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::confidence::{
-    Band, ConfidenceConfig, Evidence, EvidenceSource, Feedback, LinkKind, Override, score,
+    ConfidenceConfig, Evidence, EvidenceSource, Feedback, LinkKind, Override, score,
 };
 use foiled_core::enrichment::{AsnTable, Fact, Observable, Provider, enrich_all};
 use foiled_core::intel::{ExportInput, ExportOptions, Selection, misp, select, stix, table};
@@ -572,70 +572,117 @@ fn unreviewed_exports_are_marked_and_strict() {
     assert_eq!(j["review"], "unreviewed");
 }
 
+fn ev(id: &str, source: EvidenceSource, weight: u8, summary: &str) -> Evidence {
+    Evidence {
+        signal_id: id.into(),
+        source,
+        weight,
+        summary: summary.into(),
+        reference: None,
+    }
+}
+
 fn extra_link(
     kind: LinkKind,
     target: &str,
     attempt_id: &str,
+    evidence: Vec<Evidence>,
 ) -> foiled_core::confidence::ConfidenceLink {
     score(
         &ConfidenceConfig::default(),
         kind,
         attempt_id,
         target,
-        vec![
-            Evidence {
-                signal_id: "cluster".into(),
-                source: EvidenceSource::CampaignCluster,
-                weight: 100,
-                summary: "shared behaviour fingerprint".into(),
-                reference: None,
-            },
-            Evidence {
-                signal_id: "hook".into(),
-                source: EvidenceSource::VulnPathHook,
-                weight: 100,
-                summary: "hook fired".into(),
-                reference: None,
-            },
-        ],
+        evidence,
         None,
     )
     .unwrap()
 }
 
-/// Campaign (#33) and actor (#29) links plug into the same records. Actors
-/// need the opt-in and keep "possible association".
+/// Campaign (#33) and actor (#29) links plug into the same records, with
+/// evidence of the kind their producers give: cluster joins and the noise
+/// score for a campaign member, an LLM proposal and shared infrastructure
+/// for an actor. Neither reaches publish_min on its own; actors also need
+/// the opt-in, and both keep cautious wording.
 #[test]
 fn campaign_and_actor_links_map_with_cautious_wording() {
     let mut inp = input("iocs/memory-only.input.json", false, vec![]);
     let aid = inp.attempts[0].attempt.attempt_id.clone();
-    let actor = extra_link(LinkKind::AttemptActor, "Example Group", &aid);
-    assert_eq!(actor.band, Band::High);
+    let actor = extra_link(
+        LinkKind::AttemptActor,
+        "Example Group",
+        &aid,
+        vec![
+            ev(
+                "llm:1",
+                EvidenceSource::Llm,
+                80,
+                "LLM proposal: tooling overlaps a public report",
+            ),
+            ev(
+                "asn:1",
+                EvidenceSource::Enrichment,
+                60,
+                "source AS also named in the report",
+            ),
+        ],
+    );
+    assert!(!actor.publishable);
     inp.attempts[0].links.push(actor);
-    inp.attempts[0]
-        .links
-        .push(extra_link(LinkKind::AttemptCampaign, "cmp_demo", &aid));
+    let member = extra_link(
+        LinkKind::AttemptCampaign,
+        "cmp_000000000000000000000001",
+        &aid,
+        vec![
+            ev(
+                "join:1",
+                EvidenceSource::CampaignCluster,
+                70,
+                "shares payload hash with another attempt",
+            ),
+            ev(
+                "join:2",
+                EvidenceSource::CampaignCluster,
+                40,
+                "shares request shape with another attempt",
+            ),
+            ev(
+                "noise:1",
+                EvidenceSource::NoiseScore,
+                10,
+                "source noise score 10",
+            ),
+        ],
+    );
+    assert!(!member.publishable);
+    inp.attempts[0].links.push(member);
 
+    // Default options: neither leaves.
     let sel = select(inp.clone(), &ExportOptions::default());
     assert_eq!(sel.dropped.actor_links, 1);
     let b = stix::bundle(&sel);
     assert!(of_type(&b, "intrusion-set").is_empty());
+    assert!(of_type(&b, "campaign").is_empty());
+    assert!(!text(&b).contains("cmp_000000000000000000000001"));
+
+    // An analyst's unreviewed export with the actor opt-in shows both,
+    // worded "possible".
+    let sel = select(
+        inp,
+        &ExportOptions {
+            include_actors: true,
+            include_unreviewed: true,
+            ..Default::default()
+        },
+    );
+    let (b, e) = golden("memory-only-linked", &sel);
     assert_eq!(of_type(&b, "campaign").len(), 1);
     assert!(
         relationship_to(&b, "campaign")[0]["description"]
             .as_str()
             .unwrap()
-            .starts_with("Possible part of campaign cmp_demo.")
+            .starts_with("Possible part of campaign cmp_000000000000000000000001.")
     );
-
-    let sel = select(
-        inp,
-        &ExportOptions {
-            include_actors: true,
-            ..Default::default()
-        },
-    );
-    let (b, e) = golden("memory-only-linked", &sel);
     assert_eq!(of_type(&b, "intrusion-set").len(), 1);
     let rel = &relationship_to(&b, "intrusion-set")[0];
     assert!(

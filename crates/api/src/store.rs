@@ -166,6 +166,10 @@ pub struct AuditQuery {
     pub before: Option<(i64, String)>,
 }
 
+/// Most events the default [`Store::events_after`] reads from one
+/// millisecond.
+pub const MAX_EVENTS_PER_MS: usize = 10_000;
+
 pub trait Store: Send + Sync {
     fn token(&self, id: &str) -> StoreFuture<'_, Option<TokenRecord>>;
 
@@ -254,8 +258,10 @@ pub trait Store: Send + Sync {
     /// Events strictly after `after` in `(ts, event_id)` order, with
     /// `ts < until`, oldest first, at most `limit`. Lets a reader continue
     /// past a cut even when more than `limit` events share one millisecond
-    /// (#13). The default reads the cursor's millisecond whole, then the
-    /// rest; stores that can compare `(ts, event_id)` directly override it.
+    /// (#13). The default reads the cursor's millisecond (at most
+    /// [`MAX_EVENTS_PER_MS`] events, and refuses rather than answer wrongly
+    /// beyond that), then the rest; stores that can compare
+    /// `(ts, event_id)` directly override it.
     fn events_after(
         &self,
         tenant_id: &str,
@@ -266,9 +272,15 @@ pub trait Store: Send + Sync {
         let tenant_id = tenant_id.to_string();
         Box::pin(async move {
             let (ts, id) = after;
-            let mut out: Vec<CaptureEvent> = self
-                .events_between(&tenant_id, ts, (ts + 1).min(until), usize::MAX)
-                .await?
+            let same_ms = self
+                .events_between(&tenant_id, ts, (ts + 1).min(until), MAX_EVENTS_PER_MS + 1)
+                .await?;
+            if same_ms.len() > MAX_EVENTS_PER_MS {
+                return Err(StoreError(format!(
+                    "more than {MAX_EVENTS_PER_MS} events in one millisecond; this store cannot continue a cursor there"
+                )));
+            }
+            let mut out: Vec<CaptureEvent> = same_ms
                 .into_iter()
                 .filter(|e| e.event_id > id)
                 .take(limit)
