@@ -94,11 +94,15 @@ A **subject** is a campaign (#33) or an attempt in no listed campaign (#25). Eac
 | Signal | Evidence source | How it is weighted |
 | --- | --- | --- |
 | Technique overlap (#26) | `actor_ttp_overlap` | Rarity per technique is `ln((N+1)/(n+1))`, with `N` every profile in the population and `n` those using the technique. Weight is `100 x (shared rarity / rarity of everything seen) x min(1, shared rarity / 5)`. One evidence item per link. |
-| Indicator overlap (#11, #33, #34) | `actor_indicator_overlap` | SHA-256 (tooling) 100, URL 90, exact domain 85, subdomain of a listed domain 60, IP 70, IP inside a listed network 40, ASN 15. Halved when the source was published more than 730 days before the subject was first seen. One item per indicator, at most 16, each citing its report. |
+| Observed infrastructure (#11, #33, #34) | `actor_indicator_overlap` | An indicator the defender saw in use: the attack came from it, or the decoy was made to contact it (IOC roles `source` and `callback`, or anything read from egress and DNS events). URL 90, exact domain 85, subdomain of a listed domain 60, IP 70, IP inside a listed network 40, SHA-256 100. The only source that counts as a shared indicator. |
+| Attacker-chosen values (#34) | `actor_payload_overlap` | A value the attacker chose and sent: request content, URLs in requests, payload and file hashes. Same per-type weights, but a weak source that never counts as a shared indicator ([false flags](#false-flags)). |
+| Shared ASN (#11) | `actor_asn_overlap` | Weak context, never a shared indicator and never enough on its own. |
 | Targeting (#12, #5) | `actor_targeting` | 100 for a shared CVE, 60 for a shared catalogue product only. |
 | Geography (#11) | none | Listed in `not_counted`, never scored. |
 
-A profile becomes a link only with an indicator other than an ASN, or, for technique overlap alone, with at least three shared techniques and a shared rarity of at least 5. Common techniques (`T1190`, `T1105`) therefore never link on their own. Each subject keeps the five strongest pending links plus any an analyst decided.
+Indicator weights are halved when the source was published more than 730 days before the subject was first seen. There is one evidence item per report indicator, at most 16, each citing the report that lists it, and each matched indicator says whether it was `observed`.
+
+A profile becomes a link only with an indicator other than an ASN (observed or attacker-chosen), or, for technique overlap alone, with at least three shared techniques and a shared rarity of at least 5. Common techniques (`T1190`, `T1105`) therefore never link on their own. Each subject keeps the five strongest pending links plus any an analyst decided.
 
 ## Confidence and caps
 
@@ -109,13 +113,24 @@ Default weights (`configs/confidence.yaml`):
 | `actor_ttp_overlap` | 25 | 30 |
 | `actor_indicator_overlap` | 30 | 40 |
 | `actor_targeting` | 10 | 10 |
+| `actor_payload_overlap` | 10 | 15 |
+| `actor_asn_overlap` | 5 | 5 |
 
 `foiled_core::confidence::score` then applies two caps to every `attempt_actor` link, whatever its evidence (campaign clustering, LLM or anything else included) and whatever the config says:
 
-- **No shared indicator:** capped below `medium` (39). Technique and targeting overlap alone is a lead, not an association.
+- **No shared indicator:** capped below `medium` (39) without `actor_indicator_overlap` evidence. Technique, targeting, ASN and attacker-chosen overlap alone is a lead, not an association.
 - **No analyst:** capped below `high` (69), never `publishable` and never `auto_state_promote`.
 
 An analyst `true_positive` sets 100, `high`, "confirmed association" and `publishable`. A link is a review queue candidate (`review_queue`) when it is pending and at or above `radar_queue_min` (40).
+
+## False flags
+
+Everything an attacker sends to a decoy is under their control. A false flag copies a public report: the techniques it lists, its stage-2 URL in the request, its loader's hash in the upload. Foiled therefore separates what the defender observed from what the attacker chose:
+
+- **Observed infrastructure** is the address an attack came from, or an address or domain the decoy itself was made to contact (DNS lookups, egress, callbacks). It is harder to fake without actually using that infrastructure, and only it counts as a shared indicator.
+- **Attacker-chosen values** (request content, URLs in requests, payload and file hashes) count on the weak `actor_payload_overlap` source, are marked `observed: false`, and add a `not_counted` note about false flags. Techniques and targeting are attacker-chosen too.
+
+So a perfect copy of a report's techniques, URLs and hashes, with no observed infrastructure, stays `low` (a unit test builds exactly that). Even observed infrastructure can be borrowed or compromised, which is one more reason no link reaches `high` without an analyst. Analysts should treat a match that rests on request content alone as a lead, and look for callbacks the decoy actually made.
 
 ## Wording is enforced by code
 
@@ -123,11 +138,11 @@ An analyst `true_positive` sets 100, `high`, "confirmed association" and `publis
 
 | Status | Statement |
 | --- | --- |
-| `pending` | "Possible association with {label}: {TTP, infrastructure, tooling, targeting} overlap with activity reported in "{title}" ({publisher}, {date}) [and N other source(s)]. This is not an attribution." |
-| `confirmed` | "Confirmed association with {label}, reviewed by an analyst: {overlap} overlap with activity reported in ..." |
+| `pending` | "Possible association with {label}: {TTP, infrastructure, request content, tooling, targeting} overlap with activity reported by {publisher} ({date}) [and N other source(s)]. This is not an attribution." |
+| `confirmed` | "Confirmed association with {label}, reviewed by an analyst: {overlap} overlap with activity reported by ..." |
 | `rejected` | "An analyst rejected a possible association with {label}." |
 
-`wording` is "possible association" unless an analyst confirmed the link. `actor::wording_problems` refuses attribution phrases ("attributed to", "is behind", "responsible for", "carried out by" and similar) anywhere, and "confirmed" without a confirmation. It runs over curated labels and notes in CI, over every ATT&CK group name, and over every statement in the tests. `schemas/actor-link.schema.json` refuses the same phrases, and refuses "confirmed association", `high`, `publishable` or "confirmed" in the statement on a link that is not confirmed.
+`wording` is "possible association" unless an analyst confirmed the link. Report titles are never quoted in text Foiled writes (statements, evidence summaries), because a title may itself make the claim Foiled must not ("... attributed to X"); titles stay as data in `sources[].title`, next to the URL. `actor::wording_problems` refuses attribution phrases ("attributed to", "is behind", "responsible for", "carried out by" and similar) anywhere, and "confirmed" without a confirmation. It runs over curated labels, aliases, publishers and notes (CI), over every ATT&CK group name (unit test), over analyst decision notes (the API refuses a note that claims attribution), and over statements and evidence summaries in the tests. `schemas/actor-link.schema.json` refuses the same phrases, and refuses "confirmed association", `high`, `publishable` or "confirmed" in the statement on a link that is not confirmed.
 
 ## Analyst decisions
 
@@ -149,13 +164,15 @@ Decisions need `review:write`, are rate limited (60 an hour per token), are stor
 | `GET /v0/actor-links/{link_id}` | `campaigns:read` | One link with its full explanation. |
 | `POST /v0/actor-links/{link_id}/decision` | `review:write` | Records a decision and returns the link as it scores now. |
 
-Links are matched on request over the same bounded window as campaigns (default 7 days, at most 20,000 events). Campaigns returned by `/v0/campaigns` carry `suggested_actor_links[]` (pending and confirmed links, strongest first, at most five), each with `confidence_ref` pointing at `/v0/actor-links/{link_id}`.
+Links are matched on request over the same bounded window as campaigns (default 7 days, at most 20,000 events). `suggested_actor_links[]` (pending and confirmed links, strongest first, at most five, each with `confidence_ref` pointing at `/v0/actor-links/{link_id}`) is filled on campaign detail (`GET /v0/campaigns/{id}`), on the campaign returned by an analyst action, and on the campaign list only with `include=actors`; a plain list does not run the matcher. Store reads for actors (source countries for the explanation, analyst decisions) happen only for campaigns or attempts that matched a profile.
+
+The catalogue is loaded through `actor::CatalogueSource`. The API's source is the bundled ATT&CK groups sidecar plus `catalogue/actors/`; another source (for example a threat intel platform holding actor, intrusion-set and report catalogues) can implement the same trait and goes through the same checks.
 
 The review queue (#35) lists pending links with `GET /v0/actor-links?status=pending&review_queue=true`. Inside the API it can call `routes::actors::actor_model` and `routes::actors::record_decision`, which apply the same checks, audit and rate limit as the route.
 
 ## Exports
 
-`actor::export_links` turns links into one `attempt_actor` link per member attempt, for `AttemptRecord::links` in the intel exports (#13). It drops pending and rejected links whatever the export options, so only confirmed links (the only publishable ones) can become STIX `intrusion-set` and `relationship` objects or MISP `threat-actor` attributes, and only when the export also opts in to actors. The relationship carries the confidence score and the confirmed statement; links to ATT&CK groups carry MITRE's notice. The export routes on `main` do not build STIX or MISP yet: wiring `export_links` into them lands with #13 (see [Limits](#limits-and-follow-ups)).
+With `include_actors=true`, the STIX and MISP downloads (#13) match actors over the export window and pass the links through `actor::export_links`, which makes one `attempt_actor` link per member attempt and drops pending and rejected links whatever the export options, `include_unreviewed` included. Only confirmed links (the only publishable ones) become a STIX `intrusion-set` with a `related-to` relationship, or a MISP `threat-actor` attribute. The relationship carries the score, `x_foiled_wording` and the export's cautious sentence ("Confirmed association with ..., reviewed by an analyst."). The `intrusion-set` is Foiled's own object: it names the public sources in `external_references` (MITRE's group page with the `G` id for ATT&CK groups, report URLs otherwise) and `x_foiled_actor_id`. An `intrusion-set` derived from an ATT&CK group carries the MITRE ATT&CK notice marking, as the licence register requires, and so does any MISP event holding one. Without `include_actors`, no actor matching runs and nothing about actors leaves.
 
 ## Legal and ethical framing
 
@@ -190,7 +207,6 @@ The fleet-wave fixture ([`testdata/campaigns/fleet-wave.input.json`](../testdata
 
 ## Limits and follow-ups
 
-- **Exports (#13).** `export_links` is built and tested; wiring it into the STIX and MISP downloads waits for the intel export routes to merge.
 - **YARA.** Tooling overlap matches SHA-256 values only. YARA rule matches on quarantined payloads ([enrichment.md](enrichment.md)) are not yet compared with report rule names.
 - **LLM proposals (#28)** do not produce actor evidence. If they ever do, the caps above still apply.
 - **MISP galaxy import.** The source kind and pin fields exist; no galaxy clusters are imported yet.

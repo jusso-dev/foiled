@@ -239,7 +239,7 @@ Fields that do not belong to the action are refused. Actions are replayed in `(a
 
 ## Actor suggestions
 
-`suggested_actor_links[]` is never filled by clustering. The actor matcher (#29, [actor-attribution.md](actor-attribution.md)) fills it on every campaign read, and each item is `{link_id, actor_id, label, wording, score, band, status, confidence_ref, report_urls}`, with `confidence_ref` pointing at `/v0/actor-links/{link_id}`:
+`suggested_actor_links[]` is never filled by clustering. The actor matcher (#29, [actor-attribution.md](actor-attribution.md)) fills it on campaign detail, on the campaign an action returns, and on the list with `include=actors`, and each item is `{link_id, actor_id, label, wording, score, band, status, confidence_ref, report_urls}`, with `confidence_ref` pointing at `/v0/actor-links/{link_id}`:
 
 - Labels prefer a nexus or a named public cluster ("nexus overlapping TTPs reported in <public report>") over hard numbering without sources.
 - `wording` is "possible association" unless the actor link is `high` and analyst-confirmed (#27), when it may read "confirmed association".

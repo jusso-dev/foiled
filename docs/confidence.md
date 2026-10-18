@@ -22,6 +22,8 @@ The model is deterministic: the same evidence and config always give the same sc
 | `actor_ttp_overlap` | #29 | A public actor profile uses the techniques seen, weighted by rarity ([actor-attribution.md](actor-attribution.md#matching)) |
 | `actor_indicator_overlap` | #29 | A callback domain seen on a decoy is listed in a public report about the actor |
 | `actor_targeting` | #29 | The CVE hit is one the report says the actor targets |
+| `actor_payload_overlap` | #29 | A URL the attacker sent in a request is listed in a public report (weak: a false flag can plant it) |
+| `actor_asn_overlap` | #29 | A source ASN is listed in a public report (weak context) |
 | `noise_score` | #25 | Source noise score (a penalty, below) |
 | `analyst` | console, API | Recorded through overrides, not as points |
 
@@ -51,6 +53,8 @@ Default tier weights (normative, tunable in `configs/confidence.yaml`):
 | `actor_ttp_overlap` | 25 | 30 |
 | `actor_indicator_overlap` | 30 | 40 |
 | `actor_targeting` | 10 | 10 |
+| `actor_payload_overlap` | 10 | 15 |
+| `actor_asn_overlap` | 5 | 5 |
 
 The config checks itself: the LLM cap must stay below `high`, the pre-disclosure cap below `publish_min`, and the `campaign_cluster` cap below both, so clustering alone never publishes a campaign or reaches `high` (#33). `campaign_cluster` evidence counts only for `attempt_campaign` links: on any other kind (a CVE, technique, indicator or actor link) it adds nothing and the explanation says so in `caps_applied`, because attempts belonging together says nothing about an actor or a CVE.
 
