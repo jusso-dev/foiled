@@ -12,6 +12,8 @@
   "preview_urls": false,
   "services": [{ "binding": "API", "service": "foiled-api" }],
   // Signed-out console sessions, one object per session id, deleted at expiry (docs/ui/console.md).
+  // Deliberately not bound in env.public: that Worker serves no console route. Migrations are
+  // top-level only, so a public deploy still creates the unused class.
   "durable_objects": {
     "bindings": [{ "name": "SESSION_REVOCATIONS", "class_name": "SessionRevocations" }]
   },

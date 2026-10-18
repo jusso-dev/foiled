@@ -93,6 +93,7 @@ describe("review queue", () => {
     expect(t).toContain("decide it again (after a minute)");
     expect(r.html).toContain(`/campaigns/${A}`);
     expect(r.html).toContain(`/campaigns/${B}`);
+    expect(t).toContain(`fold ${B} into ${A}`);
     // Neither a merge proposal nor an IOC publication can start a write-up.
     expect(r.html).not.toContain('value="promote"');
   });

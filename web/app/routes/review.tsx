@@ -254,7 +254,9 @@ function SubjectLinks({ item }: { item: ReviewItem }) {
   if (s.other_campaign_id && isId("campaign", s.other_campaign_id)) {
     out.push({
       to: `/campaigns/${s.other_campaign_id}`,
-      text: `merge into ${s.other_campaign_id}`,
+      text: s.campaign_id
+        ? `fold ${s.other_campaign_id} into ${s.campaign_id}`
+        : s.other_campaign_id,
     });
   }
   const actorSubject = s.campaign_id ?? s.attempt_id;

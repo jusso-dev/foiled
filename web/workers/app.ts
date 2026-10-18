@@ -41,7 +41,8 @@ export default {
       }
       if (decision.action === "redirect") return publicRedirect(decision.location);
     } else {
-      // Defence in depth behind Cloudflare Access: fail closed when it is configured.
+      // Defence in depth behind Cloudflare Access. Fails closed: the Access settings are
+      // required unless CONSOLE_ENV=development (app/lib/access.server.ts).
       const access = await verifyAccess(request, env);
       if (!access.ok) {
         console.warn(`console: Access check failed: ${access.reason}`);
