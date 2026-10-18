@@ -939,6 +939,307 @@ async fn insert_version(
                 &actor_id,
                 &w.updated_at,
                 &json(w),
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
+async fn in_transaction<T>(
+    client: &Client,
+    step: impl std::future::Future<Output = Result<Option<T>, Error>>,
+) -> Result<Option<T>, Error> {
+    client.batch_execute("BEGIN").await?;
+    match step.await {
+        Ok(Some(v)) => {
+            client.batch_execute("COMMIT").await?;
+            Ok(Some(v))
+        }
+        Ok(None) => {
+            client.batch_execute("ROLLBACK").await?;
+            Ok(None)
+        }
+        Err(e) => {
+            client.batch_execute("ROLLBACK").await?;
+            Err(e)
+        }
+    }
+}
+
+/// Insert a write-up and its first version row together (#35).
+pub async fn insert_writeup(
+    client: &Client,
+    w: &foiled_core::writeup::WriteUp,
+    actor_id: &str,
+) -> Result<(), Error> {
+    let version = i32::try_from(w.version).unwrap_or(i32::MAX);
+    in_transaction(client, async {
+        client
+            .execute(
+                "INSERT INTO writeups (tenant_id, writeup_id, status, version, updated_at, body)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    &w.tenant_id,
+                    &w.writeup_id,
+                    &w.status.as_str(),
+                    &version,
+                    &w.updated_at,
+                    &json(w),
+                ],
+            )
+            .await?;
+        insert_version(client, w, "create", actor_id).await?;
+        Ok(Some(()))
+    })
+    .await
+    .map(|_| ())
+}
+
+pub async fn get_writeup(
+    client: &Client,
+    tenant_id: &str,
+    writeup_id: &str,
+) -> Result<Option<foiled_core::writeup::WriteUp>, Error> {
+    let rows = client
+        .query(
+            "SELECT body FROM writeups WHERE tenant_id = $1 AND writeup_id = $2",
+            &[&tenant_id, &writeup_id],
+        )
+        .await?;
+    Ok(bodies(&rows, "body").into_iter().next())
+}
+
+/// Newest change first, optionally one status only.
+pub async fn list_writeups(
+    client: &Client,
+    tenant_id: &str,
+    status: Option<&str>,
+    limit: i64,
+) -> Result<Vec<foiled_core::writeup::WriteUp>, Error> {
+    let rows = client
+        .query(
+            "SELECT body FROM writeups WHERE tenant_id = $1 AND ($2::text IS NULL OR status = $2)
+             ORDER BY updated_at DESC, writeup_id DESC LIMIT $3",
+            &[&tenant_id, &status, &limit],
+        )
+        .await?;
+    Ok(bodies(&rows, "body"))
+}
+
+/// Replace a write-up if its stored version is `expected`, and append the
+/// version row, in one transaction. False, writing nothing, otherwise.
+pub async fn update_writeup(
+    client: &Client,
+    w: &foiled_core::writeup::WriteUp,
+    expected: u32,
+    action: &str,
+    actor_id: &str,
+) -> Result<bool, Error> {
+    let version = i32::try_from(w.version).unwrap_or(i32::MAX);
+    let expected = i32::try_from(expected).unwrap_or(i32::MAX);
+    in_transaction(client, async {
+        let n = client
+            .execute(
+                "UPDATE writeups SET status = $3, version = $4, updated_at = $5, body = $6
+                 WHERE tenant_id = $1 AND writeup_id = $2 AND version = $7",
+                &[
+                    &w.tenant_id,
+                    &w.writeup_id,
+                    &w.status.as_str(),
+                    &version,
+                    &w.updated_at,
+                    &json(w),
+                    &expected,
+                ],
+            )
+            .await?;
+        if n != 1 {
+            return Ok(None);
+        }
+        insert_version(client, w, action, actor_id).await?;
+        Ok(Some(()))
+    })
+    .await
+    .map(|r| r.is_some())
+}
+
+/// One stored write-up version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteUpVersionRow {
+    pub writeup: foiled_core::writeup::WriteUp,
+    pub action: String,
+    pub actor_id: String,
+    pub at: i64,
+}
+
+pub async fn writeup_versions(
+    client: &Client,
+    tenant_id: &str,
+    writeup_id: &str,
+) -> Result<Vec<WriteUpVersionRow>, Error> {
+    let rows = client
+        .query(
+            "SELECT action, actor_id, at, body FROM writeup_versions
+             WHERE tenant_id = $1 AND writeup_id = $2 ORDER BY version",
+            &[&tenant_id, &writeup_id],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            Some(WriteUpVersionRow {
+                writeup: serde_json::from_value(r.get::<_, serde_json::Value>("body")).ok()?,
+                action: r.get("action"),
+                actor_id: r.get("actor_id"),
+                at: r.get("at"),
+            })
+        })
+        .collect())
+}
+
+/// Store a write-up's public page, replacing its earlier one. False when
+/// another write-up holds the slug.
+pub async fn put_public_page(
+    client: &Client,
+    tenant_id: &str,
+    writeup_id: &str,
+    page: &foiled_core::writeup::PublicPage,
+) -> Result<bool, Error> {
+    in_transaction(client, async {
+        let version = i32::try_from(page.version).unwrap_or(i32::MAX);
+        // An older snapshot never replaces a newer one for the same write-up.
+        let newer = client
+            .query_opt(
+                "SELECT 1 FROM public_pages WHERE tenant_id = $1 AND writeup_id = $2 AND version > $3",
+                &[&tenant_id, &writeup_id, &version],
+            )
+            .await?;
+        if newer.is_some() {
+            return Ok(Some(()));
+        }
+        client
+            .execute(
+                "DELETE FROM public_pages WHERE tenant_id = $1 AND writeup_id = $2 AND slug <> $3",
+                &[&tenant_id, &writeup_id, &page.slug],
+            )
+            .await?;
+        let n = client
+            .execute(
+                "INSERT INTO public_pages (slug, tenant_id, writeup_id, version, visible_from, page)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (slug) DO UPDATE SET version = EXCLUDED.version,
+                   visible_from = EXCLUDED.visible_from, page = EXCLUDED.page
+                 WHERE public_pages.tenant_id = EXCLUDED.tenant_id
+                   AND public_pages.writeup_id = EXCLUDED.writeup_id
+                   AND public_pages.version <= EXCLUDED.version",
+                &[&page.slug, &tenant_id, &writeup_id, &version, &page.visible_from, &json(page)],
+            )
+            .await?;
+        Ok(if n == 1 { Some(()) } else { None })
+    })
+    .await
+    .map(|r| r.is_some())
+}
+
+pub async fn remove_public_page(
+    client: &Client,
+    tenant_id: &str,
+    writeup_id: &str,
+) -> Result<(), Error> {
+    client
+        .execute(
+            "DELETE FROM public_pages WHERE tenant_id = $1 AND writeup_id = $2",
+            &[&tenant_id, &writeup_id],
+        )
+        .await?;
+    Ok(())
+}
+
+/// The page for a slug if visible at `now`. Reads `page` only.
+pub async fn public_page(
+    client: &Client,
+    slug: &str,
+    now: i64,
+) -> Result<Option<foiled_core::writeup::PublicPage>, Error> {
+    let rows = client
+        .query(
+            "SELECT page FROM public_pages WHERE slug = $1 AND visible_from <= $2",
+            &[&slug, &now],
+        )
+        .await?;
+    Ok(bodies(&rows, "page").into_iter().next())
+}
+
+/// Pages visible at `now`, newest first. Reads `page` only.
+pub async fn public_pages(
+    client: &Client,
+    now: i64,
+    limit: i64,
+) -> Result<Vec<foiled_core::writeup::PublicPage>, Error> {
+    let rows = client
+        .query(
+            "SELECT page FROM public_pages WHERE visible_from <= $1
+             ORDER BY visible_from DESC, slug DESC LIMIT $2",
+            &[&now, &limit],
+        )
+        .await?;
+    Ok(bodies(&rows, "page"))
+}
+
+/// Replace one tenant's radar rollup for one day, in one transaction.
+pub async fn put_radar_points(
+    client: &Client,
+    tenant_id: &str,
+    day: i64,
+    points: &[foiled_core::radar::RadarPoint],
+) -> Result<(), Error> {
+    let rows: Vec<&foiled_core::radar::RadarPoint> = points
+        .iter()
+        .filter(|p| p.tenant_id == tenant_id && p.day == day)
+        .collect();
+    let body = json(&rows);
+    in_transaction(client, async {
+        client
+            .execute(
+                "DELETE FROM radar_rollups WHERE tenant_id = $1 AND day = $2",
+                &[&tenant_id, &day],
+            )
+            .await?;
+        if !rows.is_empty() {
+            client
+                .execute(
+                    "INSERT INTO radar_rollups (tenant_id, day, dimension, key, sensor, source, body)
+                     SELECT $1, $2, e->>'dimension', e->>'key', e->>'sensor', e->>'source', e
+                     FROM jsonb_array_elements($3::jsonb) AS e",
+                    &[&tenant_id, &day, &body],
+                )
+                .await?;
+        }
+        Ok(Some(()))
+    })
+    .await
+    .map(|_| ())
+}
+
+/// Rollup rows with `since <= day < until`, for one tenant or all.
+pub async fn radar_points(
+    client: &Client,
+    tenant_id: Option<&str>,
+    since: i64,
+    until: i64,
+    limit: i64,
+) -> Result<Vec<foiled_core::radar::RadarPoint>, Error> {
+    let rows = client
+        .query(
+            "SELECT body FROM radar_rollups
+             WHERE ($1::text IS NULL OR tenant_id = $1) AND day >= $2 AND day < $3
+             LIMIT $4",
+            &[&tenant_id, &since, &until, &limit],
+        )
+        .await?;
+    Ok(bodies(&rows, "body"))
+}
+
 // ---------------------------------------------------------------------------
 // Materialised STIX object log behind TAXII (#13)
 // ---------------------------------------------------------------------------
@@ -1381,143 +1682,6 @@ async fn write_day(
     Ok(())
 }
 
-async fn in_transaction<T>(
-    client: &Client,
-    step: impl std::future::Future<Output = Result<Option<T>, Error>>,
-) -> Result<Option<T>, Error> {
-    client.batch_execute("BEGIN").await?;
-    match step.await {
-        Ok(Some(v)) => {
-            client.batch_execute("COMMIT").await?;
-            Ok(Some(v))
-        }
-        Ok(None) => {
-            client.batch_execute("ROLLBACK").await?;
-            Ok(None)
-        }
-        Err(e) => {
-            client.batch_execute("ROLLBACK").await?;
-            Err(e)
-        }
-    }
-}
-
-/// Insert a write-up and its first version row together (#35).
-pub async fn insert_writeup(
-    client: &Client,
-    w: &foiled_core::writeup::WriteUp,
-    actor_id: &str,
-) -> Result<(), Error> {
-    let version = i32::try_from(w.version).unwrap_or(i32::MAX);
-    in_transaction(client, async {
-        client
-            .execute(
-                "INSERT INTO writeups (tenant_id, writeup_id, status, version, updated_at, body)
-                 VALUES ($1, $2, $3, $4, $5, $6)",
-                &[
-                    &w.tenant_id,
-                    &w.writeup_id,
-                    &w.status.as_str(),
-                    &version,
-                    &w.updated_at,
-                    &json(w),
-                ],
-            )
-            .await?;
-        insert_version(client, w, "create", actor_id).await?;
-        Ok(Some(()))
-    })
-    .await
-    .map(|_| ())
-}
-
-pub async fn get_writeup(
-    client: &Client,
-    tenant_id: &str,
-    writeup_id: &str,
-) -> Result<Option<foiled_core::writeup::WriteUp>, Error> {
-    let rows = client
-        .query(
-            "SELECT body FROM writeups WHERE tenant_id = $1 AND writeup_id = $2",
-            &[&tenant_id, &writeup_id],
-        )
-        .await?;
-    Ok(bodies(&rows, "body").into_iter().next())
-}
-
-/// Newest change first, optionally one status only.
-pub async fn list_writeups(
-    client: &Client,
-    tenant_id: &str,
-    status: Option<&str>,
-    limit: i64,
-) -> Result<Vec<foiled_core::writeup::WriteUp>, Error> {
-    let rows = client
-        .query(
-            "SELECT body FROM writeups WHERE tenant_id = $1 AND ($2::text IS NULL OR status = $2)
-             ORDER BY updated_at DESC, writeup_id DESC LIMIT $3",
-            &[&tenant_id, &status, &limit],
-        )
-        .await?;
-    Ok(bodies(&rows, "body"))
-}
-
-/// Replace a write-up if its stored version is `expected`, and append the
-/// version row, in one transaction. False, writing nothing, otherwise.
-pub async fn update_writeup(
-    client: &Client,
-    w: &foiled_core::writeup::WriteUp,
-    expected: u32,
-    action: &str,
-    actor_id: &str,
-) -> Result<bool, Error> {
-    let version = i32::try_from(w.version).unwrap_or(i32::MAX);
-    let expected = i32::try_from(expected).unwrap_or(i32::MAX);
-    in_transaction(client, async {
-        let n = client
-            .execute(
-                "UPDATE writeups SET status = $3, version = $4, updated_at = $5, body = $6
-                 WHERE tenant_id = $1 AND writeup_id = $2 AND version = $7",
-                &[
-                    &w.tenant_id,
-                    &w.writeup_id,
-                    &w.status.as_str(),
-                    &version,
-                    &w.updated_at,
-                    &json(w),
-                    &expected,
-                ],
-            )
-            .await?;
-        if n != 1 {
-            return Ok(None);
-        }
-        insert_version(client, w, action, actor_id).await?;
-        Ok(Some(()))
-    })
-    .await
-    .map(|r| r.is_some())
-}
-
-/// One stored write-up version.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WriteUpVersionRow {
-    pub writeup: foiled_core::writeup::WriteUp,
-    pub action: String,
-    pub actor_id: String,
-    pub at: i64,
-}
-
-pub async fn writeup_versions(
-    client: &Client,
-    tenant_id: &str,
-    writeup_id: &str,
-) -> Result<Vec<WriteUpVersionRow>, Error> {
-    let rows = client
-        .query(
-            "SELECT action, actor_id, at, body FROM writeup_versions
-             WHERE tenant_id = $1 AND writeup_id = $2 ORDER BY version",
-            &[&tenant_id, &writeup_id],
 /// Stage one build part in one transaction: drop staged contributions of
 /// this part and later ones (and, for part 0, the day's staged attempts),
 /// upsert the part's attempts, insert its contributions (`(ioc_id, JSON)`)
@@ -1649,70 +1813,6 @@ pub async fn stix_day_attempts(
         .await?;
     Ok(rows
         .iter()
-        .filter_map(|r| {
-            Some(WriteUpVersionRow {
-                writeup: serde_json::from_value(r.get::<_, serde_json::Value>("body")).ok()?,
-                action: r.get("action"),
-                actor_id: r.get("actor_id"),
-                at: r.get("at"),
-            })
-        })
-        .collect())
-}
-
-/// Store a write-up's public page, replacing its earlier one. False when
-/// another write-up holds the slug.
-pub async fn put_public_page(
-    client: &Client,
-    tenant_id: &str,
-    writeup_id: &str,
-    page: &foiled_core::writeup::PublicPage,
-) -> Result<bool, Error> {
-    in_transaction(client, async {
-        let version = i32::try_from(page.version).unwrap_or(i32::MAX);
-        // An older snapshot never replaces a newer one for the same write-up.
-        let newer = client
-            .query_opt(
-                "SELECT 1 FROM public_pages WHERE tenant_id = $1 AND writeup_id = $2 AND version > $3",
-                &[&tenant_id, &writeup_id, &version],
-            )
-            .await?;
-        if newer.is_some() {
-            return Ok(Some(()));
-        }
-        client
-            .execute(
-                "DELETE FROM public_pages WHERE tenant_id = $1 AND writeup_id = $2 AND slug <> $3",
-                &[&tenant_id, &writeup_id, &page.slug],
-            )
-            .await?;
-        let n = client
-            .execute(
-                "INSERT INTO public_pages (slug, tenant_id, writeup_id, version, visible_from, page)
-                 VALUES ($1, $2, $3, $4, $5, $6)
-                 ON CONFLICT (slug) DO UPDATE SET version = EXCLUDED.version,
-                   visible_from = EXCLUDED.visible_from, page = EXCLUDED.page
-                 WHERE public_pages.tenant_id = EXCLUDED.tenant_id
-                   AND public_pages.writeup_id = EXCLUDED.writeup_id
-                   AND public_pages.version <= EXCLUDED.version",
-                &[&page.slug, &tenant_id, &writeup_id, &version, &page.visible_from, &json(page)],
-            )
-            .await?;
-        Ok(if n == 1 { Some(()) } else { None })
-    })
-    .await
-    .map(|r| r.is_some())
-}
-
-pub async fn remove_public_page(
-    client: &Client,
-    tenant_id: &str,
-    writeup_id: &str,
-) -> Result<(), Error> {
-    client
-        .execute(
-            "DELETE FROM public_pages WHERE tenant_id = $1 AND writeup_id = $2",
-            &[&tenant_id, &writeup_id],
         .map(|r| (r.get("attempt_id"), r.get("body")))
         .collect())
 }
@@ -1899,89 +1999,6 @@ pub async fn stix_release(
     Ok(())
 }
 
-/// The page for a slug if visible at `now`. Reads `page` only.
-pub async fn public_page(
-    client: &Client,
-    slug: &str,
-    now: i64,
-) -> Result<Option<foiled_core::writeup::PublicPage>, Error> {
-    let rows = client
-        .query(
-            "SELECT page FROM public_pages WHERE slug = $1 AND visible_from <= $2",
-            &[&slug, &now],
-        )
-        .await?;
-    Ok(bodies(&rows, "page").into_iter().next())
-}
-
-/// Pages visible at `now`, newest first. Reads `page` only.
-pub async fn public_pages(
-    client: &Client,
-    now: i64,
-    limit: i64,
-) -> Result<Vec<foiled_core::writeup::PublicPage>, Error> {
-    let rows = client
-        .query(
-            "SELECT page FROM public_pages WHERE visible_from <= $1
-             ORDER BY visible_from DESC, slug DESC LIMIT $2",
-            &[&now, &limit],
-        )
-        .await?;
-    Ok(bodies(&rows, "page"))
-}
-
-/// Replace one tenant's radar rollup for one day, in one transaction.
-pub async fn put_radar_points(
-    client: &Client,
-    tenant_id: &str,
-    day: i64,
-    points: &[foiled_core::radar::RadarPoint],
-) -> Result<(), Error> {
-    let rows: Vec<&foiled_core::radar::RadarPoint> = points
-        .iter()
-        .filter(|p| p.tenant_id == tenant_id && p.day == day)
-        .collect();
-    let body = json(&rows);
-    in_transaction(client, async {
-        client
-            .execute(
-                "DELETE FROM radar_rollups WHERE tenant_id = $1 AND day = $2",
-                &[&tenant_id, &day],
-            )
-            .await?;
-        if !rows.is_empty() {
-            client
-                .execute(
-                    "INSERT INTO radar_rollups (tenant_id, day, dimension, key, sensor, source, body)
-                     SELECT $1, $2, e->>'dimension', e->>'key', e->>'sensor', e->>'source', e
-                     FROM jsonb_array_elements($3::jsonb) AS e",
-                    &[&tenant_id, &day, &body],
-                )
-                .await?;
-        }
-        Ok(Some(()))
-    })
-    .await
-    .map(|_| ())
-}
-
-/// Rollup rows with `since <= day < until`, for one tenant or all.
-pub async fn radar_points(
-    client: &Client,
-    tenant_id: Option<&str>,
-    since: i64,
-    until: i64,
-    limit: i64,
-) -> Result<Vec<foiled_core::radar::RadarPoint>, Error> {
-    let rows = client
-        .query(
-            "SELECT body FROM radar_rollups
-             WHERE ($1::text IS NULL OR tenant_id = $1) AND day >= $2 AND day < $3
-             LIMIT $4",
-            &[&tenant_id, &since, &until, &limit],
-        )
-        .await?;
-    Ok(bodies(&rows, "body"))
 pub async fn stix_cron_cursor(client: &Client, collection: &str) -> Result<Option<String>, Error> {
     let row = client
         .query_opt(
