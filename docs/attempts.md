@@ -68,7 +68,7 @@ Examples: one source, one product, a handful of requests scores 10 (`targeted`).
 
 ## API
 
-- `GET /v0/attempts`: filters `since`, `until`, `decoy_id`, `decoy_kind`, `sensor_id`, `src`, `state`, `cve`, `campaign_id`, `limit`. Newest activity first.
+- `GET /v0/attempts`: filters `since`, `until`, `decoy_id`, `decoy_kind`, `sensor_id`, `src`, `state`, `cve`, `campaign_id`, `technique`, `min_confidence`, `limit`. Newest activity first. `technique` and `min_confidence` match on the attempt's confidence links (#27) as computed, before analyst overrides. Agents use the same filters through the MCP tool `query_attempts` ([mcp/foiled-mcp.md](mcp/foiled-mcp.md)).
 - `GET /v0/attempts/{attempt_id}`.
 - `GET /v0/attempts/{attempt_id}/timeline`: the ordered timeline, JSON or `format=text` ([attempt-timeline.md](attempt-timeline.md)).
 

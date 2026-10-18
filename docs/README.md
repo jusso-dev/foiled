@@ -21,6 +21,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [threat-model.md](threat-model.md) | Containment, egress, breakout and Australian legal and ethical limits. |
 | [adr/README.md](adr/README.md) | Architecture Decision Records index, including [ADR 0002](adr/0002-sandbox-runtime.md) on the sandbox and emulation runtime and [ADR 0009](adr/0009-axum-workers-and-front-end.md) on Axum and Workers. |
 | [api/control-plane.md](api/control-plane.md) | Control plane API: clients, auth, rules, stores, the OpenAPI contract and the local mock server. |
+| [mcp/foiled-mcp.md](mcp/foiled-mcp.md) | MCP server for agents (#24): tools, schemas, error shape, scopes and token rotation, limits, audit fields, prompt-injection threat notes and client configuration. |
 | [agent/protocol.md](agent/protocol.md) | Host agent protocol: signed jobs, leases, results, heartbeats, evidence and outage behaviour. |
 | [catalogue.md](catalogue.md) | Catalogue entry fields, decoy kinds and CI rules. |
 | [adr/0006-emulation-plugins.md](adr/0006-emulation-plugins.md) | Emulation plug-ins and decoy modules: the plug-in trait, profiles, hooks, canaries, fingerprint realism and module manifests. |

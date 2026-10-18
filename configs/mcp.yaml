@@ -1,0 +1,56 @@
+# MCP server (#24). Design: docs/mcp/foiled-mcp.md.
+# Validated by schemas/mcp-config.schema.json (foiled-lint), parsed into
+# foiled_core::mcp::McpConfig and bundled into the API Worker at build time,
+# so each deploy serves exactly what was merged.
+#
+# The MCP endpoint (POST /v0/mcp) is a pure client of the control plane API
+# (#21). These caps sit on top of the API's own limits and can only tighten
+# them: the API still enforces 10 creates per principal per hour, 30
+# destructive actions per principal per hour and 5 live decoys per tenant.
+#
+# Never put a token in this file. MCP clients hold their own scoped token
+# (role mcp); see docs/mcp/foiled-mcp.md for issuing and rotating it.
+
+version: 1
+
+# Set to false to turn the endpoint off. Requests then get 404.
+enabled: true
+
+# Offer reset_sandbox and destroy_sandbox. Both always need confirm: true
+# and a non-empty reason, and are audited.
+destructive_tools: true
+
+# Offer reset_sandbox and destroy_sandbox to agent (role mcp) tokens. Set to
+# false so only operator tokens can reset or destroy through MCP; agents
+# then do not see the tools at all. The confirm argument is set by the
+# model and is not human approval (see docs/mcp/foiled-mcp.md).
+agent_destructive_tools: true
+
+# Browser origins allowed to call the endpoint. Any request that carries a
+# different Origin header is refused with 403 (DNS rebinding guard).
+# Command-line and desktop MCP clients send no Origin header.
+#   - https://console.example.invalid
+allowed_origins: []
+
+limits:
+  # tools/call requests per token per hour, across all tools.
+  calls_per_hour: 600
+  # create_sandbox calls per token per hour.
+  creates_per_hour: 5
+  # Sandboxes that are not destroyed, per tenant, before create_sandbox
+  # refuses. The API's own tenant cap (5) still applies.
+  max_live_sandboxes: 3
+  # Lifetime when the agent does not ask for one (1 hour).
+  default_lifetime_seconds: 3600
+  # Longest lifetime an agent may ask for (4 hours). The API allows 7 days
+  # for operators; agents get less.
+  max_lifetime_seconds: 14400
+  # Largest page any list tool returns.
+  max_page: 50
+
+output:
+  # Serialised size of one tool result, in bytes. Lists are cut to fit and
+  # flagged truncated.
+  max_bytes: 65536
+  # Longest single string kept, in characters.
+  max_string_chars: 2000

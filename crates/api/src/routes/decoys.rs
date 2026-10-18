@@ -59,6 +59,10 @@ pub struct JobAccepted {
 pub struct ListQuery {
     pub state: Option<DecoyState>,
     pub catalogue_id: Option<String>,
+    /// Token id that created the decoy.
+    pub created_by: Option<String>,
+    /// Only decoys that are not destroyed.
+    pub live: Option<bool>,
     pub limit: Option<usize>,
     pub cursor: Option<String>,
 }
@@ -263,6 +267,8 @@ async fn list(
             DecoyQuery {
                 state: q.state,
                 catalogue_id: q.catalogue_id,
+                created_by: q.created_by,
+                live: q.live.unwrap_or(false),
                 limit,
                 cursor: q.cursor,
             },

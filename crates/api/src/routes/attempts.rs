@@ -48,6 +48,12 @@ pub struct AttemptQuery {
     pub state: Option<AttemptState>,
     pub cve: Option<String>,
     pub campaign_id: Option<String>,
+    /// ATT&CK technique id, for example `T1190`. Matches attempts with a
+    /// technique link to it (#26, #27).
+    pub technique: Option<String>,
+    /// 0 to 100. Matches attempts with a CVE or technique link (or, with
+    /// `technique`, that technique's link) scoring at least this much.
+    pub min_confidence: Option<u8>,
     pub limit: Option<usize>,
 }
 
@@ -105,8 +111,14 @@ async fn list(
     Query(q): Query<AttemptQuery>,
 ) -> Result<Json<AttemptList>, ApiError> {
     let who = auth.require(Scope::AttemptsRead)?;
+    if q.min_confidence.is_some_and(|m| m > 100) {
+        return Err(ApiError::bad_request(
+            "min_confidence must be between 0 and 100",
+        ));
+    }
     let (since, until) = window(&state, &q);
-    let (attempts, truncated) = attempts_in_window(&state, &who.tenant_id, since, until).await?;
+    let (attempts, events, truncated) =
+        attempts_and_events(&state, &who.tenant_id, since, until).await?;
     let mut items: Vec<Attempt> = attempts
         .into_iter()
         .filter(|a| q.decoy_id.as_deref().is_none_or(|d| a.decoy_id == d))
@@ -133,10 +145,47 @@ async fn list(
             })
         })
         .collect();
+    if q.technique.is_some() || q.min_confidence.is_some() {
+        let by_id: std::collections::HashMap<&str, &foiled_core::capture::CaptureEvent> =
+            events.iter().map(|e| (e.event_id.as_str(), e)).collect();
+        items.retain(|a| link_filter_matches(&state, a, &by_id, &q));
+    }
     // Newest activity first.
     items.sort_by(|a, b| (b.last_seen, &b.attempt_id).cmp(&(a.last_seen, &a.attempt_id)));
     items.truncate(page_limit(q.limit));
     Ok(Json(AttemptList { items, truncated }))
+}
+
+/// The `technique` and `min_confidence` filters. Scores here are the
+/// computed ones, before analyst overrides, so a list query never costs a
+/// store read per attempt; `/links` shows the overridden score.
+fn link_filter_matches(
+    state: &AppState,
+    attempt: &Attempt,
+    by_id: &std::collections::HashMap<&str, &foiled_core::capture::CaptureEvent>,
+    q: &AttemptQuery,
+) -> bool {
+    use foiled_core::confidence::LinkKind;
+    let mine: Vec<_> = attempt
+        .event_ids
+        .iter()
+        .filter_map(|id| by_id.get(id.as_str()).map(|e| (*e).clone()))
+        .collect();
+    let links = crate::links::links_for_attempt(
+        &foiled_core::confidence::ConfidenceConfig::default(),
+        state.catalogue.get(&attempt.catalogue_id),
+        attempt,
+        &mine,
+        &std::collections::BTreeMap::new(),
+    );
+    let min = q.min_confidence.unwrap_or(0);
+    links.iter().any(|l| {
+        l.score >= min
+            && match q.technique.as_deref() {
+                Some(t) => l.kind == LinkKind::AttemptTechnique && l.target.eq_ignore_ascii_case(t),
+                None => matches!(l.kind, LinkKind::AttemptCve | LinkKind::AttemptTechnique),
+            }
+    })
 }
 
 async fn get_one(

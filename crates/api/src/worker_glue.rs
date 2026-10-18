@@ -463,6 +463,8 @@ impl Store for CfStore {
                         .unwrap_or(JsValue::NULL),
                     opt(cursor.as_ref().map(|c| c.id.as_str())),
                     n(q.limit as i64),
+                    opt(q.created_by.as_deref()),
+                    n(i64::from(q.live)),
                 ])
                 .map_err(err)?
                 .all()
@@ -533,6 +535,21 @@ impl Store for CfStore {
                 .await
                 .map_err(err)?;
             Ok(row.is_some_and(|r| r.count as u32 <= limit))
+        })
+    }
+
+    fn rate_count(&self, key: &str, window_start: i64) -> StoreFuture<'_, u32> {
+        let k = key.to_string();
+        wrap(async move {
+            let row: Option<CountRow> = self
+                .db
+                .prepare(sql::RATE_COUNT)
+                .bind(&[s(&k), n(window_start)])
+                .map_err(err)?
+                .first(None)
+                .await
+                .map_err(err)?;
+            Ok(row.map(|r| r.count as u32).unwrap_or(0))
         })
     }
 

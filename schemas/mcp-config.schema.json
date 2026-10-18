@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/mcp-config.schema.json",
+  "title": "Foiled MCP server config",
+  "description": "Limits, output caps and origin policy for the MCP endpoint POST /v0/mcp (#24). See docs/mcp/foiled-mcp.md. Mirrors McpConfig in crates/core/src/mcp.rs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "enabled", "destructive_tools", "agent_destructive_tools", "allowed_origins", "limits", "output"],
+  "properties": {
+    "version": { "const": 1 },
+    "enabled": {
+      "type": "boolean",
+      "description": "When false the endpoint answers 404 and no tool runs."
+    },
+    "destructive_tools": {
+      "type": "boolean",
+      "description": "Offer reset_sandbox and destroy_sandbox. Both still need confirm: true and a reason."
+    },
+    "agent_destructive_tools": {
+      "type": "boolean",
+      "description": "Offer reset_sandbox and destroy_sandbox to agent (role mcp) tokens. When false only operator tokens can use them."
+    },
+    "allowed_origins": {
+      "type": "array",
+      "description": "Browser origins allowed to call the endpoint. Requests with any other Origin header get 403.",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(https://[^/\\s]+|http://localhost(:[0-9]+)?)$"
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calls_per_hour", "creates_per_hour", "max_live_sandboxes", "default_lifetime_seconds", "max_lifetime_seconds", "max_page"],
+      "properties": {
+        "calls_per_hour": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "tools/call requests per token per hour, across all tools."
+        },
+        "creates_per_hour": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "create_sandbox calls per token per hour."
+        },
+        "max_live_sandboxes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Sandboxes not yet destroyed, per tenant, before create_sandbox refuses."
+        },
+        "default_lifetime_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 604800
+        },
+        "max_lifetime_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 604800,
+          "description": "At most the API ceiling of 7 days."
+        },
+        "max_page": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_bytes", "max_string_chars"],
+      "properties": {
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 4096,
+          "maximum": 1048576,
+          "description": "Serialised size of one tool result in bytes."
+        },
+        "max_string_chars": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 10000,
+          "description": "Longest single string kept in a tool result."
+        }
+      }
+    }
+  }
+}
