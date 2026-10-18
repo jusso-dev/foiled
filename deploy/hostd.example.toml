@@ -1,9 +1,14 @@
 # Example /etc/foiled/hostd.toml for foiled-hostd (#41). Copy and edit.
 # No database credentials, Cloudflare tokens or R2 keys ever go here.
 
+# "host" (default) for a research sandbox host; edge sensors use "sensor"
+# (see sensor.example.toml).
+role = "host"
+# The host id shown when the host was registered (POST /v0/hosts, #31).
 host_id = "host-example-1"
 # The mTLS ingest hostname. Placeholder: never commit real zone names.
 api_base = "https://ingest.example.invalid"
+# Written by `foiled-hostd enrol` and by certificate renewals (owner-only).
 client_cert = "/etc/foiled/host.crt"
 client_key = "/etc/foiled/host.key"
 state_dir = "/var/lib/foiled"

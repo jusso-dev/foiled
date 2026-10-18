@@ -24,6 +24,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         "0003_link_overrides",
         include_str!("../../../migrations/postgres/0003_link_overrides.sql"),
     ),
+    (
+        "0004_capture_events_source_key",
+        include_str!("../../../migrations/postgres/0004_capture_events_source_key.sql"),
+    ),
 ];
 
 /// Arbitrary constant key for the migration advisory lock.
@@ -174,7 +178,8 @@ fn audit_from_row(row: &Row) -> Option<AuditRecord> {
 }
 
 /// Insert stamped envelopes. Returns how many were new; replays of an
-/// `event_id` already stored are ignored (Queue delivery is at least once).
+/// `event_id` already stored for the same sending identity are ignored (Queue
+/// delivery is at least once).
 /// Events without a stamped source or tenant are refused: they never came
 /// through the ingest API.
 pub async fn insert_events(
@@ -188,7 +193,7 @@ pub async fn insert_events(
                 channel, severity, src_ip, attempt_id, payload_ref, source_kind, source_id, body,
                 received_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text::inet, $10, $11, $12, $13, $14, $15)
-             ON CONFLICT (tenant_id, event_id) DO NOTHING",
+             ON CONFLICT (tenant_id, source_kind, source_id, event_id) DO NOTHING",
         )
         .await?;
     let mut inserted = 0;

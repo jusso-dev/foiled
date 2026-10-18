@@ -10,7 +10,7 @@ Each ADR lives in `docs/adr/NNNN-slug.md` and has the sections Status, Context, 
 | [0004](0004-image-builder.md) | [Image builder](0004-image-builder.md) | Accepted (18 Oct 2026) | #6 |
 | [0005](0005-capture-layer.md) | [Capture layer](0005-capture-layer.md) | Accepted (18 Oct 2026) | #9 |
 | [0006](0006-emulation-plugins.md) | [Emulation plug-ins and decoy modules](0006-emulation-plugins.md) | Accepted (18 Oct 2026) | #30 |
-| 0007 | Edge ingest | Planned | #31 |
+| [0007](0007-edge-ingest.md) | [Edge ingest: enrolment, mTLS identity, signed builds and tenancy](0007-edge-ingest.md) | Accepted (18 Oct 2026) | #31 |
 | [0008](0008-sandbox-host-agent.md) | [Sandbox host agent](0008-sandbox-host-agent.md) | Accepted (18 Oct 2026) | #41 |
 | [0009](0009-axum-workers-and-front-end.md) | [Axum on Workers and front end](0009-axum-workers-and-front-end.md) | Accepted (17 Oct 2026) | #40 |
 | [0010](0010-llm-provider-and-ai-gateway.md) | [LLM provider and AI Gateway](0010-llm-provider-and-ai-gateway.md) | Accepted (18 Oct 2026) | #28 |

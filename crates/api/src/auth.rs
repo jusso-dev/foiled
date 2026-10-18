@@ -28,6 +28,33 @@ pub struct ClientCert {
     pub sha256: String,
 }
 
+/// Where the request came from, copied by the Worker from
+/// `CF-Connecting-IP` and `cf.asn`. Used for enrolment rate limits and the
+/// sensor network-change flag (#31). Absent in tests unless set.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClientMeta {
+    pub ip: Option<String>,
+    pub asn: Option<u32>,
+}
+
+/// Extractor for [`ClientMeta`]; empty when the extension is missing.
+#[derive(Debug, Clone, Default)]
+pub struct Meta(pub ClientMeta);
+
+impl<S: Send + Sync> FromRequestParts<S> for Meta {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(Meta(
+            parts
+                .extensions
+                .get::<ClientMeta>()
+                .cloned()
+                .unwrap_or_default(),
+        ))
+    }
+}
+
 /// Split `fo_<id>.<secret>` into its parts.
 pub fn parse_token(raw: &str) -> Option<(&str, &str)> {
     let rest = raw.strip_prefix(TOKEN_PREFIX)?;
@@ -103,7 +130,14 @@ impl FromRequestParts<AppState> for Auth {
                 .identity_by_cert(&cert.sha256)
                 .await?
                 .ok_or_else(ApiError::unauthorised)?;
-            if rec.revoked {
+            // A retired certificate (after renewal or re-enrolment) stops at
+            // `valid_until`; a revoked one stops at once.
+            // The stored certificate expiry is checked too, as defence in
+            // depth beyond Cloudflare's `certVerified`.
+            if rec.revoked
+                || rec.valid_until.is_some_and(|v| v <= now)
+                || rec.expires_at.is_some_and(|e| e <= now)
+            {
                 return Err(ApiError::unauthorised());
             }
             return Ok(Auth(Principal::new(

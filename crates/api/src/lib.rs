@@ -19,6 +19,7 @@ pub mod auth;
 pub mod catalogue;
 pub mod d1_sql;
 pub mod error;
+pub mod issuer;
 pub mod links;
 pub mod mcp;
 pub mod memory;
@@ -45,6 +46,17 @@ pub struct Limits {
     pub job_ttl_secs: i64,
     /// How long a lease holds before another lease may take the job.
     pub job_lease_secs: i64,
+    /// Sensor and host registrations (each mints an enrolment token) per
+    /// principal per hour (#31).
+    pub enrolments_per_hour: u32,
+    /// `POST /v0/enrol` attempts per source IP per hour.
+    pub enrol_attempts_per_hour: u32,
+    /// Certificate renewals per identity per day.
+    pub renewals_per_day: u32,
+    /// Ingest batches per host or sensor identity per minute.
+    pub ingest_batches_per_minute: u32,
+    /// Lifetime of issued client certificates.
+    pub cert_validity_days: u32,
 }
 
 impl Default for Limits {
@@ -57,6 +69,11 @@ impl Default for Limits {
             max_lifetime_secs: 7 * 24 * 3600,
             job_ttl_secs: 3600,
             job_lease_secs: 300,
+            enrolments_per_hour: 10,
+            enrol_attempts_per_hour: 30,
+            renewals_per_day: 4,
+            ingest_batches_per_minute: 120,
+            cert_validity_days: foiled_core::enrolment::DEFAULT_CERT_VALIDITY_DAYS,
         }
     }
 }
@@ -79,6 +96,8 @@ pub struct AppState {
     pub job_signer: Option<Arc<foiled_core::agent::JobSigner>>,
     /// MCP endpoint settings (`configs/mcp.yaml`, #24).
     pub mcp: Arc<foiled_core::mcp::McpConfig>,
+    /// Signs enrolment CSRs; `None` disables enrolment and renewal (#31).
+    pub cert_issuer: Option<Arc<dyn issuer::CertIssuer>>,
 }
 
 impl AppState {
@@ -92,6 +111,7 @@ impl AppState {
             uploads: None,
             job_signer: None,
             mcp: Arc::new(mcp::bundled_config()),
+            cert_issuer: None,
         }
     }
 }
@@ -124,6 +144,7 @@ fn rest_routes() -> Router<AppState> {
         .nest("/v0/audit", routes::audit::router())
         .merge(routes::ingest::router())
         .merge(routes::hosts::router())
+        .merge(routes::agents::router())
         .merge(routes::exports::router())
         .merge(routes::attempts::router())
         .merge(routes::iocs::router())

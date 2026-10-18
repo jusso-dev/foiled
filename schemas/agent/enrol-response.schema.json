@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/agent/enrol-response.schema.json",
+  "title": "Foiled enrolment or renewal result",
+  "description": "The identity bound to a newly issued client certificate (#31). Scopes are fixed by role.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent_id", "tenant_id", "role", "scopes", "certificate_pem", "cert_sha256", "issued_at", "expires_at"],
+  "properties": {
+    "agent_id": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "role": { "type": "string", "enum": ["host", "sensor"] },
+    "scopes": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["host:lease", "host:report", "host:ingest", "host:upload", "sensor:lease", "sensor:report", "sensor:ingest", "sensor:upload"] }
+    },
+    "certificate_pem": { "type": "string", "pattern": "-----BEGIN CERTIFICATE-----" },
+    "cert_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "issued_at": { "type": "integer" },
+    "expires_at": { "type": "integer" }
+  }
+}

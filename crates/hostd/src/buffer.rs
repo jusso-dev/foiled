@@ -1,5 +1,6 @@
 //! Local buffer for capture envelopes while the control plane is
-//! unreachable (#41, same semantics as edge sensors in #31).
+//! unreachable (#41), shared by edge sensors (#31, ADR 0007). Default cap:
+//! 1 GiB on a research host, 256 MiB on an edge sensor.
 //!
 //! Segments of JSON lines under `<state_dir>/buffer/`. When the total size
 //! passes the cap, whole oldest segments are dropped and counted. Delivery
@@ -72,6 +73,12 @@ impl OfflineBuffer {
     /// Events dropped because the buffer was full, since this process started.
     pub fn dropped(&self) -> u64 {
         self.dropped
+    }
+
+    /// Count events dropped for another reason, for example refused by
+    /// ingest as invalid, so heartbeats show every loss.
+    pub fn note_dropped(&mut self, n: u64) {
+        self.dropped += n;
     }
 
     pub fn len(&self) -> std::io::Result<u64> {

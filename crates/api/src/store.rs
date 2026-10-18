@@ -16,8 +16,9 @@ use std::pin::Pin;
 use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::CaptureEvent;
-use foiled_core::decoy::{Decoy, DecoyState};
+use foiled_core::decoy::{Decoy, DecoyState, Reason};
 use foiled_core::enrichment::{Observable, ObservedFacts};
+use foiled_core::enrolment::{AgentRecord, SeenFrom};
 use serde::{Deserialize, Serialize};
 
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>;
@@ -44,7 +45,8 @@ pub struct TokenRecord {
     pub revoked: bool,
 }
 
-/// A sandbox host or edge sensor known by its client certificate.
+/// A sandbox host or edge sensor known by its client certificate. One row
+/// per certificate: during a renewal an identity briefly has two.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentityRecord {
     pub id: String,
@@ -54,6 +56,47 @@ pub struct IdentityRecord {
     /// Lowercase hex SHA-256 fingerprint of the client certificate.
     pub cert_sha256: String,
     pub revoked: bool,
+    /// After a renewal or re-enrolment, the old certificate stops working
+    /// at this time (Unix ms). `None` while it is the current one.
+    pub valid_until: Option<i64>,
+    /// The certificate's own expiry (Unix ms), when known. Checked as well
+    /// as Cloudflare's `certVerified`.
+    pub expires_at: Option<i64>,
+}
+
+/// A one-time enrolment token (#31). Only the SHA-256 of the secret is
+/// stored; the token itself is shown to the operator once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnrolmentTokenRecord {
+    pub id: String,
+    pub tenant_id: String,
+    pub agent_id: String,
+    pub role: Role,
+    pub secret_sha256: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub created_by: String,
+    pub used_at: Option<i64>,
+}
+
+/// A certificate the CA just issued, to bind to an agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewCert {
+    pub cert_sha256: String,
+    /// The CA's id for the certificate, used to revoke it there.
+    pub issuer_ref: Option<String>,
+    pub issued_at: i64,
+    pub expires_at: i64,
+}
+
+/// An identity's certificates: fingerprint and CA reference, if any.
+pub type AgentCerts = Vec<(String, Option<String>)>;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentQuery {
+    pub limit: usize,
+    /// Return agents created strictly before this id in list order.
+    pub cursor: Option<String>,
 }
 
 /// Work for a sandbox host agent (#41). Created by the API, leased and
@@ -164,8 +207,9 @@ pub trait Store: Send + Sync {
     fn enqueue_events(&self, events: Vec<CaptureEvent>) -> StoreFuture<'_, ()>;
 
     /// Lease up to `limit` jobs for a host: queued jobs already for this host
-    /// or not yet placed, plus leases that have lapsed. Unplaced jobs (and
-    /// their decoys) are assigned to the host. Expired jobs are never leased.
+    /// or (when `take_unplaced`) not yet placed, plus leases that have
+    /// lapsed. Unplaced jobs (and their decoys) are assigned to the host.
+    /// Expired jobs are never leased. Edge sensors never take unplaced work.
     fn lease_jobs(
         &self,
         tenant_id: &str,
@@ -173,6 +217,7 @@ pub trait Store: Send + Sync {
         now: i64,
         lease_ms: i64,
         limit: usize,
+        take_unplaced: bool,
     ) -> StoreFuture<'_, Vec<JobRecord>>;
 
     /// Close a job leased by `host_id`. Returns the job, or `None` when it is
@@ -237,6 +282,77 @@ pub trait Store: Send + Sync {
         host_id: &str,
         heartbeat: serde_json::Value,
         clock_skew_ms: i64,
+        now: i64,
+    ) -> StoreFuture<'_, ()>;
+
+    // Enrolment and the sensor and host registry (#31).
+
+    /// Register an agent and its first enrolment token together.
+    fn create_agent(&self, agent: AgentRecord, token: EnrolmentTokenRecord) -> StoreFuture<'_, ()>;
+
+    fn get_agent(
+        &self,
+        tenant_id: &str,
+        role: Role,
+        id: &str,
+    ) -> StoreFuture<'_, Option<AgentRecord>>;
+
+    /// Newest first.
+    fn list_agents(
+        &self,
+        tenant_id: &str,
+        role: Role,
+        q: AgentQuery,
+    ) -> StoreFuture<'_, Vec<AgentRecord>>;
+
+    /// Store a new enrolment token for an agent, invalidating any unused one.
+    fn replace_enrolment_token(&self, token: EnrolmentTokenRecord, now: i64)
+    -> StoreFuture<'_, ()>;
+
+    fn enrolment_token(&self, id: &str) -> StoreFuture<'_, Option<EnrolmentTokenRecord>>;
+
+    /// Mark a token used if it is unused and unexpired. True only for the
+    /// one call that consumed it, so a token can never be redeemed twice.
+    fn consume_enrolment_token(&self, id: &str, now: i64) -> StoreFuture<'_, bool>;
+
+    /// Undo [`Store::consume_enrolment_token`] after the CA failed to
+    /// issue, so the token can be retried. Only reopens a token still
+    /// marked used at `claimed_at` whose agent is not revoked.
+    fn release_enrolment_token(&self, id: &str, claimed_at: i64) -> StoreFuture<'_, ()>;
+
+    /// Bind a certificate to a pending or active agent and mark it active.
+    /// The agent's other live certificates stop working at `retire_at`.
+    /// Returns false, binding nothing, if the agent is missing or revoked.
+    fn bind_certificate(
+        &self,
+        tenant_id: &str,
+        role: Role,
+        agent_id: &str,
+        cert: NewCert,
+        retire_at: i64,
+        now: i64,
+    ) -> StoreFuture<'_, bool>;
+
+    /// Revoke an agent, every certificate it holds and any unused token.
+    /// Returns each certificate's fingerprint and CA reference (`None` for
+    /// certificates issued outside `/v0/enrol`), or `None` if there is no
+    /// such agent.
+    fn revoke_agent(
+        &self,
+        tenant_id: &str,
+        role: Role,
+        agent_id: &str,
+        reason: Reason,
+        now: i64,
+    ) -> StoreFuture<'_, Option<AgentCerts>>;
+
+    /// Record where an agent was last seen from.
+    fn record_agent_seen(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        seen: SeenFrom,
+        network_changed: bool,
         now: i64,
     ) -> StoreFuture<'_, ()>;
 }

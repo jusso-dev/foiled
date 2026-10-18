@@ -34,6 +34,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [contribute-back.md](contribute-back.md) | Sharing with DShield, CrowdSec and SentryPeer, delayed public IOCs, opt-in defaults and what is never shared. |
 | [deploy/modes.md](deploy/modes.md) | Deployment modes (research, edge, central) and the MVP topology. |
 | [deploy/vps.md](deploy/vps.md) | Bringing up a research sensor on a VPS. |
+| [deploy/edge-sensor.md](deploy/edge-sensor.md) | Edge sensors (#31): roles side by side, Cloudflare mTLS and WAF setup, enrolment, renewal and revocation step by step, placing decoys, offline buffer defaults and test plan, signed builds, tenancy rules and the compromise tabletop. Decision record: [ADR 0007](adr/0007-edge-ingest.md). |
 | [instrumentation.md](instrumentation.md) | Vulnerable-path hooks: kinds, manifest, event fields, sandbox and emulator wiring, post-exploit capture and redaction. |
 | [attack-mapping.md](attack-mapping.md) | MITRE ATT&CK mapping: the pinned version and update process, mapping rules, the technique link object, and how links feed confidence, STIX export and the console. |
 | [enrichment.md](enrichment.md) | Enrichment providers, the Fact schema, the async `foiled-enrich` pipeline and D1 cache, YARA on quarantine, and the never-resell rule. |
@@ -48,7 +49,5 @@ These docs do not exist yet. Each is owned by the issue listed.
 
 | Path | What it will cover | Issue |
 | --- | --- | --- |
-| Remaining ADRs | One file per decision under `docs/adr/` (`NNNN-slug.md`). | #31 |
-| `docs/deploy/edge-sensor.md` | Enrolling and running an edge sensor. | #31 |
 | `docs/radar.md` | Radar feed, review queue and research write-ups. | #35 |
 | `docs/compliance/licence-register.md` | Licence and data-terms compliance register. | #38 |

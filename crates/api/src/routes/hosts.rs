@@ -1,11 +1,14 @@
-//! Sandbox host agent channel (#41, ADR 0008). mTLS identities only.
+//! Agent channel for sandbox hosts (#41, ADR 0008) and edge sensors (#31,
+//! ADR 0007). mTLS identities only.
 //!
-//! - `POST /v0/hosts/{host_id}/jobs:lease`: signed jobs for this host.
-//! - `POST /v0/hosts/{host_id}/jobs/{job_id}:ack`: the result of a job.
-//! - `POST /v0/hosts/{host_id}/heartbeat`: host health.
+//! - `POST /v0/{hosts|sensors}/{id}/jobs:lease`: signed jobs for this agent.
+//! - `POST /v0/{hosts|sensors}/{id}/jobs/{job_id}:ack`: the result of a job.
+//! - `POST /v0/{hosts|sensors}/{id}/heartbeat`: health, and for enrolled
+//!   agents where the request came from.
 //!
-//! A host certificate can only act as itself: the path's host id must be the
-//! certificate's identity, and it only sees jobs placed on it.
+//! A certificate can only act as itself: the path's id must be the
+//! certificate's identity, the role must match the path family, and it only
+//! sees jobs placed on it. Edge sensors never take unplaced jobs.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -13,30 +16,85 @@ use axum::routing::post;
 use axum::{Json, Router};
 use foiled_core::agent::{Heartbeat, JobBody, JobKind, JobOutcome, JobResult, SignedJob};
 use foiled_core::audit::Outcome;
-use foiled_core::auth::{Principal, Scope};
+use foiled_core::auth::{Principal, Role, Scope};
 use foiled_core::decoy::{DecoyState, Reason, ReasonCode};
+use foiled_core::enrolment::{SeenFrom, network_changed};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::auth::Auth;
+use crate::auth::{Auth, ClientMeta, Meta};
 use crate::error::{ApiError, JsonBody};
 use crate::routes::audit_record;
 use crate::store::JobRecord;
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/v0/hosts/{host_id}/jobs:lease", post(lease))
-        .route("/v0/hosts/{host_id}/jobs/{job_action}", post(ack))
-        .route("/v0/hosts/{host_id}/heartbeat", post(heartbeat))
+/// One family of agents on the channel.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Family {
+    pub role: Role,
+    pub lease: Scope,
+    pub report: Scope,
+    /// Research hosts pick up unplaced work; edge sensors only run what was
+    /// placed on them.
+    pub take_unplaced: bool,
+    pub noun: &'static str,
+    pub wrong_self: &'static str,
 }
 
-fn as_self<'a>(auth: &'a Auth, scope: Scope, host_id: &str) -> Result<&'a Principal, ApiError> {
+pub(crate) const HOSTS: Family = Family {
+    role: Role::Host,
+    lease: Scope::HostLease,
+    report: Scope::HostReport,
+    take_unplaced: true,
+    noun: "host",
+    wrong_self: "wrong_host",
+};
+
+pub(crate) const SENSORS: Family = Family {
+    role: Role::Sensor,
+    lease: Scope::SensorLease,
+    report: Scope::SensorReport,
+    take_unplaced: false,
+    noun: "sensor",
+    wrong_self: "wrong_sensor",
+};
+
+pub fn router() -> Router<AppState> {
+    let mut r = Router::new();
+    for (prefix, param, f) in [
+        ("hosts", "host_id", HOSTS),
+        ("sensors", "sensor_id", SENSORS),
+    ] {
+        r = r
+            .route(
+                &format!("/v0/{prefix}/{{{param}}}/jobs:lease"),
+                post(move |s, a, m, p, q| lease(f, s, a, m, p, q)),
+            )
+            .route(
+                &format!("/v0/{prefix}/{{{param}}}/jobs/{{job_action}}"),
+                post(move |s, a, m, p, b| ack(f, s, a, m, p, b)),
+            )
+            .route(
+                &format!("/v0/{prefix}/{{{param}}}/heartbeat"),
+                post(move |s, a, m, p, b| heartbeat(f, s, a, m, p, b)),
+            );
+    }
+    r
+}
+
+/// The caller holds `scope` (so its role is the family's) and the path
+/// names the caller itself.
+pub(crate) fn as_self<'a>(
+    auth: &'a Auth,
+    f: Family,
+    scope: Scope,
+    id: &str,
+) -> Result<&'a Principal, ApiError> {
     let who = auth.require(scope)?;
-    if who.id != host_id {
+    if who.role != f.role || who.id != id {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
-            "wrong_host",
-            "a host may only act as itself",
+            f.wrong_self,
+            format!("a {} may only act as itself", f.noun),
         ));
     }
     Ok(who)
@@ -63,12 +121,15 @@ fn reason_of(job: &JobRecord) -> Option<Reason> {
 }
 
 async fn lease(
+    f: Family,
     State(state): State<AppState>,
     auth: Auth,
+    Meta(meta): Meta,
     Path(host_id): Path<String>,
     Query(q): Query<LeaseQuery>,
 ) -> Result<Json<Leased>, ApiError> {
-    let who = as_self(&auth, Scope::HostLease, &host_id)?.clone();
+    let who = as_self(&auth, f, f.lease, &host_id)?.clone();
+    note_seen(&state, &who, &meta, false).await?;
     let signer = state.job_signer.clone().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -86,6 +147,7 @@ async fn lease(
             now,
             lease_ms,
             q.max.unwrap_or(10).clamp(1, 50),
+            f.take_unplaced,
         )
         .await?;
     let mut signed = Vec::with_capacity(jobs.len());
@@ -117,12 +179,15 @@ async fn lease(
 }
 
 async fn ack(
+    f: Family,
     State(state): State<AppState>,
     auth: Auth,
+    Meta(meta): Meta,
     Path((host_id, job_action)): Path<(String, String)>,
     JsonBody(result): JsonBody<JobResult>,
 ) -> Result<StatusCode, ApiError> {
-    let who = as_self(&auth, Scope::HostReport, &host_id)?.clone();
+    let who = as_self(&auth, f, f.report, &host_id)?.clone();
+    note_seen(&state, &who, &meta, false).await?;
     let job_id = job_action
         .strip_suffix(":ack")
         .ok_or_else(|| ApiError::not_found("action"))?;
@@ -213,12 +278,14 @@ async fn ack(
 }
 
 async fn heartbeat(
+    f: Family,
     State(state): State<AppState>,
     auth: Auth,
+    Meta(meta): Meta,
     Path(host_id): Path<String>,
     JsonBody(hb): JsonBody<Heartbeat>,
 ) -> Result<StatusCode, ApiError> {
-    let who = as_self(&auth, Scope::HostReport, &host_id)?.clone();
+    let who = as_self(&auth, f, f.report, &host_id)?.clone();
     if hb.host_id != who.id {
         return Err(ApiError::bad_request("host_id in the body does not match"));
     }
@@ -229,5 +296,61 @@ async fn heartbeat(
         .store
         .record_heartbeat(&who.tenant_id, &who.id, value, skew, now)
         .await?;
+    note_seen(&state, &who, &meta, true).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// How stale `last_seen_at` may get before a request without a network
+/// change refreshes it. Keeps the common path to one registry read.
+const SEEN_REFRESH_MS: i64 = 5 * 60 * 1000;
+
+/// Remember where an enrolled host or sensor calls from, and flag a move to
+/// another network: a copied certificate in use elsewhere looks like this.
+/// Called from every authenticated agent route (lease, ack, heartbeat,
+/// ingest, uploads, renewal). Writes only when the network changed, when
+/// `always` (heartbeats), or when the last sighting is stale.
+pub(crate) async fn note_seen(
+    state: &AppState,
+    who: &Principal,
+    meta: &ClientMeta,
+    always: bool,
+) -> Result<(), ApiError> {
+    if !matches!(who.role, Role::Host | Role::Sensor) {
+        return Ok(());
+    }
+    let Some(agent) = state
+        .store
+        .get_agent(&who.tenant_id, who.role, &who.id)
+        .await?
+    else {
+        return Ok(());
+    };
+    let now = (state.clock)();
+    let prev = SeenFrom {
+        ip: agent.last_ip.clone(),
+        asn: agent.last_asn,
+    };
+    // Without request metadata (tests, local mock) keep what we knew.
+    let seen = SeenFrom {
+        ip: meta.ip.clone().or(prev.ip.clone()),
+        asn: meta.asn.or(prev.asn),
+    };
+    let changed = network_changed(&prev, &seen);
+    let stale = agent
+        .last_seen_at
+        .is_none_or(|t| now - t >= SEEN_REFRESH_MS);
+    if !(changed || always || stale || seen != prev) {
+        return Ok(());
+    }
+    state
+        .store
+        .record_agent_seen(&who.tenant_id, &who.id, seen.clone(), changed, now)
+        .await?;
+    if changed {
+        let action = format!("{}.network_changed", who.role.as_str());
+        let mut rec = audit_record(state, who, &action, Some(&who.id), Outcome::Accepted);
+        rec.detail = serde_json::json!({"from": prev, "to": seen});
+        state.store.append_audit(rec).await?;
+    }
+    Ok(())
 }

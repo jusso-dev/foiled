@@ -85,9 +85,10 @@ scopes! {
     HostReport => "host:report",
     HostIngest => "host:ingest",
     HostUpload => "host:upload",
+    SensorLease => "sensor:lease",
+    SensorReport => "sensor:report",
     SensorIngest => "sensor:ingest",
     SensorUpload => "sensor:upload",
-    SensorHeartbeat => "sensor:heartbeat",
 }
 
 impl Serialize for Scope {
@@ -126,6 +127,27 @@ impl Scope {
             Role::Human => !name.starts_with("host:") && !name.starts_with("sensor:"),
             Role::Mcp => MCP_SCOPES.contains(&self),
         }
+    }
+}
+
+/// The scopes an enrolled certificate identity gets (#31). They are fixed by
+/// role and never taken from a request: hosts and sensors hold the same four
+/// capabilities, each in their own family.
+pub fn agent_scopes(role: Role) -> Vec<Scope> {
+    match role {
+        Role::Host => vec![
+            Scope::HostLease,
+            Scope::HostReport,
+            Scope::HostIngest,
+            Scope::HostUpload,
+        ],
+        Role::Sensor => vec![
+            Scope::SensorLease,
+            Scope::SensorReport,
+            Scope::SensorIngest,
+            Scope::SensorUpload,
+        ],
+        Role::Human | Role::Mcp => vec![],
     }
 }
 
@@ -230,6 +252,19 @@ mod tests {
         let a = Principal::new("agent", Role::Mcp, "t1", [Scope::Admin]);
         assert!(a.scopes.is_empty());
         assert!(!a.has(Scope::DecoysRead));
+    }
+
+    #[test]
+    fn agent_scopes_stay_in_their_family() {
+        for role in [Role::Host, Role::Sensor] {
+            let scopes = agent_scopes(role);
+            assert_eq!(scopes.len(), 4);
+            assert!(scopes.iter().all(|s| s.allowed_for(role)), "{role:?}");
+            let p = Principal::new("x", role, "t1", scopes.clone());
+            assert_eq!(p.scopes.len(), 4, "nothing dropped");
+            assert!(!p.has(Scope::Admin) && !p.has(Scope::SensorsWrite));
+        }
+        assert!(agent_scopes(Role::Human).is_empty());
     }
 
     #[test]

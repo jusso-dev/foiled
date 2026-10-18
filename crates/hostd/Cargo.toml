@@ -16,6 +16,7 @@ path = "src/main.rs"
 foiled-core = { path = "../core" }
 fs4 = "1.1"
 hex = "0.4"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
 serde.workspace = true
 serde_json.workspace = true

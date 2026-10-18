@@ -1,0 +1,20 @@
+{
+  "id": "sen-0001",
+  "tenant_id": "t1",
+  "role": "sensor",
+  "label": "Branch office emulation sensor",
+  "status": "active",
+  "sandbox_allowed": false,
+  "share_opt_in": null,
+  "created_at": 1799999000000,
+  "created_by": "tok-admin",
+  "enrolled_at": 1800000000000,
+  "cert_sha256": "fcaa13fdeea972bb2cb5e2cdfd3ef57503e43ea0b5c512ae0d528ee8c8d44c8c",
+  "cert_expires_at": 1807776000000,
+  "last_seen_at": 1800000300000,
+  "last_ip": "198.51.100.20",
+  "last_asn": 64500,
+  "network_changed_at": null,
+  "revoked_at": null,
+  "revoke_reason": null
+}

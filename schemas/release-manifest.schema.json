@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/release-manifest.schema.json",
+  "title": "Foiled release manifest",
+  "description": "The signed body of a foiled-hostd release (#31, threat model C29). Published as {body, sig, key_id}, where body is this document as JSON text and sig is a hex Ed25519 signature over its UTF-8 bytes by an offline release key. Agents verify the signature, the product, a strictly newer version and the artefact digest before staging an update.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "product", "version", "released_at", "artefacts"],
+  "properties": {
+    "kind": { "const": "foiled.release.v1" },
+    "product": { "type": "string", "enum": ["foiled-hostd"] },
+    "version": { "type": "string", "pattern": "^[0-9]{1,9}\\.[0-9]{1,9}\\.[0-9]{1,9}$" },
+    "released_at": { "type": "integer", "description": "Unix ms." },
+    "artefacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target", "file", "sha256", "size"],
+        "properties": {
+          "target": { "type": "string", "pattern": "^[a-z0-9_]+(-[a-z0-9_]+){2,3}$" },
+          "file": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "size": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

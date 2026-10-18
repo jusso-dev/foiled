@@ -196,21 +196,38 @@ impl TrustedKeys {
         Ok(())
     }
 
-    /// Check the signature, then parse. Nothing in `body` is looked at
-    /// before the signature verifies.
-    pub fn verify(&self, job: &SignedJob) -> Result<JobBody, VerifyError> {
+    /// Whether no key is trusted at all.
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// Check a hex Ed25519 signature by the key named `key_id` over `body`.
+    /// Shared by signed jobs and signed release manifests (#31); the two use
+    /// different key sets, so one can never stand in for the other.
+    pub fn verify_bytes(
+        &self,
+        key_id: &str,
+        body: &[u8],
+        sig_hex: &str,
+    ) -> Result<(), VerifyError> {
         let key = self
             .keys
             .iter()
-            .find(|(id, _)| id == &job.key_id)
+            .find(|(id, _)| id == key_id)
             .map(|(_, k)| k)
-            .ok_or_else(|| VerifyError::UnknownKey(job.key_id.clone()))?;
-        let raw: [u8; 64] = hex::decode(&job.sig)
+            .ok_or_else(|| VerifyError::UnknownKey(key_id.to_string()))?;
+        let raw: [u8; 64] = hex::decode(sig_hex)
             .map_err(|_| VerifyError::BadSignatureEncoding)?
             .try_into()
             .map_err(|_| VerifyError::BadSignatureEncoding)?;
-        key.verify(job.body.as_bytes(), &Signature::from_bytes(&raw))
-            .map_err(|_| VerifyError::BadSignature)?;
+        key.verify(body, &Signature::from_bytes(&raw))
+            .map_err(|_| VerifyError::BadSignature)
+    }
+
+    /// Check the signature, then parse. Nothing in `body` is looked at
+    /// before the signature verifies.
+    pub fn verify(&self, job: &SignedJob) -> Result<JobBody, VerifyError> {
+        self.verify_bytes(&job.key_id, job.body.as_bytes(), &job.sig)?;
         serde_json::from_str(&job.body).map_err(|e| VerifyError::BadBody(e.to_string()))
     }
 }
