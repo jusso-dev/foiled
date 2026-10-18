@@ -21,8 +21,7 @@ import { levelFor, linkSentence } from "../lib/links";
 import { toPrintable } from "../lib/printable";
 import type { Route } from "./+types/actors";
 
-// TODO(#29): /v0/actor-links is not on main yet. This page follows PR #83
-// (docs/actor-attribution.md there). Every link is a "possible association"
+// Actor possible-associations (#29, docs/actor-attribution.md). Every link is a "possible association"
 // with a public nexus, cluster or group until an analyst confirms it; the
 // console shows the API's own `statement` and never words one as attribution.
 

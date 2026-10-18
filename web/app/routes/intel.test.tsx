@@ -100,9 +100,14 @@ describe("campaigns", () => {
       ...campaign,
       suggested_actor_links: [
         {
+          link_id: "acl_000000000000000000000001",
+          actor_id: "report:example-cluster-07",
           label: "Example Cluster 7",
           wording: "possible association",
-          confidence_ref: "/x",
+          score: 35,
+          band: "low",
+          status: "pending",
+          confidence_ref: "/v0/actor-links/acl_000000000000000000000001",
           report_urls: ["https://example.invalid/report", "javascript:alert(1)"],
         },
       ],

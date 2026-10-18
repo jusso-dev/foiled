@@ -491,16 +491,16 @@ export interface PossibleLink {
   signal_ids: string[];
 }
 
-/** `Campaign.suggested_actor_links`. The #29 fields are optional until #29 (PR #83) lands. */
+/** `Campaign.suggested_actor_links` (#29). */
 export interface ActorLink {
-  link_id?: string;
-  actor_id?: string;
+  link_id: string;
+  actor_id: string;
   /** A public nexus, cluster or group label (#29). */
   label: string;
   wording: "possible association" | "confirmed association";
-  score?: number;
-  band?: Band;
-  status?: "pending" | "confirmed";
+  score: number;
+  band: Band;
+  status: "pending" | "confirmed";
   confidence_ref: string;
   report_urls: string[];
 }
@@ -857,8 +857,7 @@ export interface RadarFeed {
 
 // ---------- Actor possible-associations (#29) ----------
 //
-// TODO(#29): `/v0/actor-links` and `/v0/actors` are not on main yet. Shapes
-// follow PR #83 (schemas/actor-link.schema.json there).
+// `/v0/actor-links` (docs/actor-attribution.md, schemas/actor-link.schema.json).
 
 export interface ActorLinkRecord {
   link_id: string;

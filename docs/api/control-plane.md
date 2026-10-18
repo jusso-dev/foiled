@@ -46,7 +46,7 @@ Bearer tokens are `fo_<id>.<secret>`. D1 stores only the SHA-256 of the secret, 
 
 | Consumer | Needs | Status |
 | --- | --- | --- |
-| Dashboard (#14) | Catalogue, decoys, attempts, links, review queue, campaigns, IOCs, exports, events | Served except quarantine (#9) and events, and the review queue, write-ups, radar (#35) and actor links (#29) until their pull requests merge; the console says "not served yet" for those ([console.md](../ui/console.md#api-coverage)) |
+| Dashboard (#14) | Catalogue, decoys, attempts, links, review queue, campaigns, IOCs, exports, events | Served except quarantine (#9) and events, and the review queue, write-ups and radar (#35) until its pull request merges; the console says "not served yet" for those ([console.md](../ui/console.md#api-coverage)) |
 | MCP (#24) | Create, list, get, reset, destroy, query attempts, events, audit | Served at `POST /v0/mcp` as a pure client of these routes ([foiled-mcp.md](../mcp/foiled-mcp.md)) |
 | Sensors (#31) and hosts (#41) | Registry, enrolment, renewal, revocation, heartbeat, job lease and ack, uploads, ingest | Served |
 | IOCs (#34) | Search, get, per attempt | Served ([iocs.md](../iocs.md)) |

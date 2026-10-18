@@ -42,7 +42,7 @@ This is the list the issue asks to match against #21, #25, #33, #34 and #35.
 | Hosts and sensors | #31, #41 | Served | Served |
 | Exports | #13 | IOC CSV served; IOC JSON, STIX and MISP downloads in the #13 pull request | All formats in the form; unserved ones report "not served yet" |
 | Review queue, write-ups, radar | #35 | In PR #84, not on `main` yet | Built against PR #84's API and schemas, checked against copies of its golden output (`web/app/test/pr/`); marked `TODO(#35)` |
-| Actor associations | #29 | In PR #83, not on `main` yet | Built against PR #83's API and `actor-link` schema; marked `TODO(#29)`. Campaigns and attempt links show any actor links the API returns, always "possible association" |
+| Actor associations | #29 | Served ([actor-attribution.md](../actor-attribution.md)) | Served; campaigns and attempt links show actor links the API returns, always "possible association" |
 | Quarantine list and download | #9, #14 | Planned | Built against the proposal in `api-types.ts` (marked `TODO`), downloads off by default |
 | Live event stream, `GET /v0/events` | #14 | Planned | Polling backfill now; see [Live feed](#live-feed) |
 
@@ -192,7 +192,7 @@ The operator radar is trusted side only; the console has no public radar. It sho
 
 ## Actor associations
 
-Each link from PR #83's matcher shows the API's own `statement` (the only sentence the API allows for it), the label and whether it is a nexus, cluster or named group, the score as "possible association" (only "confirmed association" after an analyst confirms), what matched (techniques with rarity, indicators shown defanged, targeting), what was not counted, and the public sources with publisher, date and licence. Confirm needs a note; reject and reopen are recorded too, all audited by the API. Example data is labelled. Campaign pages link to the actor evidence for that campaign.
+Each link from the #29 matcher shows the API's own `statement` (the only sentence the API allows for it), the label and whether it is a nexus, cluster or named group, the score as "possible association" (only "confirmed association" after an analyst confirms), what matched (techniques with rarity, indicators shown defanged, targeting), what was not counted, and the public sources with publisher, date and licence. Confirm needs a note; reject and reopen are recorded too, all audited by the API. Example data is labelled. Campaign pages link to the actor evidence for that campaign.
 
 ## Campaign detail
 
@@ -286,7 +286,7 @@ Route tests (`web/app/routes/*.test.tsx`) run the real route config, loaders, ac
 
 - `GET /v0/events` and its Durable Object: the polling feed and its reconnect and backfill rules above are what the stream will plug into.
 - The quarantine list and download endpoints in the API (#9, #14 follow-up): the console is built against a proposal and says "not served yet".
-- The review queue, write-up and radar API (#35, PR #84) and actor links (#29, PR #83) are not on `main` yet: the console is built against those pull requests and says "not served yet" until they merge. Swap the copies in `web/app/test/pr/` for imports from `testdata/` and `schemas/` when they do.
+- The review queue, write-up and radar API (#35, PR #84) is not on `main` yet: the console is built against that pull request and says "not served yet" until it merges. Swap the copies in `web/app/test/pr/` for imports from `testdata/` and `schemas/` when they do.
 - Attempt labelling, merge and split (`PATCH /v0/attempts/{id}`, #25, planned).
 - Forwarding the Access JWT to the API Worker: the API does not validate Access tokens yet.
 - Full RBAC, mobile layouts beyond reflow, and MCP (#24) are out of scope for #14.

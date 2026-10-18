@@ -358,7 +358,7 @@ export class ConsoleApi {
     return this.json<RadarFeed>(`/v0/radar${qs(q)}`);
   }
 
-  // Actor possible-associations (#29). TODO(#29): not on main yet; shapes from PR #83.
+  // Actor possible-associations (#29).
   async listActorLinks(q: Record<string, QueryValue> = {}) {
     return this.json<{ items: ActorLinkRecord[]; truncated: boolean }>(`/v0/actor-links${qs(q)}`);
   }

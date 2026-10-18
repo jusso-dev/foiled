@@ -4,6 +4,7 @@
  * is tested against the shapes the API really produces.
  */
 
+import actorLinkJson from "../../../testdata/actors/expected/fleet-wave-00.json";
 import hostPending from "../../../testdata/agent/registry/host-pending.json";
 import sensorActive from "../../../testdata/agent/registry/sensor-active.json";
 import sensorRevoked from "../../../testdata/agent/registry/sensor-revoked.json";
@@ -30,7 +31,6 @@ import type {
   ReviewItem,
   WriteUp,
 } from "../lib/api-types";
-import actorLinkJson from "./pr/actor-link.json";
 import radarJson from "./pr/radar-tenant.json";
 import reviewCve from "./pr/review-cve-link.json";
 import reviewIocPub from "./pr/review-ioc-publication.json";
@@ -155,9 +155,9 @@ export function decoy(over: Partial<Decoy> = {}): Decoy {
 }
 
 /**
- * Review queue, write-up, radar and actor shapes. TODO(#35, #29): copied
- * from the golden output of PR #84 and PR #83 (test/pr/); import them from
- * testdata/ once those land.
+ * Review queue, write-up, radar and actor shapes. TODO(#35): the review,
+ * write-up and radar shapes are copied from PR #84's golden output (test/pr/);
+ * import them from testdata/ once it lands. The actor link is #29's golden output.
  */
 export const reviewItem = as<ReviewItem>(reviewCve);
 export const reviewIoc = as<ReviewItem>(reviewIocPub);

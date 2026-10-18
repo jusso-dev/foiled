@@ -1,6 +1,6 @@
 /**
  * Review queue, write-ups, radar and actor associations, against the API
- * shapes of PR #84 (#35) and PR #83 (#29), using their golden output.
+ * shapes of PR #84 (#35) and #29, using their golden output.
  */
 
 import { describe, expect, it } from "vitest";

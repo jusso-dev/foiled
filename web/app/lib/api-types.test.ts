@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import actorLinkSchema from "../../../schemas/actor-link.schema.json";
 import agentSchema from "../../../schemas/agent/agent-record.schema.json";
 import attemptSchema from "../../../schemas/attempt.schema.json";
 import timelineSchema from "../../../schemas/attempt-timeline.schema.json";
@@ -14,8 +15,7 @@ import actionSchema from "../../../schemas/campaign-action.schema.json";
 import linkSchema from "../../../schemas/confidence-link.schema.json";
 import iocSchema from "../../../schemas/ioc.schema.json";
 import quarantineSchema from "../../../schemas/quarantine-meta.schema.json";
-// TODO(#35, #29): copies from PR #84 and PR #83; import from schemas/ once they land.
-import actorLinkSchema from "../test/pr/actor-link-schema.json";
+// TODO(#35): copies from PR #84; import from schemas/ once it lands.
 import radarSchema from "../test/pr/radar-feed-schema.json";
 import reviewSchema from "../test/pr/review-item-schema.json";
 import writeUpSchema from "../test/pr/write-up-schema.json";
@@ -297,7 +297,7 @@ const CASES: [string, Record<string, true>, { required: string[]; properties: ob
   ["review-item (PR #84)", review, reviewSchema],
   ["write-up (PR #84)", writeUp, writeUpSchema],
   ["radar-feed (PR #84)", radar, radarSchema],
-  ["actor-link (PR #83)", actorLink, actorLinkSchema],
+  ["actor-link", actorLink, actorLinkSchema],
 ];
 
 describe("api-types match the JSON Schemas", () => {
