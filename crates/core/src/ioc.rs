@@ -614,70 +614,123 @@ fn redact_flags(s: &str) -> String {
     out
 }
 
-/// Redact credential arguments of a protocol command by position. `tokens`
-/// is the command, then its subcommand when the capture logs it apart, then
-/// the arguments. Returns whether anything changed.
-fn redact_command(tokens: &mut [String]) -> bool {
-    let up = |t: &[String], i: usize| t.get(i).map(|x| x.to_ascii_uppercase());
+/// Keywords after which the next argument is a credential, for commands
+/// without a rule of their own (an unknown command carrying `AUTH pw` or
+/// `PASSWORD pw`).
+const SECRET_ARG_KEYWORDS: &[&str] = &[
+    "AUTH",
+    "PASS",
+    "PASSWORD",
+    "REQUIREPASS",
+    "MASTERAUTH",
+    "SECRET",
+    "TOKEN",
+    "APIKEY",
+];
+
+fn secret_config_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == "requirepass" || name == "masterauth" || name.ends_with("pass") || secret_key(&name)
+}
+
+/// Positions of credential arguments in a protocol command. `tokens` is
+/// the whole command: the command name at 0, then its subcommand and
+/// arguments, as the client sent them. Shared by IOC extraction and the
+/// Redis emulator (#30) so a captured event and its IOCs hide the same
+/// values.
+///
+/// - `AUTH [user] PW`, `LOGIN [user] PW`: the password (every argument
+///   when the arity is wrong); `PASS PW`: every argument.
+/// - `HELLO ... AUTH user PW`; `MIGRATE ... AUTH PW | AUTH2 user PW`.
+/// - `CONFIG SET name value ...`: values of `requirepass`, `masterauth` and
+///   other secret-named parameters.
+/// - `ACL SETUSER name rule...`: password rules (`>pw`, `<pw`, `#hash`,
+///   `!hash`).
+/// - Any other command: the argument after [`SECRET_ARG_KEYWORDS`] (two
+///   after `AUTH2`), and `name=value` arguments with a secret name.
+pub fn secret_arg_positions<S: AsRef<str>>(tokens: &[S]) -> Vec<usize> {
     let n = tokens.len();
+    let up = |i: usize| tokens.get(i).map(|x| x.as_ref().to_ascii_uppercase());
     let mut hits: Vec<usize> = Vec::new();
-    match up(tokens, 0).as_deref() {
-        // AUTH [user] password, LOGIN [user] password.
-        Some("AUTH" | "LOGIN") if n >= 2 => hits.push(n - 1),
-        Some("PASS") => hits.extend(1..n),
-        // HELLO protover AUTH user password.
+    match up(0).as_deref() {
+        Some("AUTH" | "LOGIN") if n == 2 || n == 3 => hits.push(n - 1),
+        Some("AUTH" | "LOGIN" | "PASS") => hits.extend(1..n),
         Some("HELLO") => {
-            if let Some(i) = (1..n).find(|&i| up(tokens, i).as_deref() == Some("AUTH")) {
+            if let Some(i) = (1..n).find(|&i| up(i).as_deref() == Some("AUTH")) {
                 hits.push(i + 2);
             }
         }
-        // MIGRATE ... AUTH password | AUTH2 user password.
         Some("MIGRATE") => {
             for i in 1..n {
-                match up(tokens, i).as_deref() {
+                match up(i).as_deref() {
                     Some("AUTH") => hits.push(i + 1),
                     Some("AUTH2") => hits.push(i + 2),
                     _ => {}
                 }
             }
         }
-        // CONFIG SET name value [name value ...].
-        Some("CONFIG") if up(tokens, 1).as_deref() == Some("SET") => {
+        Some("CONFIG") if up(1).as_deref() == Some("SET") => {
             let mut i = 2;
             while i + 1 < n {
-                let name = tokens[i].to_ascii_lowercase();
-                if name == "requirepass"
-                    || name == "masterauth"
-                    || name.ends_with("pass")
-                    || secret_key(&name)
-                {
+                if secret_config_name(tokens[i].as_ref()) {
                     hits.push(i + 1);
                 }
                 i += 2;
             }
         }
-        _ => {}
-    }
-    let mut changed = false;
-    // ACL SETUSER name rule...: `>pw`, `<pw`, `#hash` and `!hash` are
-    // passwords or their hashes.
-    if up(tokens, 0).as_deref() == Some("ACL") && up(tokens, 1).as_deref() == Some("SETUSER") {
-        for t in tokens.iter_mut().skip(3) {
-            if let Some(first @ ('>' | '<' | '#' | '!')) = t.chars().next()
-                && t.len() > 1
-            {
-                *t = format!("{first}{REDACTED}");
-                changed = true;
+        Some("ACL") if up(1).as_deref() == Some("SETUSER") => {
+            for (i, t) in tokens.iter().enumerate().skip(3) {
+                let t = t.as_ref();
+                if t.len() > 1 && t.starts_with(['>', '<', '#', '!']) {
+                    hits.push(i);
+                }
+            }
+        }
+        _ => {
+            for (i, t) in tokens.iter().enumerate().skip(1) {
+                let t = t.as_ref();
+                let u = t.to_ascii_uppercase();
+                if u == "AUTH2" {
+                    hits.push(i + 2);
+                } else if SECRET_ARG_KEYWORDS.contains(&u.as_str()) {
+                    hits.push(i + 1);
+                } else if let Some((name, value)) = t.split_once('=')
+                    && !value.is_empty()
+                    && secret_key(name)
+                {
+                    hits.push(i);
+                }
             }
         }
     }
-    for i in hits {
-        if i < n && tokens[i] != REDACTED {
-            tokens[i] = REDACTED.to_string();
-            changed = true;
-        }
+    hits.retain(|&i| i >= 1 && i < n);
+    hits.sort_unstable();
+    hits.dedup();
+    hits
+}
+
+/// The masked form of one credential argument, keeping its shape:
+/// `>REDACTED` for an ACL password rule, `name=REDACTED` for a secret
+/// `name=value`, else `REDACTED`.
+pub fn mask_secret_arg(token: &str) -> String {
+    if let Some(first @ ('>' | '<' | '#' | '!')) = token.chars().next() {
+        return format!("{first}{REDACTED}");
     }
-    changed
+    match token.split_once('=') {
+        Some((name, _)) if secret_key(name) => format!("{name}={REDACTED}"),
+        _ => REDACTED.to_string(),
+    }
+}
+
+/// Mask credential arguments in place ([`secret_arg_positions`]). Returns
+/// whether any were found, including ones already masked upstream (the
+/// Redis emulator masks before it logs).
+fn redact_command(tokens: &mut [String]) -> bool {
+    let hits = secret_arg_positions(tokens);
+    for &i in &hits {
+        tokens[i] = mask_secret_arg(&tokens[i]);
+    }
+    !hits.is_empty()
 }
 
 /// Replace the local part of email addresses, written plainly or with the

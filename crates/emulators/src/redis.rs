@@ -6,6 +6,14 @@
 //! and `REPLICAOF` are acknowledged and logged but never connect anywhere,
 //! and `CONFIG SET dir`/`dbfilename` are recorded as suspicious. Every size
 //! is capped so a hostile client cannot make it allocate without bound.
+//!
+//! Credentials never reach a capture event: AUTH logs only a hash and a
+//! length, and every other credential argument (`HELLO ... AUTH`,
+//! `MIGRATE ... AUTH`, `CONFIG SET requirepass`, `ACL SETUSER` rules, secret
+//! keywords in unknown commands) is masked in `args`, `error`, `config_set`
+//! and hook notes, with its hash and length in `redacted_args`. Replies to
+//! the client are unchanged. The positions come from
+//! `foiled_core::ioc::secret_arg_positions`, so events and IOCs agree.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -13,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use foiled_core::capture::{HookEvent, Severity};
+use foiled_core::ioc::{mask_secret_arg, secret_arg_positions};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -654,8 +663,15 @@ impl Core {
         self.settings.commands.iter().any(|c| c == name)
     }
 
-    /// Run one command. Never panics on any input.
+    /// Run one command. Never panics on any input. Credential arguments are
+    /// masked in the outcome's data ([`scrub_secrets`]); the reply is not.
     pub fn execute(&self, conn: &mut Conn, args: &[Vec<u8>]) -> Outcome {
+        let mut o = self.run_command(conn, args);
+        scrub_secrets(&mut o.data, args);
+        o
+    }
+
+    fn run_command(&self, conn: &mut Conn, args: &[Vec<u8>]) -> Outcome {
         let name = upper(&args[0]);
         let mut data = Map::new();
         data.insert("protocol".into(), json!("redis"));
@@ -1187,7 +1203,7 @@ impl Core {
 
     fn hook_event(&self, conn: &mut Conn, hook: &HookPoint, args: &[Vec<u8>]) -> HookEvent {
         conn.hook_seq += 1;
-        let line: Vec<String> = args
+        let line: Vec<String> = logged_args(args)
             .iter()
             .take(LOG_ARGS)
             .map(|a| printable(a, 128))
@@ -1221,6 +1237,91 @@ fn arity(name: &str) -> (usize, Option<usize>) {
         "BGSAVE" | "FLUSHALL" => (1, Some(2)),
         _ => (1, None),
     }
+}
+
+const REDACTED: &str = "REDACTED";
+
+/// `args` with credential arguments masked, for anything that is logged.
+fn logged_args(args: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let tokens: Vec<String> = args
+        .iter()
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    let hits = secret_arg_positions(&tokens);
+    args.iter()
+        .enumerate()
+        .map(|(i, a)| {
+            if hits.contains(&i) {
+                mask_secret_arg(&tokens[i]).into_bytes()
+            } else {
+                a.clone()
+            }
+        })
+        .collect()
+}
+
+/// Mask credential arguments in an outcome's logged data: `args` (offset by
+/// the subcommand when it is logged apart), `config_set` values and the
+/// quoted copies in `error` (including one cut short by the error clip).
+/// Each masked value is recorded as `{index, sha256, len}` in
+/// `redacted_args`, the way AUTH keeps `password_sha256`.
+fn scrub_secrets(data: &mut Map<String, Value>, args: &[Vec<u8>]) {
+    let tokens: Vec<String> = args
+        .iter()
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    let hits = secret_arg_positions(&tokens);
+    if hits.is_empty() {
+        return;
+    }
+    let offset = if data.contains_key("subcommand") {
+        2
+    } else {
+        1
+    };
+    if let Some(Value::Array(logged)) = data.get_mut("args") {
+        for &i in &hits {
+            if let Some(v) = i.checked_sub(offset).and_then(|j| logged.get_mut(j)) {
+                *v = json!(mask_secret_arg(&tokens[i]));
+            }
+        }
+    }
+    if let Some(Value::Object(set)) = data.get_mut("config_set") {
+        for &i in &hits {
+            if i >= 3 {
+                let name = printable(&args[i - 1], 128).to_ascii_lowercase();
+                if let Some(v) = set.get_mut(&name) {
+                    *v = json!(REDACTED);
+                }
+            }
+        }
+    }
+    if let Some(Value::String(err)) = data.get_mut("error") {
+        let mut e = err.clone();
+        for &i in &hits {
+            let masked = mask_secret_arg(&tokens[i]);
+            for form in [printable(&args[i], 128), clip(&args[i], ARG_CLIP)] {
+                if form.is_empty() {
+                    continue;
+                }
+                e = e.replace(&format!("'{form}'"), &format!("'{masked}'"));
+                // The error is clipped, so the last secret may be cut short.
+                if let Some(q) = e.rfind('\'') {
+                    let tail = &e[q + 1..];
+                    if !tail.is_empty() && tail != masked && form.starts_with(tail) {
+                        e.truncate(q + 1);
+                        e.push_str(&masked);
+                    }
+                }
+            }
+        }
+        *err = e;
+    }
+    let redacted: Vec<Value> = hits
+        .iter()
+        .map(|&i| json!({"index": i, "sha256": sha256_hex(&args[i]), "len": args[i].len()}))
+        .collect();
+    data.insert("redacted_args".into(), Value::Array(redacted));
 }
 
 fn log_args(data: &mut Map<String, Value>, args: &[Vec<u8>]) {
@@ -1715,5 +1816,85 @@ mod tests {
             let o = c.execute(&mut conn, &args);
             assert!(!o.reply.is_empty());
         }
+    }
+
+    #[test]
+    fn credentials_are_masked_in_logged_data_but_not_in_replies() {
+        let c = core();
+        let mut conn = c.connect(6379);
+        let pw = "hunter2";
+        let hidden = |o: &Outcome| {
+            let text = serde_json::to_string(&o.data).unwrap();
+            assert!(!text.contains(pw), "{text}");
+            o.data["redacted_args"].clone()
+        };
+
+        // Unknown commands echo their arguments to the client, as Redis
+        // does, but the logged error and args are masked.
+        let o = c.execute(&mut conn, &cmd(&["HELLO", "3", "AUTH", "default", pw]));
+        assert!(String::from_utf8_lossy(&o.reply).contains(pw));
+        assert_eq!(o.data["args"], json!(["3", "AUTH", "default", "REDACTED"]));
+        assert!(o.data["error"].as_str().unwrap().contains("'REDACTED'"));
+        assert_eq!(
+            hidden(&o),
+            json!([{"index": 4, "sha256": sha256_hex(pw.as_bytes()), "len": 7}])
+        );
+
+        let o = c.execute(
+            &mut conn,
+            &cmd(&[
+                "MIGRATE",
+                "192.0.2.10",
+                "6379",
+                "k",
+                "0",
+                "5000",
+                "AUTH2",
+                "u",
+                pw,
+            ]),
+        );
+        assert_eq!(o.data["args"][7], json!("REDACTED"));
+        hidden(&o);
+
+        let o = c.execute(
+            &mut conn,
+            &cmd(&["ACL", "SETUSER", "bob", "on", &format!(">{pw}")]),
+        );
+        assert_eq!(o.data["args"][3], json!(">REDACTED"));
+        hidden(&o);
+
+        let o = c.execute(&mut conn, &cmd(&["XYZZY", "PASSWORD", pw, "api_key=abc"]));
+        assert_eq!(
+            o.data["args"],
+            json!(["PASSWORD", "REDACTED", "api_key=REDACTED"])
+        );
+        assert!(!o.data["error"].as_str().unwrap().contains("abc"));
+        hidden(&o);
+
+        // A secret cut short by the error clip is still masked.
+        let long = "x".repeat(200);
+        let o = c.execute(&mut conn, &cmd(&["XYZZY", &long, "AUTH", pw]));
+        let err = o.data["error"].as_str().unwrap();
+        assert!(!err.contains("hunt"), "{err}");
+        hidden(&o);
+
+        // CONFIG SET requirepass: masked in args and config_set, applied for
+        // real, and still readable by the client.
+        let o = c.execute(&mut conn, &cmd(&["CONFIG", "SET", "requirepass", pw]));
+        assert_eq!(o.data["subcommand"], json!("SET"));
+        assert_eq!(o.data["args"], json!(["requirepass", "REDACTED"]));
+        assert_eq!(o.data["config_set"], json!({"requirepass": "REDACTED"}));
+        assert_eq!(hidden(&o)[0]["index"], json!(3));
+        assert!(run(&c, &mut conn, &["CONFIG", "GET", "requirepass"]).contains(pw));
+
+        // AUTH with the wrong arity logs its arguments, masked.
+        let o = c.execute(&mut conn, &cmd(&["AUTH", "a", "b", pw]));
+        assert_eq!(o.data["args"], json!(["REDACTED", "REDACTED", "REDACTED"]));
+        hidden(&o);
+
+        // Nothing to hide: no redacted_args.
+        let o = c.execute(&mut conn, &cmd(&["CONFIG", "SET", "dir", "/tmp"]));
+        assert!(o.data.get("redacted_args").is_none());
     }
 }

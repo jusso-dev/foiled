@@ -1,5 +1,5 @@
 {
-  "description": "Real Redis emulator output (crates/emulators/tests/redis_iocs.rs) for a session that authenticates, sends HELLO AUTH and MIGRATE AUTH2 with a password, rewrites the persistence config, loads a module and sets requirepass. Ids, times, addresses, ports and the session are pinned; everything else is as emitted.",
+  "description": "Real Redis emulator output (crates/emulators/tests/redis_iocs.rs) for a session that authenticates, sends HELLO AUTH and MIGRATE AUTH2 with a password, rewrites the persistence config, loads a module and sets requirepass. The emulator masks the password in args, error and config_set and keeps only its hash in redacted_args. Ids, times, addresses, ports and the session are pinned; everything else is as emitted.",
   "events": [
     {
       "catalogue_id": "emulator/redis/7.0",
@@ -9,6 +9,13 @@
         "password_len": 7,
         "password_sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7",
         "protocol": "redis",
+        "redacted_args": [
+          {
+            "index": 2,
+            "len": 7,
+            "sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7"
+          }
+        ],
         "result": "ok",
         "session": "s1",
         "username": "default"
@@ -40,11 +47,18 @@
           "3",
           "AUTH",
           "default",
-          "hunter2"
+          "REDACTED"
         ],
         "command": "HELLO",
-        "error": "ERR unknown command 'HELLO', with args beginning with: '3' 'AUTH' 'default' 'hunter2' ",
+        "error": "ERR unknown command 'HELLO', with args beginning with: '3' 'AUTH' 'default' 'REDACTED' ",
         "protocol": "redis",
+        "redacted_args": [
+          {
+            "index": 4,
+            "len": 7,
+            "sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7"
+          }
+        ],
         "result": "error",
         "session": "s1"
       },
@@ -292,11 +306,18 @@
           "5000",
           "AUTH2",
           "default",
-          "hunter2"
+          "REDACTED"
         ],
         "command": "MIGRATE",
-        "error": "ERR unknown command 'MIGRATE', with args beginning with: '192.0.2.10' '6379' 'k' '0' '5000' 'AUTH2' 'default' 'hunter2' ",
+        "error": "ERR unknown command 'MIGRATE', with args beginning with: '192.0.2.10' '6379' 'k' '0' '5000' 'AUTH2' 'default' 'REDACTED' ",
         "protocol": "redis",
+        "redacted_args": [
+          {
+            "index": 8,
+            "len": 7,
+            "sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7"
+          }
+        ],
         "result": "error",
         "session": "s1"
       },
@@ -325,13 +346,20 @@
       "data": {
         "args": [
           "requirepass",
-          "hunter2"
+          "REDACTED"
         ],
         "command": "CONFIG",
         "config_set": {
-          "requirepass": "hunter2"
+          "requirepass": "REDACTED"
         },
         "protocol": "redis",
+        "redacted_args": [
+          {
+            "index": 3,
+            "len": 7,
+            "sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7"
+          }
+        ],
         "result": "ok",
         "session": "s1",
         "subcommand": "SET"

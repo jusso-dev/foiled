@@ -96,9 +96,22 @@ async fn redis_fixture_is_real_emulator_output_and_extracts_without_secrets() {
     emu.stop().await;
     assert!(events.len() >= 8, "{} events", events.len());
 
+    // The emulator masks credentials before it logs them (#16): the
+    // password appears nowhere in the events, only its hash and length.
+    let text = serde_json::to_string(&events).unwrap();
+    assert!(!text.contains(PASSWORD), "{text}");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.data.contains_key("redacted_args"))
+            .count(),
+        4,
+        "AUTH, HELLO, MIGRATE and CONFIG SET requirepass"
+    );
+
     let path = common::repo_root().join("testdata/iocs/redis-emulator.input.json");
     let got = json!({
-        "description": "Real Redis emulator output (crates/emulators/tests/redis_iocs.rs) for a session that authenticates, sends HELLO AUTH and MIGRATE AUTH2 with a password, rewrites the persistence config, loads a module and sets requirepass. Ids, times, addresses, ports and the session are pinned; everything else is as emitted.",
+        "description": "Real Redis emulator output (crates/emulators/tests/redis_iocs.rs) for a session that authenticates, sends HELLO AUTH and MIGRATE AUTH2 with a password, rewrites the persistence config, loads a module and sets requirepass. The emulator masks the password in args, error and config_set and keeps only its hash in redacted_args. Ids, times, addresses, ports and the session are pinned; everything else is as emitted.",
         "events": events,
     });
     if std::env::var("FOILED_BLESS").is_ok() {
