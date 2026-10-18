@@ -1,0 +1,5 @@
+attempt att_b7fa7221fcf4b6d01cd5b680  198.51.100.23 -> dcy-redis-1 (emulator/redis/7.0)
+state probe  first seen 2026-10-18T01:02:08Z  last seen 2026-10-18T01:02:08Z  1 event(s)
+   1  +   0.000s  application info     INFO
+                   state -> probe (first_contact)
+pcap filter 'host 198.51.100.23' from 2026-10-18T01:02:03Z to 2026-10-18T01:02:13Z

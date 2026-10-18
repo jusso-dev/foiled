@@ -1,4 +1,5 @@
-//! `GET /v0/attempts` and `GET /v0/attempts/{id}` (#25).
+//! `GET /v0/attempts` and `GET /v0/attempts/{id}` (#25), and the attempt
+//! timeline `GET /v0/attempts/{id}/timeline` (#10).
 //!
 //! Attempts are a read model: built on request from the capture events in a
 //! time window with the deterministic grouping in `foiled_core::attempt`,
@@ -8,6 +9,8 @@
 //! contract.
 
 use axum::extract::{Path, Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use foiled_core::attempt::{Attempt, AttemptState, DEFAULT_IDLE_GAP_MS, build};
@@ -27,6 +30,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v0/attempts", get(list))
         .route("/v0/attempts/{attempt_id}", get(get_one))
+        .route("/v0/attempts/{attempt_id}/timeline", get(timeline))
         .route(
             "/v0/attempts/{attempt_id}/links",
             get(links).post(override_link),
@@ -149,6 +153,51 @@ async fn get_one(
         .find(|a| a.attempt_id == attempt_id)
         .map(Json)
         .ok_or_else(|| ApiError::not_found("attempt"))
+}
+
+#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TimelineFormat {
+    #[default]
+    Json,
+    Text,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct FormatQuery {
+    #[serde(default)]
+    pub format: TimelineFormat,
+}
+
+/// The attempt's events in order, with state changes and a pcap extract
+/// recipe (`docs/attempt-timeline.md`). `format=text` gives the escaped
+/// plain-text rendering.
+async fn timeline(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(attempt_id): Path<String>,
+    Query(q): Query<AttemptQuery>,
+    Query(f): Query<FormatQuery>,
+) -> Result<Response, ApiError> {
+    let who = auth.require(Scope::AttemptsRead)?;
+    let (since, until) = window(&state, &q);
+    let (attempts, events, _) = attempts_and_events(&state, &who.tenant_id, since, until).await?;
+    let attempt = attempts
+        .iter()
+        .find(|a| a.attempt_id == attempt_id)
+        .ok_or_else(|| ApiError::not_found("attempt"))?;
+    let t = foiled_core::timeline::build_timeline(attempt, &events);
+    Ok(match f.format {
+        TimelineFormat::Json => Json(t).into_response(),
+        TimelineFormat::Text => (
+            [
+                (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            foiled_core::timeline::render_text(&t),
+        )
+            .into_response(),
+    })
 }
 
 #[derive(Debug, Serialize)]

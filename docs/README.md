@@ -8,6 +8,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | --- | --- |
 | [mvp-walkthrough.md](mvp-walkthrough.md) | Run the MVP loop: launch, exploit, capture, rotate, export. Lab track runnable today. |
 | [attempts.md](attempts.md) | Exploit attempts: grouping, state machine, noise score and the attempts API. |
+| [attempt-timeline.md](attempt-timeline.md) | The attempt timeline: ordered events, state changes, text rendering, pcap slice extract and the TLS caveat. |
 | [confidence.md](confidence.md) | The confidence layer: evidence, tier weights, caps, bands, wording, thresholds, overrides and worked examples. |
 | [exploit-attribution.md](exploit-attribution.md) | CVE mapping tiers: signatures, sequences, hooks, the pre-disclosure watchlist and advisory fields, with the evidence each feeds into confidence. |
 | [glossary.md](glossary.md) | Terms used across issues, docs and code. |

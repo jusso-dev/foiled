@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/attempt-timeline.schema.json",
+  "title": "Foiled attempt timeline",
+  "description": "Read-only, ordered view of one attempt's capture events with state changes and a pcap extract recipe (#10, docs/attempt-timeline.md). Each entry carries the unchanged capture envelope (schemas/capture-event.schema.json).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["attempt_id", "decoy_id", "catalogue_id", "src", "first_seen", "last_seen", "state", "entries", "payload_refs", "ioc_refs", "pcap", "notes", "missing_event_ids"],
+  "properties": {
+    "attempt_id": { "type": "string", "pattern": "^att_[a-f0-9]{24}$" },
+    "decoy_id": { "type": "string", "minLength": 1 },
+    "catalogue_id": { "type": "string", "minLength": 1 },
+    "src": { "type": "string", "minLength": 1 },
+    "first_seen": { "type": "integer" },
+    "last_seen": { "type": "integer" },
+    "state": { "$ref": "#/$defs/state" },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["seq", "ts", "t_offset_ms", "channel", "severity", "summary", "event"],
+        "properties": {
+          "seq": { "type": "integer", "minimum": 1 },
+          "ts": { "type": "integer" },
+          "t_offset_ms": { "type": "integer", "minimum": 0 },
+          "channel": { "enum": ["network", "application", "filesystem", "process", "quarantine", "hook", "dns", "egress"] },
+          "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+          "summary": { "type": "string", "description": "One line built from known fields, with control, bidi and line-break characters escaped and length capped." },
+          "state_change": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state", "signal"],
+            "properties": {
+              "state": { "$ref": "#/$defs/state" },
+              "signal": { "enum": ["first_contact", "matcher", "hook_trigger", "hook_post_exploit", "egress", "file_write", "process_exec", "yara", "canary"] }
+            }
+          },
+          "event": {
+            "type": "object",
+            "description": "The capture envelope, unchanged.",
+            "required": ["event_id", "ts", "channel"],
+            "properties": {
+              "event_id": { "type": "string" },
+              "ts": { "type": "integer" },
+              "channel": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "payload_refs": { "type": "array", "items": { "type": "string", "pattern": "^r2://" } },
+    "ioc_refs": { "type": "array", "items": { "type": "string" } },
+    "pcap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filter", "from_ms", "to_ms", "host_glob", "r2_prefix", "output_path"],
+      "properties": {
+        "filter": { "type": "string", "pattern": "^(host [0-9A-Fa-f.:]+)?$", "description": "BPF filter; empty when the source is not an IP address." },
+        "from_ms": { "type": "integer" },
+        "to_ms": { "type": "integer" },
+        "host_glob": { "type": "string", "description": "Ring files not yet uploaded, relative to /var/lib/foiled/capture on the host." },
+        "r2_prefix": { "type": "string", "description": "R2 key prefix of uploaded ring files: <tenant>/<decoy-id>/_/network/." },
+        "output_path": { "type": "string", "description": "Where the slice is written, relative to the analyst's working directory." }
+      }
+    },
+    "notes": { "type": "array", "items": { "type": "string" } },
+    "missing_event_ids": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "state": { "enum": ["probe", "exploit", "post-exploitation"] }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "attempt_id": "att_e577d0c8f6797007085f6c23",
+  "decoy_id": "dcy-demo-1",
+  "catalogue_id": "foiled/demo-app/1.0.0",
+  "src": "198.51.100.23",
+  "first_seen": 1792285323000,
+  "last_seen": 1792285323000,
+  "state": "probe",
+  "entries": [
+    {
+      "seq": 1,
+      "ts": 1792285323000,
+      "t_offset_ms": 0,
+      "channel": "application",
+      "severity": "info",
+      "summary": "GET /",
+      "state_change": {
+        "state": "probe",
+        "signal": "first_contact"
+      },
+      "event": {
+        "event_id": "s1",
+        "ts": 1792285323000,
+        "decoy_id": "dcy-demo-1",
+        "catalogue_id": "foiled/demo-app/1.0.0",
+        "decoy_kind": "sandbox",
+        "channel": "application",
+        "severity": "info",
+        "src": {
+          "ip": "198.51.100.23"
+        },
+        "source": {
+          "kind": "host",
+          "id": "host-1"
+        },
+        "tenant_id": "t1",
+        "data": {
+          "method": "GET",
+          "path": "/"
+        }
+      }
+    }
+  ],
+  "payload_refs": [],
+  "ioc_refs": [],
+  "pcap": {
+    "filter": "host 198.51.100.23",
+    "from_ms": 1792285318000,
+    "to_ms": 1792285328000,
+    "host_glob": "dcy-demo-1/ring.pcap*",
+    "r2_prefix": "t1/dcy-demo-1/_/network/",
+    "output_path": "attempts/att_e577d0c8f6797007085f6c23/attempt.pcap"
+  },
+  "notes": [],
+  "missing_event_ids": []
+}

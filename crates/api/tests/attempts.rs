@@ -231,3 +231,58 @@ async fn analyst_overrides_are_scored_and_audited() {
     let (st, _) = post(&s, "lead", &path, unknown).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 }
+
+async fn get_text(state: &AppState, tok: &str, path: &str) -> (StatusCode, String, String) {
+    let req = Request::get(path)
+        .header("authorization", format!("Bearer fo_{tok}.{SECRET}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    let status = res.status();
+    let ct = res
+        .headers()
+        .get("content-type")
+        .map(|v| v.to_str().unwrap().to_string())
+        .unwrap_or_default();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (status, ct, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+#[tokio::test]
+async fn timeline_orders_events_and_renders_text() {
+    let s = harness().await;
+    let id = exploit_attempt(&s).await;
+    let (st, t) = get(&s, "analyst", &format!("/v0/attempts/{id}/timeline")).await;
+    assert_eq!(st, StatusCode::OK, "{t}");
+    assert_eq!(t["attempt_id"], id.as_str());
+    let entries = t["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 5);
+    let ts: Vec<i64> = entries.iter().map(|e| e["ts"].as_i64().unwrap()).collect();
+    assert!(ts.windows(2).all(|w| w[0] <= w[1]), "{ts:?}");
+    assert_eq!(entries[0]["t_offset_ms"], 0);
+    assert_eq!(entries[0]["state_change"]["state"], "probe");
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["state_change"]["state"] == "post-exploitation"),
+        "{t}"
+    );
+    assert_eq!(t["pcap"]["filter"], "host 203.0.113.7");
+    assert_eq!(t["pcap"]["r2_prefix"], "t1/dcy-demo-1/_/network/");
+
+    let (st, ct, text) = get_text(
+        &s,
+        "analyst",
+        &format!("/v0/attempts/{id}/timeline?format=text"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(ct.starts_with("text/plain"), "{ct}");
+    assert!(text.starts_with(&format!("attempt {id}")), "{text}");
+    assert!(text.contains("state -> post-exploitation"), "{text}");
+
+    let (st, _) = get(&s, "other", &format!("/v0/attempts/{id}/timeline")).await;
+    assert_eq!(st, StatusCode::NOT_FOUND, "other tenants cannot see it");
+    let (st, _) = get(&s, "nobody", &format!("/v0/attempts/{id}/timeline")).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+}

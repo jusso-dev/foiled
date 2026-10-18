@@ -1,0 +1,11 @@
+attempt att_43065706a9ac936e970054e5  203.0.113.7 -> dcy-demo-1 (foiled/demo-app/1.0.0)
+state post-exploitation  first seen 2026-10-18T01:03:03Z  last seen 2026-10-18T01:03:05Z  5 event(s)
+   1  +   0.000s  application info     GET /admin
+                   state -> probe (first_contact)
+   2  +   1.000s  application info     POST /api/upload?path=../../tmp/x.sh
+   3  +   1.010s  hook        high     hook demo-app.upload-path-traversal fired at trigger (FOILED-DEMO-0001)
+                   state -> exploit (hook_trigger)
+   4  +   1.020s  hook        high     hook demo-app.upload-path-traversal fired at post_exploit (FOILED-DEMO-0001)
+                   state -> post-exploitation (hook_post_exploit)
+   5  +   2.000s  egress      info     egress to 192.0.2.80:80 (blocked)
+pcap filter 'host 203.0.113.7' from 2026-10-18T01:02:58Z to 2026-10-18T01:03:10Z

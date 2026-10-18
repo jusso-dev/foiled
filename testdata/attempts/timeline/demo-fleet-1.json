@@ -1,0 +1,55 @@
+{
+  "attempt_id": "att_b7fa7221fcf4b6d01cd5b680",
+  "decoy_id": "dcy-redis-1",
+  "catalogue_id": "emulator/redis/7.0",
+  "src": "198.51.100.23",
+  "first_seen": 1792285328000,
+  "last_seen": 1792285328000,
+  "state": "probe",
+  "entries": [
+    {
+      "seq": 1,
+      "ts": 1792285328000,
+      "t_offset_ms": 0,
+      "channel": "application",
+      "severity": "info",
+      "summary": "INFO",
+      "state_change": {
+        "state": "probe",
+        "signal": "first_contact"
+      },
+      "event": {
+        "event_id": "s2",
+        "ts": 1792285328000,
+        "decoy_id": "dcy-redis-1",
+        "catalogue_id": "emulator/redis/7.0",
+        "decoy_kind": "emulation",
+        "channel": "application",
+        "severity": "info",
+        "src": {
+          "ip": "198.51.100.23"
+        },
+        "source": {
+          "kind": "host",
+          "id": "host-1"
+        },
+        "tenant_id": "t1",
+        "data": {
+          "command": "INFO"
+        }
+      }
+    }
+  ],
+  "payload_refs": [],
+  "ioc_refs": [],
+  "pcap": {
+    "filter": "host 198.51.100.23",
+    "from_ms": 1792285323000,
+    "to_ms": 1792285333000,
+    "host_glob": "dcy-redis-1/ring.pcap*",
+    "r2_prefix": "t1/dcy-redis-1/_/network/",
+    "output_path": "attempts/att_b7fa7221fcf4b6d01cd5b680/attempt.pcap"
+  },
+  "notes": [],
+  "missing_event_ids": []
+}

@@ -44,14 +44,19 @@ pub struct TimelineEntry {
 /// `docs/attempt-timeline.md`). Foiled never replays traffic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PcapExtract {
-    /// BPF filter for `tcpdump -r ... -w ...`.
+    /// BPF filter for `tcpdump -r ... -w ...`. Empty when the attempt's
+    /// source is not an IP address, so nothing unchecked reaches a shell.
     pub filter: String,
     /// Window to cut, Unix ms, padded by `PCAP_PAD_MS` on both sides.
     pub from_ms: i64,
     pub to_ms: i64,
-    /// Ring files on the host, relative to the capture volume.
-    pub source_glob: String,
-    /// Where the slice is written, relative to the capture volume.
+    /// Ring files not yet uploaded, relative to the host's capture volume
+    /// (`/var/lib/foiled/capture`, `foiled-capture@.service`).
+    pub host_glob: String,
+    /// R2 key prefix of uploaded ring files (ADR 0005 key layout).
+    pub r2_prefix: String,
+    /// Where the slice is written, relative to the analyst's working
+    /// directory.
     pub output_path: String,
 }
 
@@ -238,6 +243,13 @@ pub fn build_timeline(attempt: &Attempt, events: &[CaptureEvent]) -> Timeline {
                 .to_string(),
         );
     }
+    let filter = match attempt.src.parse::<std::net::IpAddr>() {
+        Ok(ip) => format!("host {ip}"),
+        Err(_) => {
+            notes.push("Source is not an IP address, so no pcap filter was built.".to_string());
+            String::new()
+        }
+    };
     if !missing_event_ids.is_empty() {
         notes.push(format!(
             "{} event(s) of this attempt are no longer stored (retention, #16).",
@@ -257,10 +269,11 @@ pub fn build_timeline(attempt: &Attempt, events: &[CaptureEvent]) -> Timeline {
         payload_refs: attempt.payload_refs.clone(),
         ioc_refs: attempt.ioc_refs.clone(),
         pcap: PcapExtract {
-            filter: format!("host {}", attempt.src),
+            filter,
             from_ms: attempt.first_seen - PCAP_PAD_MS,
             to_ms: attempt.last_seen + PCAP_PAD_MS,
-            source_glob: format!("pcap/{}/ring*.pcap*", attempt.decoy_id),
+            host_glob: format!("{}/ring.pcap*", attempt.decoy_id),
+            r2_prefix: format!("{}/{}/_/network/", attempt.tenant_id, attempt.decoy_id),
             output_path: format!("attempts/{}/attempt.pcap", attempt.attempt_id),
         },
         notes,
@@ -326,12 +339,14 @@ pub fn render_text(t: &Timeline) -> String {
     for r in &t.ioc_refs {
         out.push_str(&format!("ioc {r}\n"));
     }
-    out.push_str(&format!(
-        "pcap filter '{}' from {} to {}\n",
-        t.pcap.filter,
-        iso(t.pcap.from_ms),
-        iso(t.pcap.to_ms)
-    ));
+    if !t.pcap.filter.is_empty() {
+        out.push_str(&format!(
+            "pcap filter '{}' from {} to {}\n",
+            t.pcap.filter,
+            iso(t.pcap.from_ms),
+            iso(t.pcap.to_ms)
+        ));
+    }
     for n in &t.notes {
         out.push_str(&format!("note: {n}\n"));
     }
@@ -409,9 +424,22 @@ mod tests {
         assert_eq!(t.notes.len(), 2, "TLS and retention notes: {:?}", t.notes);
         assert_eq!(t.pcap.filter, "host 203.0.113.7");
         assert_eq!(t.pcap.from_ms, 1_000 - PCAP_PAD_MS);
+        assert_eq!(t.pcap.host_glob, "d1/ring.pcap*");
+        assert_eq!(t.pcap.r2_prefix, "t1/d1/_/network/");
         let text = render_text(&t);
         assert!(text.contains("state -> exploit (matcher)"), "{text}");
         assert!(text.starts_with(&format!("attempt {}", t.attempt_id)));
+    }
+
+    #[test]
+    fn non_ip_source_gets_no_pcap_filter() {
+        let events = vec![ev("a", 1_000, "application", json!({}))];
+        let mut attempt = build(&events, DEFAULT_IDLE_GAP_MS, &ExtraSignals::new()).remove(0);
+        attempt.src = "1.2.3.4' ; rm -rf ~ '".into();
+        let t = build_timeline(&attempt, &events);
+        assert_eq!(t.pcap.filter, "");
+        assert!(t.notes.iter().any(|n| n.contains("no pcap filter")));
+        assert!(render_text(&t).contains("no pcap filter"));
     }
 
     #[test]
