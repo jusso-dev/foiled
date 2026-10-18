@@ -35,14 +35,14 @@ Bearer tokens are `fo_<id>.<secret>`. D1 stores only the SHA-256 of the secret, 
 | Data | Store |
 | --- | --- |
 | Tokens, host and sensor identities, decoys, jobs, rate-limit counters | D1 (`migrations/d1/`) |
-| Audit log, and later attempts, IOCs, campaigns, review queue | Postgres via Hyperdrive (`migrations/postgres/`) |
+| Audit log, capture events, link overrides, the TAXII object log (#13), and later campaigns and the review queue | Postgres via Hyperdrive (`migrations/postgres/`) |
 | Catalogue | Bundled into the Worker at build time from `catalogue/entries/` (already reviewed and linted in git) |
 | Pcaps, file diffs, quarantine | R2, by `payload_ref` (#9) |
 | Live event stream | Durable Object (#14) |
 
 ## What is served today
 
-`GET /healthz`, `GET /v0/catalogue/entries`, `GET /v0/catalogue/entries/{id}`, `GET`/`POST /v0/decoys` (alias `/v0/sandboxes`), `GET /v0/decoys/{id}`, the five decoy actions, `GET /v0/audit`, attempts, their timeline and links (#25, #10, #27), the intel exports (STIX 2.1, MISP, IOC CSV and JSON; #13, [intel-outputs.md](../intel-outputs.md)), evidence ingest and upload URLs (#9), the host agent channel: job lease, ack and heartbeat (#41, [protocol](../agent/protocol.md)), the sensor and host registry with enrolment, renewal, re-enrolment, revocation and the sensor agent channel (#31, [edge-sensor.md](../deploy/edge-sensor.md)), the MCP endpoint `POST /v0/mcp` (#24, [foiled-mcp.md](../mcp/foiled-mcp.md)), the IOC reads `GET /v0/iocs`, `GET /v0/iocs/{id}` and `GET /v0/attempts/{id}/iocs` (#34), and campaigns: `GET /v0/campaigns`, `GET /v0/campaigns/{id}` with its attempts, evidence and analyst actions (#33, [campaigns.md](../campaigns.md)). Everything else in the spec is `planned` with its owning issue. Mapping to consumers:
+`GET /healthz`, `GET /v0/catalogue/entries`, `GET /v0/catalogue/entries/{id}`, `GET`/`POST /v0/decoys` (alias `/v0/sandboxes`), `GET /v0/decoys/{id}`, the five decoy actions, `GET /v0/audit`, attempts, their timeline and links (#25, #10, #27), the intel exports (STIX 2.1, MISP, IOC CSV and JSON) and the read-only TAXII 2.1 server under `/taxii2/` with its materialiser (#13, [intel-outputs.md](../intel-outputs.md)), evidence ingest and upload URLs (#9), the host agent channel: job lease, ack and heartbeat (#41, [protocol](../agent/protocol.md)), the sensor and host registry with enrolment, renewal, re-enrolment, revocation and the sensor agent channel (#31, [edge-sensor.md](../deploy/edge-sensor.md)), the MCP endpoint `POST /v0/mcp` (#24, [foiled-mcp.md](../mcp/foiled-mcp.md)), the IOC reads `GET /v0/iocs`, `GET /v0/iocs/{id}` and `GET /v0/attempts/{id}/iocs` (#34), and campaigns: `GET /v0/campaigns`, `GET /v0/campaigns/{id}` with its attempts, evidence and analyst actions (#33, [campaigns.md](../campaigns.md)). Everything else in the spec is `planned` with its owning issue. Mapping to consumers:
 
 | Consumer | Needs | Status |
 | --- | --- | --- |

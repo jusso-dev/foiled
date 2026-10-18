@@ -108,7 +108,7 @@ A deployment that runs decoys and sends capture data to Foiled.
 Structured Threat Information Expression, the OASIS standard format for threat intelligence. Foiled exports STIX 2.1 bundles (#13) and reads ATT&CK as STIX data (#26).
 
 **TAXII**
-Trusted Automated Exchange of Intelligence Information, the protocol for serving and fetching STIX over HTTPS. Foiled will serve its published intel through a read-only TAXII 2.1 collection (#13, [intel-outputs.md](intel-outputs.md#taxii-21)).
+Trusted Automated Exchange of Intelligence Information, the protocol for serving and fetching STIX over HTTPS. Foiled serves its published intel through a read-only TAXII 2.1 collection (#13, [intel-outputs.md](intel-outputs.md#taxii-21)).
 
 **"We assess as"**
 The required wording for a link between an attempt and a CVE that an analyst has not confirmed, for example "we assess as an attempt against `CVE-2099-0001`". The word "confirmed" is used only after analyst confirmation (#12, #27).
