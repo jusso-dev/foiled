@@ -2,11 +2,15 @@
   "action_id": "act-demo-0002",
   "kind": "merge",
   "campaign_id": "cmp_2eb2760245d4b65e168cb56f",
-  "anchor_attempt_id": "att_01b0403bb68495616e0632d7",
+  "anchor_attempt_ids": [
+    "att_01b0403bb68495616e0632d7"
+  ],
   "merge": [
     {
       "campaign_id": "cmp_b61ebed681d410ce4b3d19fb",
-      "anchor_attempt_id": "att_0e2effa1697050a0be41765f"
+      "anchor_attempt_ids": [
+        "att_0e2effa1697050a0be41765f"
+      ]
     }
   ],
   "note": "Pre-disclosure activity against the same product within two hours; treat as one wave for review.",

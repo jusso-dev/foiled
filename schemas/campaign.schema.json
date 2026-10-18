@@ -31,7 +31,7 @@
     "campaign_id": {
       "type": "string",
       "pattern": "^cmp_[a-f0-9]{24}$",
-      "description": "SHA-256 over tenant and seed attempt (or tenant and split action), truncated. Stable for the same evidence and actions."
+      "description": "Kept by the campaign registry once recorded; a new cluster takes SHA-256 over tenant and seed attempt (or tenant and split action), truncated."
     },
     "tenant_id": {
       "type": "string",
@@ -471,7 +471,7 @@
         "noise_score",
         "joined_by"
       ],
-      "description": "A member attempt and every feature (up to 8) that joined it. A member with no joins is there by an analyst action (added_by).",
+      "description": "A member attempt and every feature (up to 8) that joined it. A member with no joins is there by an analyst action (added_by) or from an earlier window (carried_over).",
       "properties": {
         "attempt_id": {
           "type": "string",
@@ -549,6 +549,10 @@
               "type": "integer"
             }
           }
+        },
+        "carried_over": {
+          "type": "boolean",
+          "description": "In the campaign from an earlier window (the campaign registry); the attempts it joined are outside this window."
         }
       },
       "anyOf": [
@@ -563,6 +567,16 @@
           "required": [
             "added_by"
           ]
+        },
+        {
+          "required": [
+            "carried_over"
+          ],
+          "properties": {
+            "carried_over": {
+              "const": true
+            }
+          }
         }
       ]
     },

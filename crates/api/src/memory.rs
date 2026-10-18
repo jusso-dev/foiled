@@ -27,6 +27,7 @@ struct Inner {
     heartbeats: HashMap<(String, String), (serde_json::Value, i64)>,
     overrides: Vec<(String, LinkOverride)>,
     campaign_actions: Vec<(String, foiled_core::campaign::CampaignAction)>,
+    campaign_registry: HashMap<String, foiled_core::campaign::Registry>,
     /// Audit appends with this action fail, to test storage outages.
     fail_audit_action: Option<String>,
     facts: Vec<(String, ObservedFacts)>,
@@ -473,7 +474,7 @@ impl Store for MemoryStore {
     fn campaign_actions(
         &self,
         tenant_id: &str,
-        limit: usize,
+        feedback_limit: usize,
     ) -> StoreFuture<'_, Vec<foiled_core::campaign::CampaignAction>> {
         let mut out: Vec<_> = self
             .lock()
@@ -483,8 +484,68 @@ impl Store for MemoryStore {
             .map(|(_, a)| a.clone())
             .collect();
         out.sort_by(|a, b| (a.at, &a.action_id).cmp(&(b.at, &b.action_id)));
-        let skip = out.len().saturating_sub(limit);
-        ready(Ok(out.split_off(skip)))
+        let feedback = out.iter().filter(|a| !a.is_structural()).count();
+        let mut shed = feedback.saturating_sub(feedback_limit);
+        out.retain(|a| {
+            if !a.is_structural() && shed > 0 {
+                shed -= 1;
+                return false;
+            }
+            true
+        });
+        ready(Ok(out))
+    }
+
+    fn campaign_memberships(
+        &self,
+        tenant_id: &str,
+        attempt_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<(String, String)>> {
+        let g = self.lock();
+        let out = g
+            .campaign_registry
+            .get(tenant_id)
+            .map(|r| {
+                attempt_ids
+                    .into_iter()
+                    .filter_map(|a| r.members.get(&a).map(|c| (a.clone(), c.clone())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        ready(Ok(out))
+    }
+
+    fn campaign_records(
+        &self,
+        tenant_id: &str,
+        campaign_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::StoredCampaign>> {
+        let g = self.lock();
+        let out = g
+            .campaign_registry
+            .get(tenant_id)
+            .map(|r| {
+                campaign_ids
+                    .iter()
+                    .filter_map(|c| r.campaigns.get(c).cloned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        ready(Ok(out))
+    }
+
+    fn update_campaign_registry(
+        &self,
+        tenant_id: &str,
+        update: foiled_core::campaign::RegistryUpdate,
+        _now: i64,
+    ) -> StoreFuture<'_, ()> {
+        self.lock()
+            .campaign_registry
+            .entry(tenant_id.to_string())
+            .or_default()
+            .apply(&update);
+        ready(Ok(()))
     }
 
     fn append_campaign_action(

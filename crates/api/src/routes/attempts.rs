@@ -67,26 +67,24 @@ pub struct AttemptList {
     pub truncated: bool,
 }
 
-/// Build attempts for a tenant over a window.
+/// Build attempts for a tenant over a window, with `campaign_id` read from
+/// the campaign registry (no clustering).
 pub(crate) async fn attempts_in_window(
     state: &AppState,
     tenant_id: &str,
     since: i64,
     until: i64,
 ) -> Result<(Vec<Attempt>, bool), ApiError> {
-    let (a, _, t) = attempts_and_events(state, tenant_id, since, until).await?;
-    Ok((a, t))
-}
-
-/// Attempts plus the events they were built from.
-pub(crate) async fn attempts_and_events(
-    state: &AppState,
-    tenant_id: &str,
-    since: i64,
-    until: i64,
-) -> Result<(Vec<Attempt>, Vec<foiled_core::capture::CaptureEvent>, bool), ApiError> {
-    let m = window_model(state, tenant_id, since, until, Iocs::Attach).await?;
-    Ok((m.attempts, m.events, m.truncated))
+    let m = window_model(
+        state,
+        tenant_id,
+        since,
+        until,
+        Iocs::Attach,
+        Campaigns::Registry,
+    )
+    .await?;
+    Ok((m.attempts, m.truncated))
 }
 
 /// Attempts plus events, without IOC extraction or campaign clustering
@@ -98,19 +96,30 @@ pub(crate) async fn attempts_and_events_without_iocs(
     since: i64,
     until: i64,
 ) -> Result<(Vec<Attempt>, Vec<foiled_core::capture::CaptureEvent>), ApiError> {
-    let m = window_model(state, tenant_id, since, until, Iocs::Skip).await?;
+    let m = window_model(state, tenant_id, since, until, Iocs::Skip, Campaigns::Skip).await?;
     Ok((m.attempts, m.events))
 }
 
-/// Whether to build the intel read model (IOCs #34 and campaigns #33)
-/// while building a window.
+/// Whether to extract IOCs (#34) while building a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Iocs {
-    /// Extract IOCs, cluster campaigns, and fill `ioc_refs` and
-    /// `campaign_id` on the attempts (and `campaign_ids` on the IOCs).
+    /// Extract and fill `ioc_refs` on the attempts.
     Attach,
-    /// Skip both; `ioc_refs` stay empty, `campaign_id` null, and `iocs` and
-    /// `campaigns` are empty.
+    /// Skip extraction; `ioc_refs` stay empty and `iocs` is empty.
+    Skip,
+}
+
+/// How a window gets its campaigns (#33).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Campaigns {
+    /// Cluster (needs `Iocs::Attach`), replay analyst actions, update the
+    /// registry, and fill `campaign_id` and `campaign_ids`.
+    Full,
+    /// Fill `campaign_id` and `campaign_ids` from the registry only: one
+    /// store read, no clustering and no actions. Ids are as of the last
+    /// full read, which every list and campaign read makes.
+    Registry,
+    /// Nothing: `campaign_id` stays null.
     Skip,
 }
 
@@ -121,18 +130,22 @@ pub(crate) struct WindowModel {
     pub events: Vec<foiled_core::capture::CaptureEvent>,
     /// IOCs extracted from the attempts (#34), without enrichment.
     pub iocs: foiled_core::ioc::Extraction,
-    /// Campaigns clustered from the attempts (#33).
+    /// Campaigns clustered from the attempts (#33), with `Campaigns::Full`.
     pub campaigns: foiled_core::campaign::Clustering,
+    /// What the clustering read, with `Campaigns::Full`, so a caller can
+    /// cluster again (for example after recording an action).
+    pub inputs: Option<ClusterInputs>,
     pub truncated: bool,
 }
 
-/// Build attempts and their IOCs for a tenant over a window.
+/// Build attempts, their IOCs and their campaigns for a tenant over a window.
 pub(crate) async fn window_model(
     state: &AppState,
     tenant_id: &str,
     since: i64,
     until: i64,
     iocs: Iocs,
+    campaigns: Campaigns,
 ) -> Result<WindowModel, ApiError> {
     if until <= since || until - since > 31 * DAY_MS {
         return Err(ApiError::bad_request(
@@ -150,42 +163,71 @@ pub(crate) async fn window_model(
     let mut attempts = build(&events, DEFAULT_IDLE_GAP_MS, &signals);
     // Payload storage is off by default (#16), so inline bodies never
     // become IOC values here; their hashes do.
-    let (iocs, campaigns) = match iocs {
+    let mut x = match iocs {
         Iocs::Attach => {
-            let cfg = foiled_core::confidence::ConfidenceConfig::default();
-            let mut x = foiled_core::ioc::extract(
+            let x = foiled_core::ioc::extract(
                 &attempts,
                 &events,
-                &cfg,
+                &foiled_core::confidence::ConfidenceConfig::default(),
                 foiled_core::ioc::ExtractOptions::default(),
             );
             foiled_core::ioc::attach_refs(&mut attempts, &x);
-            let c = campaigns(state, tenant_id, &attempts, &events, &x, &cfg).await?;
-            foiled_core::campaign::attach(&mut attempts, &mut x, &c);
-            (x, c)
+            x
         }
-        Iocs::Skip => Default::default(),
+        Iocs::Skip => foiled_core::ioc::Extraction::default(),
+    };
+    let (clustering, inputs) = match campaigns {
+        Campaigns::Full => {
+            let inputs = cluster_inputs(state, tenant_id, &attempts, &events).await?;
+            let c = run_clustering(state, tenant_id, &inputs, &attempts, &x, true).await;
+            foiled_core::campaign::attach(&mut attempts, &mut x, &c);
+            (c, Some(inputs))
+        }
+        Campaigns::Registry => {
+            let registry = load_registry(state, tenant_id, &attempts).await?;
+            let carried = registry
+                .members
+                .iter()
+                .map(|(a, c)| (a.clone(), registry.resolve(c).to_string()))
+                .collect();
+            let from_registry = foiled_core::campaign::Clustering {
+                carried,
+                ..Default::default()
+            };
+            foiled_core::campaign::attach(&mut attempts, &mut x, &from_registry);
+            (Default::default(), None)
+        }
+        Campaigns::Skip => (Default::default(), None),
     };
     Ok(WindowModel {
         attempts,
         events,
-        iocs,
-        campaigns,
+        iocs: x,
+        campaigns: clustering,
+        inputs,
         truncated,
     })
 }
 
-/// Cluster a window's attempts into campaigns (#33), with ASN context from
-/// cached enrichment Facts (#11), advisory dates from the bundled CVE rule
-/// packs (#12) and the tenant's stored analyst actions.
-async fn campaigns(
+/// What campaign clustering reads besides the attempts and IOCs.
+pub(crate) struct ClusterInputs {
+    pub signals: std::collections::BTreeMap<String, foiled_core::campaign::AttemptSignals>,
+    pub asns: std::collections::BTreeMap<String, u32>,
+    pub advisories: std::collections::BTreeMap<String, i64>,
+    pub actions: Vec<foiled_core::campaign::CampaignAction>,
+    pub registry: foiled_core::campaign::Registry,
+}
+
+/// Gather clustering inputs (#33): CVE and technique signals from the
+/// bundled rule packs (#12, #26), ASN numbers from cached enrichment Facts
+/// (#11), advisory dates, the tenant's analyst actions (every structural
+/// one, the newest feedback) and the registry for these attempts.
+pub(crate) async fn cluster_inputs(
     state: &AppState,
     tenant_id: &str,
     attempts: &[Attempt],
     events: &[foiled_core::capture::CaptureEvent],
-    iocs: &foiled_core::ioc::Extraction,
-    cfg: &foiled_core::confidence::ConfidenceConfig,
-) -> Result<foiled_core::campaign::Clustering, ApiError> {
+) -> Result<ClusterInputs, ApiError> {
     use foiled_core::campaign;
     let signals = campaign::attempt_signals(
         attempts,
@@ -201,22 +243,100 @@ async fn campaigns(
         .collect();
     let actions = state
         .store
-        .campaign_actions(tenant_id, campaign::MAX_ACTIONS)
+        .campaign_actions(tenant_id, campaign::MAX_FEEDBACK_ACTIONS)
         .await?;
-    Ok(campaign::cluster(
+    let registry = load_registry(state, tenant_id, attempts).await?;
+    Ok(ClusterInputs {
+        signals,
+        asns,
+        advisories,
+        actions,
+        registry,
+    })
+}
+
+/// Cluster and, when `record` is set, write what changed to the registry.
+/// A failed registry write does not fail the read; it is noted, and the
+/// next read writes again.
+pub(crate) async fn run_clustering(
+    state: &AppState,
+    tenant_id: &str,
+    inputs: &ClusterInputs,
+    attempts: &[Attempt],
+    iocs: &foiled_core::ioc::Extraction,
+    record: bool,
+) -> foiled_core::campaign::Clustering {
+    use foiled_core::campaign;
+    let now = (state.clock)();
+    let mut c = campaign::cluster(
         &campaign::Input {
             tenant_id,
             attempts,
             iocs,
-            signals: &signals,
-            asns: &asns,
-            advisories: &advisories,
-            actions: &actions,
-            now: (state.clock)(),
+            signals: &inputs.signals,
+            asns: &inputs.asns,
+            advisories: &inputs.advisories,
+            actions: &inputs.actions,
+            registry: &inputs.registry,
+            now,
         },
         campaign::Params::default(),
-        cfg,
-    ))
+        &foiled_core::confidence::ConfidenceConfig::default(),
+    );
+    if record && !c.registry_update.is_empty() {
+        let update = std::mem::take(&mut c.registry_update);
+        if state
+            .store
+            .update_campaign_registry(tenant_id, update, now)
+            .await
+            .is_err()
+        {
+            c.notes.push(
+                "The campaign registry could not be updated; new campaign ids are recorded on \
+                 the next read."
+                    .into(),
+            );
+        }
+    }
+    c
+}
+
+/// The registry entries for these attempts, with the records of their
+/// campaigns and of any campaign those were merged into.
+pub(crate) async fn load_registry(
+    state: &AppState,
+    tenant_id: &str,
+    attempts: &[Attempt],
+) -> Result<foiled_core::campaign::Registry, ApiError> {
+    use foiled_core::campaign::{MAX_MERGE_HOPS, Registry};
+    let mut registry = Registry::default();
+    if attempts.is_empty() {
+        return Ok(registry);
+    }
+    let ids = attempts.iter().map(|a| a.attempt_id.clone()).collect();
+    registry.members = state
+        .store
+        .campaign_memberships(tenant_id, ids)
+        .await?
+        .into_iter()
+        .collect();
+    let mut wanted: Vec<String> = registry
+        .members
+        .values()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    for _ in 0..MAX_MERGE_HOPS {
+        if wanted.is_empty() {
+            break;
+        }
+        for c in state.store.campaign_records(tenant_id, wanted).await? {
+            registry.campaigns.insert(c.campaign_id.clone(), c);
+        }
+        wanted = registry.missing_targets();
+    }
+    Ok(registry)
 }
 
 /// Source address to ASN number, from the newest cached `asn.number` Fact
@@ -291,8 +411,16 @@ async fn list(
         ));
     }
     let (since, until) = window(&state, &q);
-    let (attempts, events, truncated) =
-        attempts_and_events(&state, &who.tenant_id, since, until).await?;
+    let m = window_model(
+        &state,
+        &who.tenant_id,
+        since,
+        until,
+        Iocs::Attach,
+        Campaigns::Full,
+    )
+    .await?;
+    let (attempts, events, truncated) = (m.attempts, m.events, m.truncated);
     let mut items: Vec<Attempt> = attempts
         .into_iter()
         .filter(|a| q.decoy_id.as_deref().is_none_or(|d| a.decoy_id == d))
@@ -404,8 +532,17 @@ async fn timeline(
 ) -> Result<Response, ApiError> {
     let who = auth.require(Scope::AttemptsRead)?;
     let (since, until) = window(&state, &q);
-    let (attempts, events, truncated) =
-        attempts_and_events(&state, &who.tenant_id, since, until).await?;
+    // The timeline shows IOC refs but not the campaign, so no clustering.
+    let m = window_model(
+        &state,
+        &who.tenant_id,
+        since,
+        until,
+        Iocs::Attach,
+        Campaigns::Skip,
+    )
+    .await?;
+    let (attempts, events, truncated) = (m.attempts, m.events, m.truncated);
     let attempt = attempts
         .iter()
         .find(|a| a.attempt_id == attempt_id)

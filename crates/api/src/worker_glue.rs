@@ -1030,12 +1030,55 @@ impl Store for CfStore {
     fn campaign_actions(
         &self,
         tenant_id: &str,
-        limit: usize,
+        feedback_limit: usize,
     ) -> StoreFuture<'_, Vec<foiled_core::campaign::CampaignAction>> {
         let t = tenant_id.to_string();
         wrap(async move {
             let client = self.pg().await?;
-            foiled_pg::campaign_actions(&client, &t, limit as i64)
+            foiled_pg::campaign_actions(&client, &t, feedback_limit as i64)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn campaign_memberships(
+        &self,
+        tenant_id: &str,
+        attempt_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<(String, String)>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::campaign_memberships(&client, &t, &attempt_ids)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn campaign_records(
+        &self,
+        tenant_id: &str,
+        campaign_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::StoredCampaign>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::campaign_records(&client, &t, &campaign_ids)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn update_campaign_registry(
+        &self,
+        tenant_id: &str,
+        update: foiled_core::campaign::RegistryUpdate,
+        now: i64,
+    ) -> StoreFuture<'_, ()> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::update_campaign_registry(&client, &t, &update, now)
                 .await
                 .map_err(err)
         })

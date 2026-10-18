@@ -58,8 +58,23 @@ pub const MAX_SHARED_IOCS: usize = 64;
 pub const MAX_CONFIDENCE_ITEMS: usize = 16;
 /// Most request shapes (path and user agent pairs) taken from one attempt.
 pub const MAX_REQUEST_SHAPES: usize = 4;
-/// Most analyst actions replayed per tenant (the newest are kept).
-pub const MAX_ACTIONS: usize = 2000;
+/// Most feedback actions replayed per tenant (the newest are kept).
+/// Structural actions (label, status, merge, split) are always replayed.
+pub const MAX_FEEDBACK_ACTIONS: usize = 500;
+/// Most anchor attempts stored with an action or merge reference.
+pub const MAX_ANCHORS: usize = 16;
+/// Most `merged_into` hops followed in the registry.
+pub const MAX_MERGE_HOPS: usize = 8;
+/// Most join keys of one feature kept per attempt.
+pub const MAX_KEYS_PER_FEATURE: usize = 16;
+/// A medium feature held by more distinct sources than this is common
+/// (a public exploit or tool) and only joins as weak.
+pub const COMMON_MAX_SOURCES: usize = 10;
+/// In a window with at least this many sources, a medium feature held by
+/// more than a quarter of them is common too.
+pub const COMMON_MIN_POPULATION: usize = 8;
+/// Most per-attempt key cap notes listed.
+const MAX_CAP_NOTES: usize = 32;
 /// Longest analyst title, in characters.
 pub const MAX_TITLE_CHARS: usize = 120;
 /// Longest analyst note, in characters.
@@ -389,6 +404,10 @@ pub struct Member {
     pub joined_by: Vec<Join>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub added_by: Option<AddedBy>,
+    /// In the campaign from an earlier window (the campaign registry): the
+    /// attempts it joined are outside this window.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub carried_over: bool,
 }
 
 /// The attempt the campaign id is derived from, and what joined it.
@@ -574,14 +593,15 @@ pub struct Campaign {
     pub notes: Vec<String>,
 }
 
-/// A campaign named by an analyst action, with the attempt that anchors it
-/// (its seed when the action was taken). Actions follow the anchor, so they
-/// still apply when a wider window gives the campaign a different id.
+/// A campaign named by an analyst action. Actions resolve by campaign id
+/// first (the registry keeps ids stable across windows) and fall back to
+/// the anchor attempts, a few of the campaign's newest members when the
+/// action was taken.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CampaignRef {
     pub campaign_id: String,
-    pub anchor_attempt_id: String,
+    pub anchor_attempt_ids: Vec<String>,
 }
 
 /// One audited analyst action. Mirrors `schemas/campaign-action.schema.json`.
@@ -593,7 +613,9 @@ pub struct CampaignAction {
     pub action_id: String,
     pub kind: ActionKind,
     pub campaign_id: String,
-    pub anchor_attempt_id: String,
+    /// Up to [`MAX_ANCHORS`] member attempts, newest first, used only when
+    /// `campaign_id` is not in the window.
+    pub anchor_attempt_ids: Vec<String>,
     /// `label`: the new title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -621,6 +643,14 @@ impl CampaignAction {
         let mut out = Vec::new();
         if self.note.chars().count() > MAX_NOTE_CHARS {
             out.push(format!("note must be at most {MAX_NOTE_CHARS} characters"));
+        }
+        if self.anchor_attempt_ids.len() > MAX_ANCHORS
+            || self
+                .merge
+                .iter()
+                .any(|r| r.anchor_attempt_ids.len() > MAX_ANCHORS)
+        {
+            out.push(format!("at most {MAX_ANCHORS} anchor attempts"));
         }
         let want = |ok: bool, what: &str, out: &mut Vec<String>| {
             if !ok {
@@ -688,6 +718,123 @@ impl CampaignAction {
         }
         out
     }
+
+    /// Merge, split, label and status change what a campaign is and are
+    /// always replayed in full. Only feedback may be capped.
+    pub fn is_structural(&self) -> bool {
+        self.kind != ActionKind::Feedback
+    }
+}
+
+/// A campaign as the registry last recorded it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredCampaign {
+    pub campaign_id: String,
+    /// Unix ms when the id was first recorded. The oldest id wins when a
+    /// cluster holds members of several stored campaigns.
+    pub created_at: i64,
+    pub first_seen: i64,
+    pub last_seen: i64,
+    /// Set when the campaign was folded into another (merge or a new bridge).
+    pub merged_into: Option<String>,
+    /// Attempts recorded as members, across all windows.
+    pub attempts: u32,
+}
+
+/// The stored campaign registry, as read for one window: the recorded
+/// campaign of each attempt in the window and the records of those
+/// campaigns (and of any campaign they were merged into).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Registry {
+    /// Attempt id to recorded campaign id.
+    pub members: BTreeMap<String, String>,
+    pub campaigns: BTreeMap<String, StoredCampaign>,
+}
+
+impl Registry {
+    /// Follow `merged_into` to the live id, at most [`MAX_MERGE_HOPS`] hops.
+    pub fn resolve<'a>(&'a self, id: &'a str) -> &'a str {
+        let mut id = id;
+        for _ in 0..MAX_MERGE_HOPS {
+            match self
+                .campaigns
+                .get(id)
+                .and_then(|c| c.merged_into.as_deref())
+            {
+                Some(next) => id = next,
+                None => break,
+            }
+        }
+        id
+    }
+
+    /// Apply an update the way the stores do: `created_at` is kept, first
+    /// and last seen only widen, and `attempts` is recounted. Used by the
+    /// in-memory store and tests; the Postgres store does the same in SQL.
+    pub fn apply(&mut self, up: &RegistryUpdate) {
+        for m in &up.members {
+            self.members
+                .insert(m.attempt_id.clone(), m.campaign_id.clone());
+        }
+        for c in &up.campaigns {
+            let rec = match self.campaigns.get(&c.campaign_id) {
+                Some(s) => StoredCampaign {
+                    first_seen: s.first_seen.min(c.first_seen),
+                    last_seen: s.last_seen.max(c.last_seen),
+                    merged_into: c.merged_into.clone(),
+                    ..s.clone()
+                },
+                None => c.clone(),
+            };
+            self.campaigns.insert(c.campaign_id.clone(), rec);
+        }
+        let mut counts: BTreeMap<&str, u32> = BTreeMap::new();
+        for c in self.members.values() {
+            *counts.entry(c.as_str()).or_default() += 1;
+        }
+        let counts: BTreeMap<String, u32> = counts
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        for (id, c) in self.campaigns.iter_mut() {
+            c.attempts = counts.get(id).copied().unwrap_or(0);
+        }
+    }
+
+    /// `merged_into` targets not loaded yet, for the caller to fetch.
+    pub fn missing_targets(&self) -> Vec<String> {
+        self.campaigns
+            .values()
+            .filter_map(|c| c.merged_into.clone())
+            .filter(|t| !self.campaigns.contains_key(t))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+}
+
+/// One recorded membership.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberRecord {
+    pub attempt_id: String,
+    pub campaign_id: String,
+    pub attempt_first_seen: i64,
+}
+
+/// What a clustering run changes in the registry. Empty when nothing
+/// changed, which is the steady state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RegistryUpdate {
+    /// Upserts. `attempts` is ignored; the store counts members itself.
+    pub campaigns: Vec<StoredCampaign>,
+    pub members: Vec<MemberRecord>,
+}
+
+impl RegistryUpdate {
+    pub fn is_empty(&self) -> bool {
+        self.campaigns.is_empty() && self.members.is_empty()
+    }
 }
 
 /// Everything clustering reads. Attempts and IOCs must come from the same
@@ -702,8 +849,10 @@ pub struct Input<'a> {
     pub asns: &'a BTreeMap<String, u32>,
     /// CVE id to advisory publication time in Unix ms (#12).
     pub advisories: &'a BTreeMap<String, i64>,
+    /// Every structural action and the newest feedback actions.
     pub actions: &'a [CampaignAction],
-    /// Unix ms, for `closed`.
+    pub registry: &'a Registry,
+    /// Unix ms, for `closed` and new registry records.
     pub now: i64,
 }
 
@@ -724,10 +873,16 @@ impl Default for Params {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Clustering {
-    /// Sorted by first seen, then id.
+    /// Campaigns with at least two attempts in the window, sorted by first
+    /// seen, then id.
     pub campaigns: Vec<Campaign>,
-    /// Skipped analyst actions, refused bridges and dissolved campaigns.
+    /// Attempts whose campaign has only them in this window, with that
+    /// campaign's id (from the registry or a split).
+    pub carried: BTreeMap<String, String>,
+    /// Skipped actions, refused bridges and attempts that hit the key cap.
     pub notes: Vec<String>,
+    /// Registry writes for the caller to make.
+    pub registry_update: RegistryUpdate,
 }
 
 impl Clustering {
@@ -735,7 +890,7 @@ impl Clustering {
         self.campaigns.iter().find(|c| c.campaign_id == campaign_id)
     }
 
-    /// Campaign id per member attempt id.
+    /// Campaign id per attempt id, for listed and carried campaigns.
     pub fn membership(&self) -> BTreeMap<&str, &str> {
         self.campaigns
             .iter()
@@ -744,14 +899,14 @@ impl Clustering {
                     .iter()
                     .map(move |a| (a.as_str(), c.campaign_id.as_str()))
             })
+            .chain(self.carried.iter().map(|(a, c)| (a.as_str(), c.as_str())))
             .collect()
     }
 }
 
 /// `cmp_` plus 24 hex characters of SHA-256 over the tenant and the seed
-/// attempt (the earliest member). The seed's features are recorded in
-/// `seed`, not hashed: hashing them would change the id every time the
-/// campaign grew through a different feature.
+/// attempt (the earliest member) of a cluster with no recorded id yet.
+/// Once recorded, the registry keeps the id however the window moves.
 pub fn campaign_id(tenant_id: &str, seed_attempt_id: &str) -> String {
     hash_id(&format!("{ID_DOMAIN}\n{tenant_id}\n{seed_attempt_id}"))
 }
@@ -800,6 +955,39 @@ impl Key {
 struct KeyInfo {
     display: String,
     ioc_id: Option<String>,
+    /// The feature's strength, or `weak` for a medium feature shared by
+    /// too many sources to be distinctive.
+    strength: Strength,
+}
+
+/// Interned join keys: each distinct key is stored once.
+#[derive(Default)]
+struct Keys {
+    keys: Vec<Key>,
+    info: Vec<KeyInfo>,
+    ids: BTreeMap<Key, usize>,
+}
+
+impl Keys {
+    fn intern(&mut self, key: Key, display: String, ioc_id: Option<String>) -> usize {
+        if let Some(&id) = self.ids.get(&key) {
+            return id;
+        }
+        let id = self.keys.len();
+        self.info.push(KeyInfo {
+            display,
+            ioc_id,
+            strength: key.feature.strength(),
+        });
+        self.ids.insert(key.clone(), id);
+        self.keys.push(key);
+        id
+    }
+
+    /// Strength, then feature, then value.
+    fn order(&self, a: usize, b: usize) -> std::cmp::Ordering {
+        (self.info[a].strength, &self.keys[a]).cmp(&(self.info[b].strength, &self.keys[b]))
+    }
 }
 
 fn ip_display(ip: &str) -> String {
@@ -817,21 +1005,29 @@ fn has_role(i: &Ioc, roles: &[IocRole]) -> bool {
     i.roles.iter().any(|r| roles.contains(r))
 }
 
-/// Join keys for one attempt, strongest first, at most
-/// [`MAX_FEATURES_PER_ATTEMPT`]. Returns whether any were dropped.
-fn keys_for(
+/// A fingerprint step that only exploitation and what follows it produce:
+/// a command, a callback, a file, a post-exploit hook. Plain requests and
+/// a hook firing at `trigger` are what every user of a public exploit
+/// shares, so they never make a fingerprint distinctive.
+fn distinctive_step(s: &str) -> bool {
+    !(s.starts_with("http ")
+        || s.starts_with("cmd ")
+        || (s.starts_with("hook ") && s.ends_with(" trigger")))
+}
+
+/// Every candidate join key of one attempt, deduplicated.
+fn candidate_keys(
     a: &Attempt,
     iocs: &BTreeMap<&str, &Ioc>,
     refs: &[String],
     signals: Option<&AttemptSignals>,
     asn: Option<u32>,
-    info: &mut BTreeMap<Key, KeyInfo>,
-) -> (Vec<Key>, bool) {
+    keys: &mut Keys,
+) -> Vec<usize> {
     let exploit = a.state >= AttemptState::Exploit;
-    let mut out: BTreeMap<Key, KeyInfo> = BTreeMap::new();
-    let mut add = |feature: Feature, value: String, display: String, ioc_id: Option<String>| {
-        out.entry(Key { feature, value })
-            .or_insert(KeyInfo { display, ioc_id });
+    let mut out: BTreeSet<usize> = BTreeSet::new();
+    let mut add = |keys: &mut Keys, feature: Feature, value: String, display: String, ioc_id| {
+        out.insert(keys.intern(Key { feature, value }, display, ioc_id));
     };
     let callback = [IocRole::Callback, IocRole::Stage2];
     let mut paths: Vec<&Ioc> = Vec::new();
@@ -841,31 +1037,54 @@ fn keys_for(
             continue;
         };
         let id = Some(i.ioc_id.clone());
-        let lower = i.value.to_ascii_lowercase();
+        let lower = || i.value.to_ascii_lowercase();
         match i.ioc_type {
-            IocType::PayloadSha256 if lower != EMPTY_SHA256 => {
-                add(Feature::PayloadSha256, lower, i.display.clone(), id);
+            IocType::PayloadSha256 if lower() != EMPTY_SHA256 => {
+                add(keys, Feature::PayloadSha256, lower(), i.display.clone(), id);
             }
-            IocType::FileSha256 if lower != EMPTY_SHA256 => {
-                add(Feature::FileSha256, lower, i.display.clone(), id);
+            IocType::FileSha256 if lower() != EMPTY_SHA256 => {
+                add(keys, Feature::FileSha256, lower(), i.display.clone(), id);
             }
             IocType::Url if has_role(i, &callback) => {
-                add(Feature::Stage2Url, i.value.clone(), i.display.clone(), id);
+                add(
+                    keys,
+                    Feature::Stage2Url,
+                    i.value.clone(),
+                    i.display.clone(),
+                    id,
+                );
             }
             IocType::Domain | IocType::DnsQuery if has_role(i, &callback) => {
-                let name = lower.trim_end_matches('.').to_string();
+                let name = lower().trim_end_matches('.').to_string();
                 let display = defang(IocType::Domain, &name);
-                add(Feature::CallbackDomain, name, display, id);
+                add(keys, Feature::CallbackDomain, name, display, id);
             }
             IocType::Ip | IocType::Ipv6 if has_role(i, &callback) => {
-                add(Feature::CallbackIp, lower, i.display.clone(), id);
+                add(keys, Feature::CallbackIp, lower(), i.display.clone(), id);
             }
-            IocType::BehaviourFingerprint => {
-                add(Feature::BehaviourFingerprint, lower, i.display.clone(), id);
+            IocType::BehaviourFingerprint
+                if i.fingerprint
+                    .as_ref()
+                    .is_some_and(|f| f.steps.iter().any(|s| distinctive_step(s))) =>
+            {
+                add(
+                    keys,
+                    Feature::BehaviourFingerprint,
+                    lower(),
+                    i.display.clone(),
+                    id,
+                );
             }
-            IocType::Cmdline => add(Feature::Cmdline, i.value.clone(), i.display.clone(), id),
+            IocType::Cmdline => add(
+                keys,
+                Feature::Cmdline,
+                i.value.clone(),
+                i.display.clone(),
+                id,
+            ),
             IocType::RequestSubstring if exploit => {
                 add(
+                    keys,
                     Feature::RequestSubstring,
                     i.value.clone(),
                     i.display.clone(),
@@ -885,6 +1104,7 @@ fn keys_for(
             }
             shapes += 1;
             add(
+                keys,
                 Feature::RequestShape,
                 format!("{}\n{}", p.value, u.value),
                 format!("{} with {}", p.display, u.display),
@@ -894,6 +1114,7 @@ fn keys_for(
     }
     if exploit {
         add(
+            keys,
             Feature::SrcIp,
             a.src.to_ascii_lowercase(),
             ip_display(&a.src),
@@ -911,6 +1132,7 @@ fn keys_for(
             }
             for c in cves {
                 add(
+                    keys,
                     Feature::AsnCve,
                     format!("AS{asn}\n{c}"),
                     format!("AS{asn} and {}", printable(&c)),
@@ -921,6 +1143,7 @@ fn keys_for(
                 let set: Vec<&str> = s.techniques.iter().map(String::as_str).collect();
                 let joined = set.join(",");
                 add(
+                    keys,
                     Feature::AsnTechniques,
                     format!("AS{asn}\n{joined}"),
                     format!("AS{asn} and {}", printable(&joined)),
@@ -929,16 +1152,36 @@ fn keys_for(
             }
         }
     }
-    let dropped = out.len() > MAX_FEATURES_PER_ATTEMPT;
-    let keys: Vec<Key> = out
-        .into_iter()
-        .take(MAX_FEATURES_PER_ATTEMPT)
-        .map(|(k, v)| {
-            info.entry(k.clone()).or_insert(v);
-            k
-        })
-        .collect();
-    (keys, dropped)
+    out.into_iter().collect()
+}
+
+/// Keep the keys that can join (held by two or more attempts), strongest
+/// first, then rarest (held by the fewest attempts), at most
+/// [`MAX_KEYS_PER_FEATURE`] per feature and [`MAX_FEATURES_PER_ATTEMPT`] in
+/// all. Junk values sent to flood the cap are held by one attempt each and
+/// never compete; a feature cannot crowd out the others. Returns the kept
+/// keys and how many joinable keys were dropped.
+fn select_keys(cands: &[usize], keys: &Keys, held_by: &[usize]) -> (Vec<usize>, usize) {
+    let mut joinable: Vec<usize> = cands.iter().copied().filter(|&k| held_by[k] >= 2).collect();
+    joinable.sort_by(|&a, &b| {
+        (keys.info[a].strength, held_by[a])
+            .cmp(&(keys.info[b].strength, held_by[b]))
+            .then_with(|| keys.order(a, b))
+    });
+    let mut per_feature: BTreeMap<Feature, usize> = BTreeMap::new();
+    let mut kept = Vec::new();
+    for k in &joinable {
+        if kept.len() == MAX_FEATURES_PER_ATTEMPT {
+            break;
+        }
+        let n = per_feature.entry(keys.keys[*k].feature).or_default();
+        if *n < MAX_KEYS_PER_FEATURE {
+            *n += 1;
+            kept.push(*k);
+        }
+    }
+    let dropped = joinable.len() - kept.len();
+    (kept, dropped)
 }
 
 struct Dsu {
@@ -990,7 +1233,8 @@ struct Group {
     analyst: AnalystState,
 }
 
-/// Cluster a tenant's attempts into campaigns and apply analyst actions.
+/// Cluster a tenant's attempts into campaigns, keep ids from the registry,
+/// and apply analyst actions.
 pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clustering {
     let mut attempts: Vec<&Attempt> = input
         .attempts
@@ -1018,33 +1262,83 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
         .map(|x| (x.attempt_id.as_str(), x.ioc_refs.as_slice()))
         .collect();
 
-    // Blocking: one posting list per key, in time order.
-    let mut info: BTreeMap<Key, KeyInfo> = BTreeMap::new();
-    let mut index: BTreeMap<Key, Vec<usize>> = BTreeMap::new();
-    let mut keys_of: Vec<Vec<Key>> = Vec::with_capacity(n);
-    let mut truncated: BTreeSet<usize> = BTreeSet::new();
-    for (i, a) in attempts.iter().enumerate() {
-        let (keys, dropped) = keys_for(
-            a,
-            &ioc_index,
-            refs.get(a.attempt_id.as_str()).copied().unwrap_or(&[]),
-            input.signals.get(&a.attempt_id),
-            input.asns.get(&a.src).copied(),
-            &mut info,
-        );
-        if dropped {
-            truncated.insert(i);
+    // Candidate keys, interned.
+    let mut keys = Keys::default();
+    let cands: Vec<Vec<usize>> = attempts
+        .iter()
+        .map(|a| {
+            candidate_keys(
+                a,
+                &ioc_index,
+                refs.get(a.attempt_id.as_str()).copied().unwrap_or(&[]),
+                input.signals.get(&a.attempt_id),
+                input.asns.get(&a.src).copied(),
+                &mut keys,
+            )
+        })
+        .collect();
+
+    // How many attempts and distinct sources hold each key.
+    let mut held_by = vec![0usize; keys.keys.len()];
+    let mut sources: BTreeMap<usize, BTreeSet<&str>> = BTreeMap::new();
+    for (i, c) in cands.iter().enumerate() {
+        for &k in c {
+            held_by[k] += 1;
+            if keys.info[k].strength == Strength::Medium {
+                sources
+                    .entry(k)
+                    .or_default()
+                    .insert(attempts[i].src.as_str());
+            }
         }
-        for k in &keys {
-            index.entry(k.clone()).or_default().push(i);
+    }
+    // Rarity: a medium feature shared by many of the window's sources is
+    // what a public exploit or tool looks like, not one operator.
+    let all_sources = attempts
+        .iter()
+        .map(|a| a.src.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
+    for (k, s) in &sources {
+        let n = s.len();
+        if n > COMMON_MAX_SOURCES || (all_sources >= COMMON_MIN_POPULATION && n * 4 > all_sources) {
+            keys.info[*k].strength = Strength::Weak;
         }
-        keys_of.push(keys);
+    }
+
+    // Blocking on the kept keys: one posting list per key, in time order.
+    let mut index: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    let mut keys_of: Vec<Vec<usize>> = Vec::with_capacity(n);
+    let mut notes = Vec::new();
+    let mut capped: BTreeMap<usize, usize> = BTreeMap::new();
+    for (i, c) in cands.iter().enumerate() {
+        let (kept, dropped) = select_keys(c, &keys, &held_by);
+        if dropped > 0 {
+            capped.insert(i, dropped);
+        }
+        for &k in &kept {
+            index.entry(k).or_default().push(i);
+        }
+        keys_of.push(kept);
+    }
+    for (&i, dropped) in capped.iter().take(MAX_CAP_NOTES) {
+        notes.push(format!(
+            "Attempt {} had {dropped} more shared feature(s) than the cap; the commonest were \
+             not used.",
+            attempts[i].attempt_id
+        ));
+    }
+    if capped.len() > MAX_CAP_NOTES {
+        notes.push(format!(
+            "{} more attempt(s) hit the feature cap.",
+            capped.len() - MAX_CAP_NOTES
+        ));
     }
 
     // Union-find: strong and medium keys first, then weak keys, which may
     // attach stragglers but never bridge two established clusters.
     let mut dsu = Dsu::new(n);
-    let mut edges: Vec<Vec<(Key, usize)>> = vec![Vec::new(); n];
+    let mut edges: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
     let mut refused = 0usize;
     for weak_pass in [false, true] {
         if weak_pass {
@@ -1055,11 +1349,14 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
                 }
             }
         }
-        for (key, posting) in &index {
-            if (key.feature.strength() == Strength::Weak) != weak_pass {
+        // Key order (strength, feature, value) keeps the walk deterministic.
+        let mut order: Vec<usize> = index.keys().copied().collect();
+        order.sort_by(|&a, &b| keys.order(a, b));
+        for k in order {
+            if (keys.info[k].strength == Strength::Weak) != weak_pass {
                 continue;
             }
-            for w in posting.windows(2) {
+            for w in index[&k].windows(2) {
                 let (p, c) = (w[0], w[1]);
                 if attempts[c].first_seen - attempts[p].last_seen > params.join_gap_ms {
                     continue;
@@ -1072,8 +1369,37 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
                     }
                     dsu.union(rp, rc);
                 }
-                edges[p].push((key.clone(), c));
-                edges[c].push((key.clone(), p));
+                edges[p].push((k, c));
+                edges[c].push((k, p));
+            }
+        }
+    }
+    if refused > 0 {
+        notes.push(format!(
+            "{refused} weak feature join(s) were not used because they would have bridged two \
+             campaigns already formed by strong or medium features."
+        ));
+    }
+
+    // Registry: attempts recorded in the same campaign stay together.
+    let stored: Vec<Option<&str>> = attempts
+        .iter()
+        .map(|a| {
+            input
+                .registry
+                .members
+                .get(&a.attempt_id)
+                .map(|c| input.registry.resolve(c))
+        })
+        .collect();
+    let mut by_stored: BTreeMap<&str, usize> = BTreeMap::new();
+    for (i, s) in stored.iter().enumerate() {
+        if let Some(s) = s {
+            match by_stored.get(s) {
+                Some(&first) => dsu.union(first, i),
+                None => {
+                    by_stored.insert(s, i);
+                }
             }
         }
     }
@@ -1083,11 +1409,27 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
         let r = dsu.find(i);
         by_root.entry(r).or_default().insert(i);
     }
+    let created = |id: &str| {
+        input
+            .registry
+            .campaigns
+            .get(id)
+            .map_or(i64::MAX, |c| c.created_at)
+    };
     let mut groups: BTreeMap<String, Group> = BTreeMap::new();
     let mut member_of: Vec<Option<String>> = vec![None; n];
-    for members in by_root.into_values().filter(|m| m.len() >= 2) {
+    for members in by_root.into_values() {
+        let recorded: BTreeSet<&str> = members.iter().filter_map(|&m| stored[m]).collect();
+        if members.len() < 2 && recorded.is_empty() {
+            continue;
+        }
         let seed = *members.iter().next().expect("non-empty");
-        let id = campaign_id(input.tenant_id, &attempts[seed].attempt_id);
+        // The oldest recorded id wins; a new cluster takes its seed's id.
+        let id = recorded
+            .iter()
+            .min_by_key(|id| (created(id), **id))
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| campaign_id(input.tenant_id, &attempts[seed].attempt_id));
         for &m in &members {
             member_of[m] = Some(id.clone());
         }
@@ -1102,13 +1444,6 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
         );
     }
 
-    let mut notes = Vec::new();
-    if refused > 0 {
-        notes.push(format!(
-            "{refused} weak feature join(s) were not used because they would have bridged two \
-             campaigns already formed by strong or medium features."
-        ));
-    }
     apply_actions(
         input,
         &idx_of,
@@ -1126,6 +1461,7 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
             .or_default()
             .insert(a.decoy_id.as_str());
     }
+    let registry_update = registry_update(input, &attempts, &stored, &groups);
     let ctx = BuildCtx {
         input,
         params,
@@ -1133,52 +1469,144 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
         attempts: &attempts,
         keys_of: &keys_of,
         edges: &edges,
-        info: &info,
+        keys: &keys,
         refs: &refs,
         decoys_by_product: &decoys_by_product,
-        truncated: &truncated,
+        capped: &capped,
     };
     let mut campaigns: Vec<Campaign> = Vec::new();
+    let mut carried = BTreeMap::new();
     for (id, g) in groups {
         if g.members.len() < 2 {
-            notes.push(format!(
-                "Campaign {id} has fewer than two attempts after analyst actions and is not shown."
-            ));
+            for &m in &g.members {
+                carried.insert(attempts[m].attempt_id.clone(), id.clone());
+            }
             continue;
         }
         campaigns.push(build_campaign(&ctx, id, g));
     }
     campaigns.sort_by(|a, b| (a.first_seen, &a.campaign_id).cmp(&(b.first_seen, &b.campaign_id)));
-    Clustering { campaigns, notes }
+    Clustering {
+        campaigns,
+        carried,
+        notes,
+        registry_update,
+    }
+}
+
+/// Registry writes: memberships that changed, campaign records that are
+/// new or moved, and recorded campaigns that no group holds any more
+/// (folded into the group that now holds their attempts).
+fn registry_update(
+    input: &Input<'_>,
+    attempts: &[&Attempt],
+    stored: &[Option<&str>],
+    groups: &BTreeMap<String, Group>,
+) -> RegistryUpdate {
+    let mut up = RegistryUpdate::default();
+    let mut absorbed: BTreeMap<&str, &str> = BTreeMap::new();
+    for (id, g) in groups {
+        if g.members.is_empty() {
+            continue;
+        }
+        for &m in &g.members {
+            let a = attempts[m];
+            if input.registry.members.get(&a.attempt_id) != Some(id) {
+                up.members.push(MemberRecord {
+                    attempt_id: a.attempt_id.clone(),
+                    campaign_id: id.clone(),
+                    attempt_first_seen: a.first_seen,
+                });
+            }
+            if let Some(s) = stored[m]
+                && s != id
+                && !groups.contains_key(s)
+            {
+                absorbed.entry(s).or_insert(id.as_str());
+            }
+        }
+        let first = g.members.iter().map(|&m| attempts[m].first_seen).min();
+        let last = g.members.iter().map(|&m| attempts[m].last_seen).max();
+        let (Some(first), Some(last)) = (first, last) else {
+            continue;
+        };
+        let rec = match input.registry.campaigns.get(id) {
+            Some(s) => StoredCampaign {
+                first_seen: s.first_seen.min(first),
+                last_seen: s.last_seen.max(last),
+                merged_into: None,
+                ..s.clone()
+            },
+            None => StoredCampaign {
+                campaign_id: id.clone(),
+                created_at: input.now,
+                first_seen: first,
+                last_seen: last,
+                merged_into: None,
+                attempts: 0,
+            },
+        };
+        if input.registry.campaigns.get(id) != Some(&rec) {
+            up.campaigns.push(rec);
+        }
+    }
+    for (from, into) in absorbed {
+        if let Some(s) = input.registry.campaigns.get(from)
+            && s.merged_into.as_deref() != Some(into)
+        {
+            up.campaigns.push(StoredCampaign {
+                merged_into: Some(into.to_string()),
+                ..s.clone()
+            });
+        }
+    }
+    up
 }
 
 fn apply_actions(
     input: &Input<'_>,
     idx_of: &BTreeMap<&str, usize>,
-    edges: &[Vec<(Key, usize)>],
+    edges: &[Vec<(usize, usize)>],
     groups: &mut BTreeMap<String, Group>,
     member_of: &mut [Option<String>],
     notes: &mut Vec<String>,
 ) {
     let mut actions: Vec<&CampaignAction> = input.actions.iter().collect();
     actions.sort_by(|a, b| (a.at, &a.action_id).cmp(&(b.at, &b.action_id)));
-    let skip = actions.len().saturating_sub(MAX_ACTIONS);
-    if skip > 0 {
+    // Structural actions always replay; only the oldest feedback is shed.
+    let feedback = actions.iter().filter(|a| !a.is_structural()).count();
+    let mut shed = feedback.saturating_sub(MAX_FEEDBACK_ACTIONS);
+    if shed > 0 {
         notes.push(format!(
-            "{skip} older analyst action(s) were not replayed: at most {MAX_ACTIONS} are."
+            "{shed} older feedback action(s) were not replayed: at most \
+             {MAX_FEEDBACK_ACTIONS} are."
         ));
     }
-    let group_of = |member_of: &[Option<String>], attempt_id: &str| {
-        idx_of.get(attempt_id).and_then(|&i| member_of[i].clone())
+    actions.retain(|a| {
+        if !a.is_structural() && shed > 0 {
+            shed -= 1;
+            return false;
+        }
+        true
+    });
+    // By campaign id (following registry merges), else by anchor attempt.
+    let resolve = |groups: &BTreeMap<String, Group>,
+                   member_of: &[Option<String>],
+                   id: &str,
+                   anchors: &[String]|
+     -> Option<String> {
+        let id = input.registry.resolve(id);
+        if groups.get(id).is_some_and(|g| !g.members.is_empty()) {
+            return Some(id.to_string());
+        }
+        anchors
+            .iter()
+            .find_map(|a| idx_of.get(a.as_str()).and_then(|&i| member_of[i].clone()))
     };
-    for a in actions.into_iter().skip(skip) {
-        let Some(gid) = group_of(member_of, &a.anchor_attempt_id) else {
-            notes.push(format!(
-                "Analyst action {} was not applied: campaign {} has no clustered attempts in \
-                 this window.",
-                printable(&a.action_id),
-                printable(&a.campaign_id)
-            ));
+    for a in actions {
+        // A campaign with nothing in this window is normal as the window
+        // moves; its actions apply again when it is back.
+        let Some(gid) = resolve(groups, member_of, &a.campaign_id, &a.anchor_attempt_ids) else {
             continue;
         };
         let by = AddedBy {
@@ -1210,16 +1638,18 @@ fn apply_actions(
             }
             ActionKind::Merge => {
                 for r in a.merge.iter().take(MAX_ACTION_CAMPAIGNS) {
-                    let Some(other) = group_of(member_of, &r.anchor_attempt_id) else {
-                        notes.push(format!(
-                            "Analyst action {} could not merge campaign {}: it has no clustered \
-                             attempts in this window.",
-                            printable(&a.action_id),
-                            printable(&r.campaign_id)
-                        ));
+                    let Some(other) =
+                        resolve(groups, member_of, &r.campaign_id, &r.anchor_attempt_ids)
+                    else {
                         continue;
                     };
                     if other == gid {
+                        // Already together (the registry kept the earlier
+                        // merge); still say where the campaign came from.
+                        let g = groups.get_mut(&gid).expect("group exists");
+                        if r.campaign_id != gid && !g.analyst.merged_from.contains(&r.campaign_id) {
+                            g.analyst.merged_from.push(r.campaign_id.clone());
+                        }
                         continue;
                     }
                     let o = groups.remove(&other).expect("group exists");
@@ -1229,11 +1659,13 @@ fn apply_actions(
                         g.members.insert(m);
                         g.added_by.insert(m, by.clone());
                     }
+                    g.seed = g.seed.min(o.seed);
                     g.analyst.merged_from.push(other);
                     g.analyst.merged_from.extend(o.analyst.merged_from);
                 }
             }
             ActionKind::Split => {
+                let new_id = split_campaign_id(input.tenant_id, &a.action_id);
                 let g = groups.get(&gid).expect("group exists");
                 let moving: BTreeSet<usize> = a
                     .attempt_ids
@@ -1242,14 +1674,10 @@ fn apply_actions(
                     .filter_map(|id| idx_of.get(id.as_str()).copied())
                     .filter(|i| g.members.contains(i))
                     .collect();
-                if moving.is_empty() || moving.len() == g.members.len() {
-                    notes.push(format!(
-                        "Analyst action {} was not applied: a split must leave attempts on both \
-                         sides.",
-                        printable(&a.action_id)
-                    ));
-                } else {
-                    split(input, a, &gid, &moving, &by, edges, groups, member_of);
+                // Already split (the window only holds the split side), or
+                // none of the named attempts are here.
+                if gid != new_id && !moving.is_empty() {
+                    split(&gid, new_id, &moving, &by, edges, groups, member_of);
                 }
             }
         }
@@ -1259,39 +1687,26 @@ fn apply_actions(
     }
 }
 
-/// Split `moving` out of group `gid`. The side holding the seed keeps the
-/// campaign id; the other side gets [`split_campaign_id`].
-#[allow(clippy::too_many_arguments)]
+/// Move `moving` out of group `gid` into `new_id`. The named attempts move;
+/// the rest keep the campaign id, so the split holds however the window
+/// moves.
 fn split(
-    input: &Input<'_>,
-    a: &CampaignAction,
     gid: &str,
+    new_id: String,
     moving: &BTreeSet<usize>,
     by: &AddedBy,
-    edges: &[Vec<(Key, usize)>],
+    edges: &[Vec<(usize, usize)>],
     groups: &mut BTreeMap<String, Group>,
     member_of: &mut [Option<String>],
 ) {
     let g = groups.get_mut(gid).expect("group exists");
-    let rest: BTreeSet<usize> = g.members.difference(moving).copied().collect();
-    let (keep, out) = if moving.contains(&g.seed) {
-        (moving.clone(), rest)
-    } else {
-        (rest, moving.clone())
-    };
-    let new_id = split_campaign_id(input.tenant_id, &a.action_id);
-    let mut new_added = BTreeMap::new();
-    for &m in &out {
+    for &m in moving {
+        g.members.remove(&m);
         g.added_by.remove(&m);
         member_of[m] = Some(new_id.clone());
     }
-    g.members = keep;
-    for &m in moving {
-        if g.members.contains(&m) {
-            g.added_by.insert(m, by.clone());
-        } else {
-            new_added.insert(m, by.clone());
-        }
+    if let Some(&first) = g.members.iter().next() {
+        g.seed = first;
     }
     // Members left with no join inside their side stay by the analyst's
     // decision, so say so.
@@ -1306,25 +1721,20 @@ fn split(
     for m in keep_orphans {
         g.added_by.entry(m).or_insert_with(|| by.clone());
     }
-    for &m in &out {
-        if orphaned(&out, m) {
-            new_added.entry(m).or_insert_with(|| by.clone());
-        }
-    }
-    let seed = *out.iter().next().expect("non-empty");
-    groups.insert(
-        new_id,
-        Group {
-            seed,
-            members: out,
-            added_by: new_added,
-            analyst: AnalystState {
-                split_from: Some(gid.to_string()),
-                action_ids: vec![a.action_id.clone()],
-                ..AnalystState::default()
-            },
+    let added: BTreeMap<usize, AddedBy> = moving.iter().map(|&m| (m, by.clone())).collect();
+    let seed = *moving.iter().next().expect("non-empty");
+    let target = groups.entry(new_id).or_insert_with(|| Group {
+        seed,
+        members: BTreeSet::new(),
+        added_by: BTreeMap::new(),
+        analyst: AnalystState {
+            split_from: Some(gid.to_string()),
+            ..AnalystState::default()
         },
-    );
+    });
+    target.seed = target.seed.min(seed);
+    target.members.extend(moving.iter().copied());
+    target.added_by.extend(added);
 }
 
 struct BuildCtx<'a, 'b> {
@@ -1332,12 +1742,12 @@ struct BuildCtx<'a, 'b> {
     params: Params,
     cfg: &'a ConfidenceConfig,
     attempts: &'a [&'a Attempt],
-    keys_of: &'a [Vec<Key>],
-    edges: &'a [Vec<(Key, usize)>],
-    info: &'a BTreeMap<Key, KeyInfo>,
+    keys_of: &'a [Vec<usize>],
+    edges: &'a [Vec<(usize, usize)>],
+    keys: &'a Keys,
     refs: &'a BTreeMap<&'a str, &'a [String]>,
     decoys_by_product: &'a BTreeMap<&'a str, BTreeSet<&'a str>>,
-    truncated: &'a BTreeSet<usize>,
+    capped: &'a BTreeMap<usize, usize>,
 }
 
 fn counted(values: impl IntoIterator<Item = String>) -> Counted {
@@ -1352,21 +1762,56 @@ fn u32_len(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
+/// No clustering evidence stronger than weak.
+fn weak_only(evidence: &[Evidence]) -> bool {
+    !evidence
+        .iter()
+        .any(|e| e.source == EvidenceSource::CampaignCluster && e.weight > Strength::Weak.weight())
+}
+
+/// A campaign or membership held together only by weak features stays
+/// below `medium` until an analyst confirms it (#33 validation: a shared
+/// ASN and generic probes are low and emerging at most).
+fn cap_weak_only(cfg: &ConfidenceConfig, mut l: ConfidenceLink) -> ConfidenceLink {
+    let confirmed = matches!(
+        l.r#override.as_ref().map(|o| o.feedback),
+        Some(Feedback::TruePositive)
+    );
+    let t = cfg.thresholds;
+    if confirmed || !weak_only(&l.evidence) || l.score < t.medium {
+        return l;
+    }
+    l.score = t.medium.saturating_sub(1);
+    l.band = Band::Low;
+    l.caps_applied
+        .push("weak features only: capped below medium".into());
+    l.publishable = false;
+    l.auto_state_promote = false;
+    l.ui_highlight = l.score >= t.ui_highlight_min;
+    l.radar_queue = l.score >= t.radar_queue_min;
+    l
+}
+
 fn build_campaign(ctx: &BuildCtx<'_, '_>, campaign_id: String, g: Group) -> Campaign {
     let atts = ctx.attempts;
+    let keys = ctx.keys;
     let members_idx: Vec<usize> = g.members.iter().copied().collect();
 
     // Joins per member, inside the campaign only, strongest first.
     let mut members = Vec::with_capacity(members_idx.len());
+    let mut carried_over = 0usize;
     for &m in &members_idx {
-        let mut seen: BTreeSet<&Key> = BTreeSet::new();
-        let mut joins: Vec<(&Key, usize)> = Vec::new();
-        for (k, o) in &ctx.edges[m] {
-            if g.members.contains(o) && seen.insert(k) {
-                joins.push((k, *o));
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        let mut joins: Vec<(usize, usize)> = Vec::new();
+        for &(k, o) in &ctx.edges[m] {
+            if g.members.contains(&o) && seen.insert(k) {
+                joins.push((k, o));
             }
         }
-        joins.sort_by(|x, y| x.0.cmp(y.0));
+        joins.sort_by(|x, y| keys.order(x.0, y.0));
+        let added_by = g.added_by.get(&m).cloned();
+        let carried = joins.is_empty() && added_by.is_none();
+        carried_over += usize::from(carried);
         let a = atts[m];
         members.push(Member {
             attempt_id: a.attempt_id.clone(),
@@ -1383,35 +1828,35 @@ fn build_campaign(ctx: &BuildCtx<'_, '_>, campaign_id: String, g: Group) -> Camp
                 .take(MAX_JOINS_PER_MEMBER)
                 .map(|(k, o)| join(ctx, k, atts[o]))
                 .collect(),
-            added_by: g.added_by.get(&m).cloned(),
+            added_by,
+            carried_over: carried,
         });
     }
 
     // Keys shared inside the campaign, with how many members share each.
-    let mut shared: BTreeMap<&Key, usize> = BTreeMap::new();
+    let mut shared: BTreeMap<usize, usize> = BTreeMap::new();
     for &m in &members_idx {
-        let mut mine: BTreeSet<&Key> = BTreeSet::new();
-        for (k, o) in &ctx.edges[m] {
-            if g.members.contains(o) {
-                mine.insert(k);
-            }
-        }
+        let mine: BTreeSet<usize> = ctx.edges[m]
+            .iter()
+            .filter(|(_, o)| g.members.contains(o))
+            .map(|&(k, _)| k)
+            .collect();
         for k in mine {
             *shared.entry(k).or_default() += 1;
         }
     }
     // Values of every key held by two or more members, for the summary.
-    let mut held: BTreeMap<&Key, usize> = BTreeMap::new();
+    let mut held: BTreeMap<usize, usize> = BTreeMap::new();
     for &m in &members_idx {
-        for k in &ctx.keys_of[m] {
+        for &k in &ctx.keys_of[m] {
             *held.entry(k).or_default() += 1;
         }
     }
     let shared_values = |f: Feature| {
         counted(
             held.iter()
-                .filter(|(k, n)| k.feature == f && **n >= 2)
-                .filter_map(|(k, _)| ctx.info.get(*k).map(|i| i.display.clone())),
+                .filter(|&(&k, &n)| keys.keys[k].feature == f && n >= 2)
+                .map(|(&k, _)| keys.info[k].display.clone()),
         )
     };
 
@@ -1463,33 +1908,44 @@ fn build_campaign(ctx: &BuildCtx<'_, '_>, campaign_id: String, g: Group) -> Camp
     let targeting = targeting(ctx, &members_idx, &cves, &cve_first);
 
     // Confidence: one clustering item per shared key, strongest and most
-    // shared first, plus the lowest member noise score.
-    let mut ranked: Vec<(&Key, usize)> = shared.into_iter().collect();
+    // shared first, plus carried-over members and the lowest member noise
+    // score.
+    let mut ranked: Vec<(usize, usize)> = shared.into_iter().collect();
     ranked.sort_by(|a, b| {
-        (a.0.feature.strength(), std::cmp::Reverse(a.1), a.0).cmp(&(
-            b.0.feature.strength(),
-            std::cmp::Reverse(b.1),
-            b.0,
-        ))
+        (keys.info[a.0].strength, std::cmp::Reverse(a.1))
+            .cmp(&(keys.info[b.0].strength, std::cmp::Reverse(b.1)))
+            .then_with(|| keys.order(a.0, b.0))
     });
     let mut evidence: Vec<Evidence> = ranked
         .iter()
         .take(MAX_CONFIDENCE_ITEMS)
-        .map(|(k, count)| {
-            let i = ctx.info.get(*k);
+        .map(|&(k, count)| {
+            let i = &keys.info[k];
             Evidence {
-                signal_id: k.signal_id(),
+                signal_id: keys.keys[k].signal_id(),
                 source: EvidenceSource::CampaignCluster,
-                weight: k.feature.strength().weight(),
+                weight: i.strength.weight(),
                 summary: format!(
                     "{count} attempts share {} {}",
-                    k.feature.label(),
-                    i.map_or("", |i| i.display.as_str())
+                    keys.keys[k].feature.label(),
+                    i.display
                 ),
-                reference: i.and_then(|i| i.ioc_id.clone()),
+                reference: i.ioc_id.clone(),
             }
         })
         .collect();
+    if carried_over > 0 {
+        evidence.push(Evidence {
+            signal_id: format!("campaign:registry:{campaign_id}"),
+            source: EvidenceSource::CampaignCluster,
+            weight: Strength::Weak.weight(),
+            summary: format!(
+                "{carried_over} attempts are members from an earlier window; what joined them \
+                 is outside this one"
+            ),
+            reference: None,
+        });
+    }
     let analyst_added = g.added_by.len();
     if analyst_added > 0 {
         evidence.push(Evidence {
@@ -1513,6 +1969,7 @@ fn build_campaign(ctx: &BuildCtx<'_, '_>, campaign_id: String, g: Group) -> Camp
             reference: None,
         });
     }
+    let weak = weak_only(&evidence);
     let link = score(
         ctx.cfg,
         LinkKind::AttemptCampaign,
@@ -1520,7 +1977,8 @@ fn build_campaign(ctx: &BuildCtx<'_, '_>, campaign_id: String, g: Group) -> Camp
         &campaign_id,
         evidence,
         g.analyst.feedback.clone(),
-    );
+    )
+    .map(|l| cap_weak_only(ctx.cfg, l));
     let confidence = match link {
         Some(l) => CampaignConfidence {
             score: l.score,
@@ -1551,24 +2009,27 @@ fn build_campaign(ctx: &BuildCtx<'_, '_>, campaign_id: String, g: Group) -> Camp
         .map(|&m| atts[m].last_seen)
         .max()
         .unwrap_or(0);
+    let confirmed = confidence.wording == "confirmed";
     let status = match g.analyst.status {
         Some(s) => s,
         None if ctx.input.now - last_seen > ctx.params.closed_after_ms => CampaignStatus::Closed,
-        None if confidence.band == Band::Low || members_idx.len() < 3 => CampaignStatus::Emerging,
+        None if confidence.band == Band::Low || members_idx.len() < 3 || (weak && !confirmed) => {
+            CampaignStatus::Emerging
+        }
         None => CampaignStatus::Active,
     };
     let title = g.analyst.title.clone().unwrap_or_else(|| {
         let decoys = targeting.decoys_touched;
         match ranked.first() {
-            Some((k, _)) => {
-                let display = ctx.info.get(*k).map_or("", |i| i.display.as_str());
+            Some(&(k, _)) => {
+                let display = keys.info[k].display.as_str();
                 let short: String = display.chars().take(TITLE_VALUE_CHARS).collect();
                 let more = if display.chars().count() > TITLE_VALUE_CHARS {
                     "..."
                 } else {
                     ""
                 };
-                let label = k.feature.label();
+                let label = keys.keys[k].feature.label();
                 let mut c = label.chars();
                 let label = c
                     .next()
@@ -1576,14 +2037,17 @@ fn build_campaign(ctx: &BuildCtx<'_, '_>, campaign_id: String, g: Group) -> Camp
                     .unwrap_or_default();
                 format!("{label} {short}{more} on {decoys} decoys")
             }
-            None => format!("{} attempts grouped by an analyst", members_idx.len()),
+            None => format!(
+                "{} attempts carried over or grouped by an analyst",
+                members_idx.len()
+            ),
         }
     });
 
     let seed_features: Vec<Feature> = ctx.edges[g.seed]
         .iter()
         .filter(|(_, o)| g.members.contains(o))
-        .map(|(k, _)| k.feature)
+        .map(|&(k, _)| keys.keys[k].feature)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -1609,12 +2073,12 @@ fn build_campaign(ctx: &BuildCtx<'_, '_>, campaign_id: String, g: Group) -> Camp
     let mut notes = Vec::new();
     let cut = members_idx
         .iter()
-        .filter(|m| ctx.truncated.contains(m))
+        .filter(|m| ctx.capped.contains_key(m))
         .count();
     if cut > 0 {
         notes.push(format!(
-            "{cut} member attempt(s) had more than {MAX_FEATURES_PER_ATTEMPT} features; the \
-             weakest were not used."
+            "{cut} member attempt(s) shared more features than the cap; the commonest were not \
+             used."
         ));
     }
 
@@ -1661,17 +2125,18 @@ fn build_campaign(ctx: &BuildCtx<'_, '_>, campaign_id: String, g: Group) -> Camp
     }
 }
 
-fn join(ctx: &BuildCtx<'_, '_>, k: &Key, with: &Attempt) -> Join {
-    let i = ctx.info.get(k);
+fn join(ctx: &BuildCtx<'_, '_>, k: usize, with: &Attempt) -> Join {
+    let key = &ctx.keys.keys[k];
+    let i = &ctx.keys.info[k];
     Join {
-        signal_id: k.signal_id(),
-        feature: k.feature,
-        families: k.feature.families().to_vec(),
-        strength: k.feature.strength(),
-        weight: k.feature.strength().weight(),
-        display: i.map(|i| i.display.clone()).unwrap_or_default(),
+        signal_id: key.signal_id(),
+        feature: key.feature,
+        families: key.feature.families().to_vec(),
+        strength: i.strength,
+        weight: i.strength.weight(),
+        display: i.display.clone(),
         with_attempt_id: with.attempt_id.clone(),
-        ioc_id: i.and_then(|i| i.ioc_id.clone()),
+        ioc_id: i.ioc_id.clone(),
     }
 }
 
@@ -1807,6 +2272,7 @@ pub fn campaign_link(cfg: &ConfidenceConfig, c: &Campaign) -> Option<ConfidenceL
         c.confidence.evidence.clone(),
         c.analyst.feedback.clone(),
     )
+    .map(|l| cap_weak_only(cfg, l))
 }
 
 /// One `attempt_campaign` link per member: the features that joined it,
@@ -1847,6 +2313,16 @@ pub fn member_links(cfg: &ConfidenceConfig, c: &Campaign) -> Vec<ConfidenceLink>
                     note: format!("{} action {}", b.kind.as_str(), b.action_id),
                 }
             });
+            if m.carried_over {
+                evidence.push(Evidence {
+                    signal_id: format!("campaign:registry:{}", m.attempt_id),
+                    source: EvidenceSource::CampaignCluster,
+                    weight: Strength::Weak.weight(),
+                    summary: "member from an earlier window; what joined it is outside this one"
+                        .into(),
+                    reference: None,
+                });
+            }
             if let Some(n) = m.noise_score {
                 evidence.push(Evidence {
                     signal_id: format!("noise:{}", m.src),
@@ -1864,6 +2340,7 @@ pub fn member_links(cfg: &ConfidenceConfig, c: &Campaign) -> Vec<ConfidenceLink>
                 evidence,
                 analyst,
             )
+            .map(|l| cap_weak_only(cfg, l))
         })
         .collect()
 }
@@ -1967,6 +2444,7 @@ mod tests {
         x: Extraction,
         signals: BTreeMap<String, AttemptSignals>,
         asns: BTreeMap<String, u32>,
+        registry: Registry,
     }
 
     fn prepare(vs: Vec<Value>) -> Run {
@@ -1986,10 +2464,15 @@ mod tests {
             x,
             signals: BTreeMap::new(),
             asns: BTreeMap::new(),
+            registry: Registry::default(),
         }
     }
 
     fn run(r: &Run, actions: &[CampaignAction]) -> Clustering {
+        run_at(r, actions, T0 + HOUR_MS)
+    }
+
+    fn run_at(r: &Run, actions: &[CampaignAction], now: i64) -> Clustering {
         cluster(
             &Input {
                 tenant_id: "t1",
@@ -1999,7 +2482,8 @@ mod tests {
                 asns: &r.asns,
                 advisories: &BTreeMap::new(),
                 actions,
-                now: T0 + HOUR_MS,
+                registry: &r.registry,
+                now,
             },
             Params::default(),
             &ConfidenceConfig::default(),
@@ -2100,20 +2584,7 @@ mod tests {
         ]);
         assert!(run(&r, &[]).campaigns.is_empty(), "more than the gap apart");
         let r = prepare(wave());
-        let c = cluster(
-            &Input {
-                tenant_id: "t1",
-                attempts: &r.attempts,
-                iocs: &r.x,
-                signals: &r.signals,
-                asns: &r.asns,
-                advisories: &BTreeMap::new(),
-                actions: &[],
-                now: T0 + 30 * DAY_MS,
-            },
-            Params::default(),
-            &ConfidenceConfig::default(),
-        );
+        let c = run_at(&r, &[], T0 + 30 * DAY_MS);
         assert_eq!(c.campaigns[0].status, CampaignStatus::Closed);
     }
 
@@ -2151,7 +2622,13 @@ mod tests {
             action_id: id.into(),
             kind,
             campaign_id: c.campaign_id.clone(),
-            anchor_attempt_id: c.seed.attempt_id.clone(),
+            anchor_attempt_ids: c
+                .attempt_ids
+                .iter()
+                .rev()
+                .take(MAX_ANCHORS)
+                .cloned()
+                .collect(),
             title: None,
             status: None,
             merge: vec![],
@@ -2181,7 +2658,7 @@ mod tests {
         let mut merge = action("act3", ActionKind::Merge, a);
         merge.merge = vec![CampaignRef {
             campaign_id: b.campaign_id.clone(),
-            anchor_attempt_id: b.seed.attempt_id.clone(),
+            anchor_attempt_ids: b.attempt_ids.clone(),
         }];
         merge.at += 1;
         let c = run(&r, &[merge.clone(), label.clone(), fb.clone()]);
@@ -2202,7 +2679,7 @@ mod tests {
         assert_eq!(links.len(), 5);
         assert!(links.iter().filter(|l| l.wording == "confirmed").count() == 2);
 
-        // Split the merged-in pair back out: the seed side keeps the id.
+        // Split the merged-in pair back out: the named attempts move.
         let mut split = action("act4", ActionKind::Split, m);
         split.attempt_ids = b.attempt_ids.clone();
         split.at += 10;
@@ -2219,15 +2696,276 @@ mod tests {
     }
 
     #[test]
-    fn actions_for_missing_campaigns_are_noted_not_applied() {
+    fn actions_for_campaigns_outside_the_window_wait() {
         let r = prepare(wave());
         let base = run(&r, &[]);
         let mut a = action("act1", ActionKind::Status, &base.campaigns[0]);
-        a.anchor_attempt_id = "att_missing".into();
+        a.campaign_id = "cmp_000000000000000000000000".into();
+        a.anchor_attempt_ids = vec!["att_missing".into()];
         a.status = Some(CampaignStatus::Closed);
-        let c = run(&r, &[a]);
+        let c = run(&r, &[a.clone()]);
         assert_eq!(c.campaigns[0].status, CampaignStatus::Active);
-        assert!(c.notes.iter().any(|n| n.contains("not applied")));
+        // Anchors alone still find the campaign.
+        a.anchor_attempt_ids = vec![base.campaigns[0].attempt_ids[1].clone()];
+        assert_eq!(run(&r, &[a]).campaigns[0].status, CampaignStatus::Closed);
+    }
+
+    fn day(d: i64) -> i64 {
+        T0 + d * DAY_MS
+    }
+
+    #[test]
+    fn ids_labels_and_merges_survive_the_seed_leaving_the_window() {
+        let other = "cd".repeat(32);
+        let all = [
+            post("a1", day(0), "d1", "203.0.113.1", HASH),
+            post("b1", day(0) + HOUR_MS, "d5", "198.51.100.1", &other),
+            post("a2", day(3), "d2", "203.0.113.2", HASH),
+            post("b2", day(4), "d6", "198.51.100.2", &other),
+            post("a3", day(6), "d3", "203.0.113.3", HASH),
+            post("b3", day(8), "d7", "198.51.100.3", &other),
+            post("a4", day(9), "d4", "203.0.113.4", HASH),
+        ];
+        let window = |from: i64, to: i64| {
+            all.iter()
+                .filter(|e| (from..to).contains(&e["ts"].as_i64().unwrap()))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        // Week one: two campaigns. Label A, merge B into it.
+        let mut r1 = prepare(window(day(0), day(7)));
+        let base = run_at(&r1, &[], day(7));
+        assert_eq!(base.campaigns.len(), 2);
+        let (a, b) = (&base.campaigns[0], &base.campaigns[1]);
+        let mut label = action("act1", ActionKind::Label, a);
+        label.title = Some("Upload wave".into());
+        let mut merge = action("act2", ActionKind::Merge, a);
+        merge.merge = vec![CampaignRef {
+            campaign_id: b.campaign_id.clone(),
+            anchor_attempt_ids: b.attempt_ids.iter().rev().cloned().collect(),
+        }];
+        merge.at += 1;
+        let actions = vec![label, merge];
+        let w1 = run_at(&r1, &actions, day(7));
+        assert_eq!(w1.campaigns.len(), 1);
+        r1.registry.apply(&w1.registry_update);
+        let again = cluster(
+            &Input {
+                tenant_id: "t1",
+                attempts: &r1.attempts,
+                iocs: &r1.x,
+                signals: &r1.signals,
+                asns: &r1.asns,
+                advisories: &BTreeMap::new(),
+                actions: &actions,
+                registry: &r1.registry,
+                now: day(7),
+            },
+            Params::default(),
+            &ConfidenceConfig::default(),
+        );
+        assert!(
+            again.registry_update.is_empty(),
+            "steady state writes nothing"
+        );
+
+        // Week two: both seeds (a1, b1) are out of the window.
+        let mut r2 = prepare(window(day(2), day(10)));
+        let without = run_at(&r2, &actions, day(10));
+        assert!(
+            without.get(&a.campaign_id).is_none(),
+            "without the registry the id would move"
+        );
+        r2.registry = r1.registry.clone();
+        let w2 = run_at(&r2, &actions, day(10));
+        assert_eq!(w2.campaigns.len(), 1, "{:?}", w2.notes);
+        let c = &w2.campaigns[0];
+        assert_eq!(c.campaign_id, a.campaign_id);
+        assert_eq!(c.title, "Upload wave");
+        assert_eq!(c.attempt_ids.len(), 5, "a2 a3 a4 b2 b3");
+        assert_eq!(c.analyst.merged_from, vec![b.campaign_id.clone()]);
+        assert!(w2.notes.is_empty(), "{:?}", w2.notes);
+        // The new attempts are recorded; the old ones are unchanged.
+        let recorded: Vec<&str> = w2
+            .registry_update
+            .members
+            .iter()
+            .map(|m| m.campaign_id.as_str())
+            .collect();
+        assert_eq!(recorded.len(), 2, "a4 and b3");
+        assert!(recorded.iter().all(|id| *id == a.campaign_id));
+    }
+
+    #[test]
+    fn a_lone_member_in_the_window_keeps_its_campaign_id() {
+        let mut r1 = prepare(wave());
+        let c1 = run(&r1, &[]);
+        r1.registry.apply(&c1.registry_update);
+        let id = c1.campaigns[0].campaign_id.clone();
+        // A window with only a3 of the campaign in it.
+        let mut r2 = prepare(vec![post("a3", T0 + 2000, "d3", "203.0.113.3", HASH)]);
+        r2.registry = r1.registry.clone();
+        let c2 = run(&r2, &[]);
+        assert!(c2.campaigns.is_empty());
+        let a3 = &r2.attempts[0].attempt_id;
+        assert_eq!(c2.carried.get(a3), Some(&id));
+        let mut attempts = r2.attempts.clone();
+        attach(&mut attempts, &mut r2.x.clone(), &c2);
+        assert_eq!(attempts[0].campaign_id.as_ref(), Some(&id));
+    }
+
+    fn hook_chain(i: usize, ts: i64, src: &str, egress: bool) -> Vec<Value> {
+        let decoy = format!("d{i}");
+        let mut get = app(
+            &format!("g{i}"),
+            ts,
+            &decoy,
+            src,
+            json!({"method": "GET", "path": "/admin", "user_agent": "Mozilla/5.0"}),
+        );
+        get["source"] = json!({"kind": "host", "id": "host-1"});
+        let mut out = vec![get, hook(&format!("h{i}"), ts + 5, &decoy, src)];
+        if egress {
+            let mut e = app(
+                &format!("e{i}"),
+                ts + 10,
+                &decoy,
+                "10.85.1.2",
+                json!({"method": "GET"}),
+            );
+            e["channel"] = json!("egress");
+            out.push(e);
+        }
+        out
+    }
+
+    #[test]
+    fn generic_hook_hits_from_one_asn_stay_low_and_emerging() {
+        // Three sources on three days hit the same public hook after a
+        // generic GET, from one cloud ASN with a common user agent.
+        let srcs = ["203.0.113.70", "203.0.113.71", "203.0.113.72"];
+        let events = srcs
+            .iter()
+            .enumerate()
+            .flat_map(|(i, s)| hook_chain(i, day(i as i64), s, false))
+            .collect();
+        let mut r = prepare(events);
+        for s in srcs {
+            r.asns.insert(s.into(), 64500);
+        }
+        let c = run_at(&r, &[], day(3));
+        assert_eq!(
+            c.campaigns.len(),
+            1,
+            "joined only by ASN and CVE and request shape"
+        );
+        for k in &c.campaigns {
+            assert_eq!(k.status, CampaignStatus::Emerging, "{}", k.title);
+            assert_eq!(k.confidence.band, Band::Low);
+            assert!(
+                k.members
+                    .iter()
+                    .flat_map(|m| &m.joined_by)
+                    .all(|j| j.strength == Strength::Weak
+                        && j.feature != Feature::BehaviourFingerprint)
+            );
+        }
+    }
+
+    #[test]
+    fn a_fingerprint_shared_by_many_sources_only_joins_weakly() {
+        let events = (0..12)
+            .flat_map(|i| {
+                hook_chain(
+                    i,
+                    T0 + i as i64 * 60_000,
+                    &format!("198.51.100.{}", 10 + i),
+                    true,
+                )
+            })
+            .collect();
+        let r = prepare(events);
+        let c = run(&r, &[]);
+        assert_eq!(c.campaigns.len(), 1);
+        let k = &c.campaigns[0];
+        let bf = &k.members[0].joined_by[0];
+        assert_eq!(bf.feature, Feature::BehaviourFingerprint);
+        assert_eq!(bf.strength, Strength::Weak, "common to 12 sources");
+        assert_eq!(k.status, CampaignStatus::Emerging);
+        assert!(k.confidence.score < 40);
+    }
+
+    #[test]
+    fn junk_bodies_cannot_push_out_a_shared_hash() {
+        let mut events = wave();
+        // One attempt sends 200 unique bodies before the shared one.
+        for i in 0..200 {
+            events.push(post(
+                &format!("j{i}"),
+                T0 + 10_000 + i,
+                "d9",
+                "198.51.100.66",
+                &format!("{i:064x}"),
+            ));
+        }
+        events.push(post("j-shared", T0 + 20_000, "d9", "198.51.100.66", HASH));
+        let r = prepare(events);
+        let c = run(&r, &[]);
+        assert_eq!(c.campaigns.len(), 1);
+        assert_eq!(
+            c.campaigns[0].attempt_ids.len(),
+            4,
+            "the junk sender is still in"
+        );
+        assert!(
+            c.notes.is_empty(),
+            "unique junk never competes: {:?}",
+            c.notes
+        );
+
+        // Junk shared between two attempts does compete, and is noted on
+        // every attempt that hit the cap, members or not.
+        let mut events = Vec::new();
+        for i in 0..20 {
+            let h = format!("{:064x}", 1000 + i);
+            events.push(post(&format!("x{i}"), T0 + i, "d8", "198.51.100.77", &h));
+            events.push(post(&format!("y{i}"), T0 + i, "d9", "198.51.100.78", &h));
+        }
+        let r = prepare(events);
+        let c = run(&r, &[]);
+        let capped = c
+            .notes
+            .iter()
+            .filter(|n| n.contains("than the cap"))
+            .count();
+        assert_eq!(capped, 2, "{:?}", c.notes);
+    }
+
+    #[test]
+    fn feedback_spam_never_sheds_structural_actions() {
+        let other = "cd".repeat(32);
+        let mut events = wave();
+        events.push(post("b1", T0 + 20, "d5", "198.51.100.1", &other));
+        events.push(post("b2", T0 + 30, "d6", "198.51.100.2", &other));
+        let r = prepare(events);
+        let base = run(&r, &[]);
+        let (a, b) = (&base.campaigns[0], &base.campaigns[1]);
+        let mut merge = action("act0", ActionKind::Merge, a);
+        merge.merge = vec![CampaignRef {
+            campaign_id: b.campaign_id.clone(),
+            anchor_attempt_ids: b.attempt_ids.clone(),
+        }];
+        let mut actions = vec![merge];
+        for i in 0..(MAX_FEEDBACK_ACTIONS + 100) {
+            let mut f = action(&format!("fb{i:05}"), ActionKind::Feedback, a);
+            f.feedback = Some(Feedback::Unsure);
+            f.at += 1 + i as i64;
+            actions.push(f);
+        }
+        let c = run(&r, &actions);
+        assert_eq!(c.campaigns.len(), 1, "the merge still applies");
+        assert!(c.notes.iter().any(|n| n.contains("feedback action")));
     }
 
     #[test]

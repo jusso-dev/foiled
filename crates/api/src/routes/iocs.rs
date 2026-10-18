@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::Auth;
 use crate::error::ApiError;
-use crate::routes::attempts::{Iocs, window_bounds, window_model};
+use crate::routes::attempts::{Campaigns, Iocs, window_bounds, window_model};
 use crate::routes::page_limit;
 
 pub fn router() -> Router<AppState> {
@@ -107,7 +107,22 @@ async fn search(
     }
     let wanted = q.value.as_deref().map(refang);
     let (since, until) = window_bounds(&state, q.since, q.until);
-    let m = window_model(&state, &who.tenant_id, since, until, Iocs::Attach).await?;
+    // Clustering only when filtering by campaign; otherwise `campaign_ids`
+    // come from the registry.
+    let campaigns = if q.campaign_id.is_some() {
+        Campaigns::Full
+    } else {
+        Campaigns::Registry
+    };
+    let m = window_model(
+        &state,
+        &who.tenant_id,
+        since,
+        until,
+        Iocs::Attach,
+        campaigns,
+    )
+    .await?;
     let mut items: Vec<Ioc> = m
         .iocs
         .iocs
@@ -156,7 +171,15 @@ async fn get_one(
         return Err(ApiError::not_found("ioc"));
     }
     let (since, until) = window_bounds(&state, q.since, q.until);
-    let m = window_model(&state, &who.tenant_id, since, until, Iocs::Attach).await?;
+    let m = window_model(
+        &state,
+        &who.tenant_id,
+        since,
+        until,
+        Iocs::Attach,
+        Campaigns::Registry,
+    )
+    .await?;
     let mut found: Vec<Ioc> = m
         .iocs
         .iocs
@@ -178,7 +201,15 @@ async fn for_attempt(
 ) -> Result<Json<AttemptIocList>, ApiError> {
     let who = auth.require(Scope::IocsRead)?;
     let (since, until) = window_bounds(&state, q.since, q.until);
-    let m = window_model(&state, &who.tenant_id, since, until, Iocs::Attach).await?;
+    let m = window_model(
+        &state,
+        &who.tenant_id,
+        since,
+        until,
+        Iocs::Attach,
+        Campaigns::Registry,
+    )
+    .await?;
     let summary = m
         .iocs
         .for_attempt(&attempt_id)

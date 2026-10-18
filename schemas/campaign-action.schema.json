@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jusso-dev/foiled/schemas/campaign-action.schema.json",
   "title": "Foiled campaign analyst action",
-  "description": "One audited analyst action on a campaign (#33, docs/campaigns.md#analyst-actions): label, status, merge, split or feedback. Stored append-only and replayed in (at, action_id) order over the computed clustering. Actions follow anchor_attempt_id, the campaign's seed when the action was taken. Mirrors CampaignAction in crates/core/src/campaign.rs.",
+  "description": "One audited analyst action on a campaign (#33, docs/campaigns.md#analyst-actions): label, status, merge, split or feedback. Stored append-only and replayed in (at, action_id) order over the computed clustering. Actions resolve by campaign_id, which the campaign registry keeps stable across windows, and fall back to anchor_attempt_ids. Mirrors CampaignAction in crates/core/src/campaign.rs.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "action_id",
     "kind",
     "campaign_id",
-    "anchor_attempt_id",
+    "anchor_attempt_ids",
     "note",
     "analyst_id",
     "at"
@@ -32,9 +32,14 @@
       "type": "string",
       "pattern": "^cmp_[a-f0-9]{24}$"
     },
-    "anchor_attempt_id": {
-      "type": "string",
-      "pattern": "^att_[a-f0-9]{24}$"
+    "anchor_attempt_ids": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "pattern": "^att_[a-f0-9]{24}$"
+      },
+      "description": "Up to 16 member attempts, newest first. Used only when campaign_id is not in the window."
     },
     "title": {
       "type": "string",
@@ -57,16 +62,21 @@
         "additionalProperties": false,
         "required": [
           "campaign_id",
-          "anchor_attempt_id"
+          "anchor_attempt_ids"
         ],
         "properties": {
           "campaign_id": {
             "type": "string",
             "pattern": "^cmp_[a-f0-9]{24}$"
           },
-          "anchor_attempt_id": {
-            "type": "string",
-            "pattern": "^att_[a-f0-9]{24}$"
+          "anchor_attempt_ids": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "pattern": "^att_[a-f0-9]{24}$"
+            },
+            "description": "Up to 16 member attempts, newest first. Used only when campaign_id is not in the window."
           }
         }
       }
@@ -148,16 +158,21 @@
               "additionalProperties": false,
               "required": [
                 "campaign_id",
-                "anchor_attempt_id"
+                "anchor_attempt_ids"
               ],
               "properties": {
                 "campaign_id": {
                   "type": "string",
                   "pattern": "^cmp_[a-f0-9]{24}$"
                 },
-                "anchor_attempt_id": {
-                  "type": "string",
-                  "pattern": "^att_[a-f0-9]{24}$"
+                "anchor_attempt_ids": {
+                  "type": "array",
+                  "maxItems": 16,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^att_[a-f0-9]{24}$"
+                  },
+                  "description": "Up to 16 member attempts, newest first. Used only when campaign_id is not in the window."
                 }
               }
             }

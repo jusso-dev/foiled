@@ -1184,7 +1184,13 @@ paths:
       tags: [intel]
       operationId: getCampaign
       summary: Get a campaign
-      description: Campaign ids are stable for the same evidence and actions. Pass the same `since` and `until` as the list call for campaigns older than 7 days.
+      description: |
+        Campaign ids are kept by the campaign registry, so they hold as the
+        window moves. When fewer than two of the campaign's attempts are in
+        the window (or it was merged into another), the response is a stub
+        with `stub: true`, first and last seen, the recorded attempt count
+        and `merged_into`; pass `since` and `until` around those times for
+        the full campaign.
       x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [campaigns:read]
@@ -1194,10 +1200,24 @@ paths:
         - { name: until, in: query, schema: { type: integer } }
       responses:
         "200":
-          description: The campaign.
+          description: The campaign, or a stub for one recorded outside the window.
           content:
             application/json:
-              schema: { $ref: "../schemas/campaign.schema.json" }
+              schema:
+                oneOf:
+                  - { $ref: "../schemas/campaign.schema.json" }
+                  - type: object
+                    additionalProperties: false
+                    required: [campaign_id, tenant_id, stub, first_seen, last_seen, attempt_count, merged_into, notes]
+                    properties:
+                      campaign_id: { type: string }
+                      tenant_id: { type: string }
+                      stub: { const: true }
+                      first_seen: { type: integer }
+                      last_seen: { type: integer }
+                      attempt_count: { type: integer, minimum: 0 }
+                      merged_into: { type: [string, "null"] }
+                      notes: { type: array, items: { type: string } }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -1207,7 +1227,7 @@ paths:
       tags: [intel]
       operationId: getCampaignAttempts
       summary: Member attempts of a campaign
-      description: Newest activity first, each with `campaign_id` set. Needs `attempts:read` as well as `campaigns:read`.
+      description: Member attempts in the window, newest activity first, each with `campaign_id` set, including members of a campaign with only one attempt in the window. Needs `attempts:read` as well as `campaigns:read`.
       x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [campaigns:read, attempts:read]
@@ -1303,10 +1323,11 @@ paths:
       summary: Label, set status, merge, split or give feedback on a campaign (audited)
       description: |
         Stored append-only and replayed over the clustering on every read
-        (`docs/campaigns.md#analyst-actions`). Written to the audit log as
-        `campaign.<action>`. `merge` folds campaigns from the same window
-        into this one; `split` moves member attempts into a campaign of
-        their own, and the side holding the seed keeps the id; `feedback`
+        (`docs/campaigns.md#analyst-actions`); actions resolve by campaign
+        id. Written to the audit log as `campaign.<action>`. Rate limited
+        per token (60 an hour by default). `merge` folds campaigns from the
+        same window into this one; `split` moves the named member attempts
+        into a campaign of their own and the rest keep the id; `feedback`
         `true_positive` confirms (score 100, wording "confirmed"). Raw
         capture events and attempts are never changed. Pass the same
         `since` and `until` as the read that found the campaign.
@@ -1352,6 +1373,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/RateLimited" }
 
   /v0/iocs:
     get:

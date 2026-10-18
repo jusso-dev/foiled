@@ -17,7 +17,7 @@ The contract is [`schemas/campaign.schema.json`](../schemas/campaign.schema.json
 - [Features](#features)
 - [Clustering](#clustering)
 - [Merge and split rules](#merge-and-split-rules)
-- [Ids](#ids)
+- [Ids and the campaign registry](#ids-and-the-campaign-registry)
 - [Confidence and wording](#confidence-and-wording)
 - [Status](#status)
 - [Targeting pattern](#targeting-pattern)
@@ -34,9 +34,9 @@ The contract is [`schemas/campaign.schema.json`](../schemas/campaign.schema.json
 
 ## Principles
 
-1. **Deterministic.** The same attempts, IOCs, signals and analyst actions always give the same campaigns, ids, evidence and order, in any input order. Campaigns can be recomputed from the evidence at any time.
+1. **Deterministic and stable.** The same attempts, IOCs, signals, analyst actions and registry always give the same campaigns, ids, evidence and order, in any input order. The [campaign registry](#ids-and-the-campaign-registry) remembers which campaign each attempt was in, so ids, labels, merges and splits hold as the read window moves.
 2. **Explainable.** Every member lists the features that joined it and the member it shares each one with. Every campaign carries its #27 score with every evidence item and cap.
-3. **Bounded cost.** No pairwise comparison of attempts. Features are blocked into an inverted index and joined with union-find, so the work is linear in (attempt, feature) pairs. 20,000 attempts cluster in about a tenth of a second in a native release build.
+3. **Bounded cost.** No pairwise comparison of attempts. Features are blocked into an inverted index and joined with union-find, so the work is linear in (attempt, feature) pairs. 20,000 attempts cluster in under 0.2 s in a native release build; routes that do not need campaigns skip clustering ([API](#api)).
 4. **Tenant-scoped.** A campaign only ever holds one tenant's attempts ([below](#tenant-isolation-and-shared-research-sensors)).
 5. **Cautious.** Wording is "possible" until an analyst confirms. Clustering alone never reaches `high` and never publishes. Actor labels are a separate, later step (#29) with "possible association" wording.
 6. **Derived.** Raw capture events and attempts are never changed. Analyst actions are stored separately, append-only, audited and replayed.
@@ -45,14 +45,14 @@ The contract is [`schemas/campaign.schema.json`](../schemas/campaign.schema.json
 
 | Field | Meaning |
 | --- | --- |
-| `campaign_id` | `cmp_` plus 24 hex characters ([ids](#ids)). |
+| `campaign_id` | `cmp_` plus 24 hex characters, kept by the registry ([ids](#ids-and-the-campaign-registry)). |
 | `tenant_id`, `tenant_scope` | The owning tenant. `tenant_scope` is always `tenant` today. |
 | `title` | The analyst's title when set, otherwise generated from the strongest shared feature, for example `Stage-2 URL hxxp://stage2[.]example[.]invalid/m.sh on 2 decoys`. Escaped. |
 | `status` | `emerging`, `active` or `closed` ([status](#status)). |
 | `first_seen`, `last_seen` | Unix ms over the members. |
-| `seed` | The earliest member, which the id is derived from, and the features that joined it. |
+| `seed` | The earliest member in the window and the features that joined it. A new cluster's id is derived from it; afterwards the registry keeps the id. |
 | `attempt_ids`, `decoy_ids`, `sensor_ids`, `catalogue_ids` | Every member attempt (oldest first) and where they happened. |
-| `members[]` | Per member: attempt id, decoy, sensor, source, times, state, noise score, `joined_by[]` (up to 8 features, strongest first, each with the member it is shared with and the IOC id where there is one) and `added_by` when an analyst action put it there. |
+| `members[]` | Per member: attempt id, decoy, sensor, source, times, state, noise score, `joined_by[]` (up to 8 features, strongest first, each with the member it is shared with and the IOC id where there is one) `added_by` when an analyst action put it there, and `carried_over` when it is in the campaign from an earlier window and what joined it is outside this one. |
 | `feature_summary` | `infrastructure`, `ttp`, `targeting` and `payload`. Values seen in at least two members, except source addresses and ASNs, which list every member's. Display-safe (defanged and escaped). |
 | `shared_ioc_ids` | IOC ids (#34) seen in at least two members, for pivoting. |
 | `confidence_ref` | `/v0/campaigns/{campaign_id}/evidence`: the full #27 explanation. |
@@ -65,7 +65,7 @@ Display strings are hostile text that has been defanged and escaped. Never parse
 
 ## Features
 
-Every feature is a join key: two attempts that share the key, close enough in time, join. Features come from the attempt (#25), its IOCs (#34), its CVE and technique signals (#12, #26) and enrichment (#11).
+Every feature is a join key: two attempts that share the key, close enough in time, join. Features come from the attempt (#25), its IOCs (#34), its CVE and technique signals (#12, #26) and enrichment (#11). A key held by only one attempt in the window can join nothing and is ignored.
 
 | Feature | Family | Strength | From | Used when |
 | --- | --- | --- | --- | --- |
@@ -74,7 +74,7 @@ Every feature is a join key: two attempts that share the key, close enough in ti
 | `stage2_url` | infrastructure | strong | `url` IOC with role `stage2` or `callback` | always |
 | `callback_domain` | infrastructure | strong | `domain` or `dns_query` IOC with role `callback` or `stage2` | always |
 | `callback_ip` | infrastructure | strong | `ip` or `ipv6` IOC with role `callback` or `stage2` | always |
-| `behaviour_fingerprint` | TTP | medium | `bf1:` IOC (exploit or later, two or more steps) | always |
+| `behaviour_fingerprint` | TTP | medium | `bf1:` IOC (exploit or later, two or more steps) | only when distinctive (below) |
 | `cmdline` | TTP | medium | `cmdline` IOC | always |
 | `request_substring` | payload | medium | exact request string IOC | attempt at exploit or later |
 | `src_ip` | infrastructure | weak | the attempt's source address | attempt at exploit or later |
@@ -85,8 +85,10 @@ Every feature is a join key: two attempts that share the key, close enough in ti
 Strength sets both the join rule and the [evidence weight](#confidence-and-wording): strong 100, medium 70, weak 40.
 
 - **Strong** features are artefacts that are hard to share by chance: the same hash, the same stage-2 location, the same callback infrastructure.
-- **Medium** features are overlapping behaviour. A public exploit used by unrelated people can also explain them.
-- **Weak** features are always two facts at once (an address that reached exploit; an ASN and a CVE; a path and a user agent), and they never bridge two clusters that strong or medium features already formed.
+- **Medium** features are overlapping behaviour. A public exploit used by unrelated people can also explain them, so two checks apply:
+  - **Distinctive fingerprints only.** A behaviour fingerprint is a key only when at least one of its steps comes after exploitation: a command, a DNS lookup or egress from the decoy, a file write or quarantine, or a hook at `post_exploit` or `cleanup`. Plain requests (`http GET /admin`) and a hook firing at `trigger` are what every user of a public exploit shares, so a fingerprint made only of those never joins.
+  - **Rarity.** A medium key held by more than 10 distinct sources in the window, or (with at least 8 sources in the window) by more than a quarter of them, is common: it looks like a public exploit or tool, not one operator, and joins only as weak.
+- **Weak** features are always two facts at once (an address that reached exploit; an ASN and a CVE; a path and a user agent) or a common medium feature. They never bridge two clusters that strong or medium features already formed, and a campaign held together by weak features only stays below `medium` and `emerging` ([confidence](#confidence-and-wording)).
 
 What never joins attempts on its own, by design:
 
@@ -100,13 +102,15 @@ What never joins attempts on its own, by design:
 ## Clustering
 
 1. Take the tenant's attempts in the window, sorted by first seen then id. Attempts from any other tenant are dropped.
-2. For each attempt, collect its join keys, strongest first, at most 64 (the rest are noted on the campaign).
-3. **Blocking.** Build an inverted index: one posting list per key, in time order.
-4. **Pass 1 (strong and medium).** Walk each posting list and union each attempt with the previous one when it started within the join gap (7 days) of the previous one ending.
-5. **Pass 2 (weak).** The same, except a union that would join two clusters both formed in pass 1 is refused. Weak keys may add stragglers or form new weak clusters, never bridge established ones. Refusals are counted in the response `notes`.
-6. Every resulting set of two or more attempts is a campaign. Single attempts are not campaigns.
-7. Replay stored [analyst actions](#analyst-actions) in `(at, action_id)` order.
-8. Build each campaign: member joins (only to members of the same campaign), feature summary, targeting pattern, confidence and status.
+2. For each attempt, collect its candidate keys, and count how many attempts (and, for medium keys, how many sources) hold each one. Demote common medium keys to weak.
+3. **Key cap.** Keep only keys held by two or more attempts, ordered strongest first, then rarest (held by the fewest attempts), at most 16 per feature and 64 in all. Junk values sent to flood the cap are held by one attempt each, so they never compete with a real shared hash, and no feature can crowd out the others. Every attempt that hit the cap is named in the response `notes`, member or not.
+4. **Blocking.** Build an inverted index: one posting list per kept key, in time order.
+5. **Pass 1 (strong and medium).** Walk each posting list and union each attempt with the previous one when it started within the join gap (7 days) of the previous one ending.
+6. **Pass 2 (weak).** The same, except a union that would join two clusters both formed in pass 1 is refused. Weak keys may add stragglers or form new weak clusters, never bridge established ones. Refusals are counted in the response `notes`.
+7. **Registry.** Attempts the [registry](#ids-and-the-campaign-registry) recorded in the same campaign are unioned, so a campaign stays whole when the attempts that joined it have left the window. Each cluster takes the oldest recorded id of its members, or a new id from its seed.
+8. Replay stored [analyst actions](#analyst-actions) in `(at, action_id)` order.
+9. Build each campaign with two or more attempts in the window: member joins (only to members of the same campaign), feature summary, targeting pattern, confidence and status. A campaign with one attempt in the window is not listed, but that attempt still carries its `campaign_id`.
+10. Record what changed in the registry (new memberships, new or widened campaigns, campaigns folded into another). Steady state writes nothing.
 
 Every union records the key and the neighbour on both attempts. That record is `joined_by`, so the explanation is exactly what the algorithm used.
 
@@ -119,17 +123,25 @@ Automatic:
 | Shared key within the join gap | Merge (single linkage through consecutive attempts on the key). |
 | More than the join gap between consecutive attempts on a key | No join on that key. A key reused months apart starts a new campaign. |
 | Weak key between two established clusters | No join. |
-| Key too generic by construction | Not a key at all (empty-body hash, probe-only paths, bare ASN, bare CVE). |
+| Key too generic by construction | Not a key at all (empty-body hash, probe-only paths, bare ASN, bare CVE, a fingerprint of requests and a trigger only). |
+| Medium key common to many sources | Joins only as weak. |
+| Attempts recorded in one campaign | Stay together across windows (the registry). A new attempt that bridges two recorded campaigns folds the newer one into the older; the newer id resolves with `merged_into`. |
 
 Manual, through [analyst actions](#analyst-actions): `merge` folds campaigns together, `split` moves attempts out. Both are replayed on every read, so they hold as new attempts arrive.
 
-## Ids
+## Ids and the campaign registry
 
-`campaign_id` is `cmp_` plus the first 24 hex characters of SHA-256 over `foiled-campaign/v1`, the tenant id and the **seed**: the earliest member attempt. Attempt ids are themselves derived from the evidence (#25), so the same evidence gives the same campaign id on every run.
+A new cluster's id is `cmp_` plus the first 24 hex characters of SHA-256 over `foiled-campaign/v1`, the tenant id and the **seed**: its earliest member attempt. Attempt ids are themselves derived from the evidence (#25). The seed's features are recorded in `seed.features` but not hashed, so the id does not change as the campaign grows through other features.
 
-The seed's features are recorded in `seed.features` but not hashed. Hashing them would change the id every time the campaign grew through a different feature, which defeats the purpose.
+Ids must outlive the read window: a wave that lasts longer than the default 7-day window would otherwise lose its seed and get a new id, its labels and merges would stop applying, and alerts would see a "new" campaign. The **campaign registry** (`migrations/postgres/0006_campaign_registry.sql`) prevents that:
 
-A campaign keeps its id as it grows forward in time. It gets a new id only when an earlier attempt joins (for example a wider `since`). Analyst actions survive that: each action stores its campaign's seed as `anchor_attempt_id` and applies to whichever campaign holds that attempt.
+- `campaign_members` records the campaign each attempt was last in; `campaigns` records each id with `created_at` (when it was first recorded), first and last seen, and `merged_into`.
+- Clustering unions attempts recorded in the same campaign, and a cluster takes the **oldest recorded id** among its members (smallest `created_at`, then id). Only a cluster with no recorded member takes a new seed id.
+- When a new attempt bridges two recorded campaigns, the newer one is recorded as `merged_into` the older. Ids are followed through `merged_into` (at most 8 hops).
+- Every full read records new memberships and widened times. Nothing is rewritten when nothing changed.
+- `GET /v0/campaigns/{campaign_id}` resolves any recorded id. When fewer than two of its attempts are in the window, or it was merged away, it answers with a stub: `stub: true`, first and last seen, the recorded `attempt_count` and `merged_into`.
+
+Analyst actions name the campaign id, which the registry keeps stable. Each action also stores up to 16 of the campaign's newest member attempts as `anchor_attempt_ids`, used only if the id is not in the window.
 
 A campaign created by a split gets `cmp_` plus 24 hex characters of SHA-256 over `foiled-campaign/v1`, `split`, the tenant id and the action id, so it is stable too.
 
@@ -141,9 +153,10 @@ Each campaign is scored with the #27 model as a link of kind `attempt_campaign` 
 | --- | --- | --- |
 | Each distinct key shared inside the campaign (at most 16, strongest and most shared first) | `campaign_cluster` | 100 strong, 70 medium, 40 weak |
 | The lowest member noise score (#25) | `noise_score` | the score (subtracts up to 20) |
+| Members in the campaign from an earlier window, with nothing joining them inside this one | `campaign_cluster` | 40 (as weak) |
 | Members added by an analyst merge or split | `analyst` | recorded, adds nothing |
 
-`campaign_cluster` adds 45 points for a full-strength signal and at most 55 in total (`configs/confidence.yaml`). The config check refuses a cap at or above `publish_min` or `high`, so **clustering alone always stays below publishing and below `high`**. Only analyst feedback (`true_positive`) takes a campaign to 100 and "confirmed".
+`campaign_cluster` adds 45 points for a full-strength signal and at most 55 in total (`configs/confidence.yaml`). The config check refuses a cap at or above `publish_min` or `high`, so **clustering alone always stays below publishing and below `high`**. A campaign (or membership) whose clustering evidence is all weak is capped below `medium` (39, "weak features only" in `caps_applied`), so a shared ASN with generic requests can only ever be `low`. Only analyst feedback (`true_positive`) takes a campaign to 100 and "confirmed".
 
 | Link | Unconfirmed | Analyst confirmed |
 | --- | --- | --- |
@@ -158,7 +171,7 @@ Worked numbers: one shared payload hash is 45 points, less 2 for a targeted sour
 | Status | When |
 | --- | --- |
 | `closed` | No member attempt for 7 days (`last_seen` older than now minus 7 days), or an analyst closed it. |
-| `emerging` | Confidence is `low`, or fewer than three attempts. |
+| `emerging` | Confidence is `low`, fewer than three attempts, or only weak features join it. |
 | `active` | Otherwise. |
 
 An analyst status override wins until cleared.
@@ -187,17 +200,17 @@ An analyst status override wins until cleared.
 
 ## Analyst actions
 
-`POST /v0/campaigns/{campaign_id}/actions` with scope `campaigns:write`. Every action needs a `note` (may be empty, at most 1,000 characters), is stored append-only, and is written to the audit log as `campaign.<action>` with the whole action as detail.
+`POST /v0/campaigns/{campaign_id}/actions` with scope `campaigns:write`, rate limited per token (60 an hour by default, `Limits::campaign_actions_per_hour`). Every action needs a `note` (may be empty, at most 1,000 characters), is stored append-only, and is written to the audit log as `campaign.<action>` with the whole action as detail.
 
 | Action | Fields | Effect |
 | --- | --- | --- |
 | `label` | `title` (1 to 120 characters) | Sets the title. Escaped before display. |
 | `status` | `status` (`emerging`, `active`, `closed`, or null to clear) | Overrides the computed status. |
 | `merge` | `campaign_ids` (1 to 20, same window) | Folds those campaigns into this one. This campaign keeps its id; the others are listed in `merged_from`. Moved members get `added_by` and a confirmed membership link. |
-| `split` | `attempt_ids` (1 to 500 members, not all) | Moves the attempts into a campaign of their own. The side holding the seed keeps the id; the other gets a split id and `split_from`. A side left with one attempt dissolves. |
+| `split` | `attempt_ids` (1 to 500 members, not all) | Moves the named attempts into a campaign of their own with a split id and `split_from`; the rest keep the id. The registry records the split side, so a split attempt keeps the split campaign's id even when it is alone in a window. |
 | `feedback` | `feedback` (`true_positive`, `false_positive`, `unsure`) | The #27 override for the campaign: confirm (100, "confirmed"), suppress (0, never published or highlighted) or record. |
 
-Fields that do not belong to the action are refused. Actions are replayed in `(at, action_id)` order on every read; each one follows its `anchor_attempt_id`. An action whose anchor is not clustered in the current window is skipped and named in `notes`, never silently dropped. At most the newest 2,000 actions per tenant are replayed. Actions never change attempts, events or IOCs, and never delete anything.
+Fields that do not belong to the action are refused. Actions are replayed in `(at, action_id)` order on every read and resolve by campaign id (through `merged_into`), then by `anchor_attempt_ids`. An action whose campaign has nothing in the current window waits; it applies again when the campaign is back in view. **Structural actions (label, status, merge, split) are always replayed in full**; only feedback is capped, at the newest 500 per tenant, and shed feedback is counted in `notes`. Actions never change attempts, events or IOCs, and never delete anything.
 
 ## Actor suggestions
 
@@ -225,18 +238,26 @@ Until then, shared research sensors report into the research operator's tenant l
 
 ## API
 
-All tenant-scoped ([OpenAPI](../api/openapi.yaml)). Like attempts and IOCs, campaigns are built on request from the capture events in a window (default the last 7 days, at most 31 days and 20,000 events, `truncated` set when the cap is hit). Pass the same `since` and `until` to follow a campaign older than 7 days.
+All tenant-scoped ([OpenAPI](../api/openapi.yaml)). Like attempts and IOCs, campaigns are built on request from the capture events in a window (default the last 7 days, at most 31 days and 20,000 events, `truncated` set when the cap is hit). Campaign ids come from the [registry](#ids-and-the-campaign-registry), so they hold as the window moves; pass `since` and `until` to see a campaign's older attempts.
 
 | Method and path | Scope | What |
 | --- | --- | --- |
 | `GET /v0/campaigns` | `campaigns:read` | Filters `since`, `until`, `status`, `attempt_id`, `sensor_id`, `decoy_id`, `cve`, `ioc_id`, `min_confidence`, `limit`. Newest activity first. `notes` lists actions that did not apply. |
-| `GET /v0/campaigns/{campaign_id}` | `campaigns:read` | One campaign. |
-| `GET /v0/campaigns/{campaign_id}/attempts` | `campaigns:read` and `attempts:read` | Member attempts with `campaign_id` set. |
+| `GET /v0/campaigns/{campaign_id}` | `campaigns:read` | One campaign, or a stub (`stub: true`, first and last seen, `attempt_count`, `merged_into`) for a recorded campaign with fewer than two attempts in the window. |
+| `GET /v0/campaigns/{campaign_id}/attempts` | `campaigns:read` and `attempts:read` | Member attempts in the window with `campaign_id` set. |
 | `GET /v0/campaigns/{campaign_id}/evidence` | `campaigns:read` | The campaign link and one link per member (#27). |
 | `GET /v0/campaigns/{campaign_id}/actions` | `campaigns:read` | Stored actions naming the campaign. |
-| `POST /v0/campaigns/{campaign_id}/actions` | `campaigns:write` | Record an [analyst action](#analyst-actions); returns the action and the campaign as it is now. |
+| `POST /v0/campaigns/{campaign_id}/actions` | `campaigns:write` | Record an [analyst action](#analyst-actions); returns the action and the campaign as it is now. The window is built once and clustered again with the new action. Rate limited. |
 
-The attempt read model fills `campaign_id` on every attempt from the same clustering (`GET /v0/attempts?campaign_id=` filters on it), and IOCs fill `campaign_ids` from their attempts (`GET /v0/iocs?campaign_id=`). Inputs per window: the attempts and their IOCs, CVE and technique signals from the bundled rule packs, ASN numbers from cached enrichment Facts (`asn.number`, newest per address), advisory dates from the bundled advisories, and the tenant's stored actions.
+Campaign ids reach attempts and IOCs in three ways, so routes that do not need clustering do not pay for it:
+
+| Route | Campaign ids |
+| --- | --- |
+| `GET /v0/campaigns*`, `GET /v0/attempts`, `GET /v0/iocs?campaign_id=` | Full clustering: actions replayed, registry updated, `campaign_id` and `campaign_ids` filled. |
+| `GET /v0/attempts/{id}`, `GET /v0/iocs` (no `campaign_id`), `GET /v0/iocs/{id}`, `GET /v0/attempts/{id}/iocs` | From the registry only: one read, no clustering and no actions. Ids are as of the last full read. |
+| Timeline, links and overrides | None (they do not show campaigns). |
+
+Inputs per full read: the attempts and their IOCs, CVE and technique signals from the bundled rule packs, ASN numbers from cached enrichment Facts (`asn.number`, newest per address), advisory dates from the bundled advisories, the tenant's stored actions (every structural one, the newest 500 feedback) and the registry entries for the window's attempts.
 
 ```sh
 curl -sS -H "authorization: Bearer $FOILED_TOKEN" \
@@ -260,9 +281,13 @@ Illustrative only; these are the golden fixtures in [testdata/campaigns](../test
 
 **Same payload on three sensors (validation).** Three edge sensors receive the same upload body (`payload_sha256`) from three sources in seven minutes. One campaign: seed features `payload_sha256` and `request_shape`, confidence 48 (`medium`, "possible", not publishable), status `active`, three sensors, pattern `mixed` (3 of 6 visible decoys), and advisory timing 143 hours before the FOILED-DEMO-0001 advisory.
 
-**Shared stage 2.** An hour later two sources run the demo chain on two sandbox decoys and fetch the same stage 2. One campaign joined by `stage2_url`, `callback_domain`, `callback_ip`, `behaviour_fingerprint`, `cmdline`, `asn_cve`, `asn_techniques` and `request_shape`. The clustering cap applies: 53 (`medium`). Two attempts, so `emerging`. Pattern `selective`: 2 of 6 visible decoys.
+**Shared stage 2.** An hour later two sources run the demo chain on two sandbox decoys and fetch the same stage 2. One campaign joined by `stage2_url`, `callback_domain`, `callback_ip`, `behaviour_fingerprint` (distinctive: it has the `exec`, `dns` and `egress` steps), `cmdline`, `asn_cve`, `asn_techniques` and `request_shape`. The clustering cap applies: 53 (`medium`). Two attempts, so `emerging`. Pattern `selective`: 2 of 6 visible decoys.
 
 **Shared ASN and generic probe only (validation).** Two addresses in one ASN send `GET /` to three decoys. No campaign.
+
+**Generic hook hits from one cloud ASN (unit test).** Three sources on three days send `GET /admin` with a common user agent and fire the same public hook at `trigger`. The fingerprint has no post-exploitation step, so it is not a key; only `asn_cve` and `request_shape` join them. One campaign, capped below medium ("weak features only"), `emerging`.
+
+**A fingerprint common to twelve sources (unit test).** Twelve sources run the same chain including egress. The fingerprint is distinctive but common, so it joins only as weak: `emerging`, below 40.
 
 **Analyst replay.** The recorded actions in `testdata/campaigns/actions/` label the first campaign and merge the second into it: one campaign of five attempts, the first campaign's id, the label as title, the second id in `merged_from`.
 
@@ -272,31 +297,35 @@ Illustrative only; these are the golden fixtures in [testdata/campaigns](../test
 | --- | --- |
 | Join gap | 7 days |
 | Closed after | 7 days without a new member |
-| Join keys per attempt | 64 |
+| Join keys per attempt | 64, at most 16 per feature, joinable keys only |
+| Common medium key | more than 10 sources, or more than a quarter of 8 or more |
 | Request shapes per attempt | 4 |
 | Joins listed per member | 8 (all count) |
 | Values per summary list | 16 (with `count`) |
 | Shared IOC ids listed | 64 |
 | Clustering evidence items scored | 16 |
-| Analyst actions replayed | 2,000 newest per tenant |
+| Analyst actions replayed | every structural action; the newest 500 feedback actions |
+| Analyst actions recorded | 60 per token per hour |
+| Registry `merged_into` hops | 8 |
 | Title, note | 120, 1,000 characters |
 | Merge, split | 20 campaigns, 500 attempts |
 
 ## Retention
 
-Campaigns are derived, not stored: they are recomputed from live capture events, so once the purge job removes attempts (`attempt` TTL, 90 days by default, [privacy-and-retention.md](privacy-and-retention.md)) they leave their campaigns too, and a campaign with fewer than two attempts left disappears. Analyst actions (`campaign_actions`, `migrations/postgres/0004_campaign_actions.sql`) hold attempt ids, analyst ids and free-text titles and notes, no addresses; they stay with the tenant like the audit log, and actions whose attempts are purged stop applying and are named in `notes`.
+Campaigns are derived, not stored: they are recomputed from live capture events, so once the purge job removes attempts (`attempt` TTL, 90 days by default, [privacy-and-retention.md](privacy-and-retention.md)) they leave their campaigns too, and a campaign with fewer than two attempts left disappears. Analyst actions (`campaign_actions`, `migrations/postgres/0005_campaign_actions.sql`) hold attempt ids, analyst ids and free-text titles and notes, no addresses; they stay with the tenant like the audit log, and an action applies whenever its campaign is in view. The registry (`campaigns` and `campaign_members`, `migrations/postgres/0006_campaign_registry.sql`) holds campaign ids, attempt ids and times, no addresses. Member rows carry `attempt_first_seen` so the purge job can drop them with the `attempt` TTL; campaign rows are small and kept so old ids still resolve to a stub.
 
 ## Tests
 
-- `crates/core/src/campaign.rs`: payload-hash wave, ASN-only probes, ASN and CVE only is low and emerging, join gap, closed, tenant isolation, weak-bridge refusal, label, feedback, merge and split replay, missing anchors, action validation, `attach`, alerts, and 2,000 attempts on one key.
+- `crates/core/src/campaign.rs`: payload-hash wave, ASN-only probes, ASN and CVE only is low and emerging, generic hook hits from one ASN stay low and emerging, a common fingerprint joins only weakly, junk bodies cannot push out a shared hash and cap hits are noted, join gap, closed, tenant isolation, weak-bridge refusal, label, feedback, merge and split replay, ids, labels and merges surviving the seed leaving the window, a lone member keeping its id, feedback spam never shedding structural actions, action validation, `attach`, alerts, and 2,000 attempts on one key.
 - `crates/lint/tests/campaigns.rs`: golden campaigns for both fixtures (`FOILED_BLESS=1` to regenerate) and the recorded actions; the repository lint validates `testdata/campaigns/expected/` and `testdata/campaigns/actions/` against the schemas.
-- `crates/api/tests/campaigns.rs`: tenant scoping, scopes, filters, member attempts, evidence, `campaign_id` on attempts and IOCs, action validation, audit, merge and split through the API.
-- `crates/pg/tests/campaign_actions.rs`: append-only storage against Postgres in CI.
+- `crates/api/tests/campaigns.rs`: tenant scoping, scopes, filters, member attempts, evidence, `campaign_id` on attempts and IOCs, action validation, audit, merge and split, merged ids resolving as stubs, an id and label holding past the default window, and the per-token rate limit.
+- `crates/pg/tests/campaign_actions.rs`: append-only actions, structural actions loaded in full with feedback capped, and the registry (kept `created_at`, widened times, member counts, tenant scoping) against Postgres in CI.
 
 ## Not built yet
 
 - **Console views (#14).** The campaign list, campaign page and merge and split controls belong to the console work.
-- **Materialised campaigns.** Campaigns are a read model over a bounded window. A table maintained by the ingest consumer can replace it later without changing ids or the contract.
+- **Materialised campaigns.** Campaigns are a read model over a bounded window, with the registry keeping ids. A table maintained by the ingest consumer can replace the read model later without changing ids or the contract.
+- **Registry purge.** Member rows carry `attempt_first_seen` for the `attempt` TTL; the purge job (#16) does not delete them yet.
 - **Alert producer.** The `alerts` function is ready; the scheduled producer that keeps snapshots runs with the alert delivery worker (#15).
 - **LLM merge proposals (#28).** An LLM may propose that two campaigns belong together; that proposal goes to the review queue (#35) as a suggestion for an analyst `merge`, never as a join. LLM-only clustering is out of scope.
 - **Actor suggestions (#29)** and **fleet scope** ([above](#tenant-isolation-and-shared-research-sensors)).

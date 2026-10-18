@@ -17,7 +17,7 @@ use foiled_core::attack::AttackRule;
 use foiled_core::attempt::{Attempt, DEFAULT_IDLE_GAP_MS, ExtraSignals, StateSignal, build};
 use foiled_core::campaign::{
     ActionKind, Campaign, CampaignAction, CampaignStatus, Clustering, Feature, Input, Params,
-    TargetingPattern, attach, attempt_signals, cluster,
+    Registry, TargetingPattern, attach, attempt_signals, cluster,
 };
 use foiled_core::capture::CaptureEvent;
 use foiled_core::confidence::{Band, ConfidenceConfig};
@@ -95,6 +95,7 @@ fn run(name: &str, actions: &[CampaignAction]) -> Fixture {
             asns: &asns,
             advisories: &advisories,
             actions,
+            registry: &Registry::default(),
             now,
         },
         Params::default(),

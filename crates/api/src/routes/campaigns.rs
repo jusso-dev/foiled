@@ -15,8 +15,8 @@ use foiled_core::attempt::Attempt;
 use foiled_core::auth::Scope;
 use foiled_core::campaign::{
     ActionKind, Campaign, CampaignAction, CampaignRef, CampaignStatus, MAX_ACTION_ATTEMPTS,
-    MAX_ACTION_CAMPAIGNS, MAX_ACTIONS, campaign_link, member_links, split_campaign_id,
-    valid_campaign_id,
+    MAX_ACTION_CAMPAIGNS, MAX_ANCHORS, MAX_FEEDBACK_ACTIONS, StoredCampaign, campaign_link,
+    member_links, split_campaign_id, valid_campaign_id,
 };
 use foiled_core::confidence::{ConfidenceConfig, ConfidenceLink, Feedback};
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,9 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::Auth;
 use crate::error::ApiError;
-use crate::routes::attempts::{Iocs, WindowModel, window_bounds, window_model};
+use crate::routes::attempts::{
+    Campaigns, Iocs, WindowModel, run_clustering, window_bounds, window_model,
+};
 use crate::routes::page_limit;
 
 pub fn router() -> Router<AppState> {
@@ -103,6 +105,64 @@ pub struct ActionResult {
     pub campaign: Option<Campaign>,
 }
 
+/// A campaign with no listed form in the window: recorded in the registry,
+/// but with fewer than two of its attempts in the window (or none).
+#[derive(Debug, Serialize)]
+pub struct CampaignStub {
+    pub campaign_id: String,
+    pub tenant_id: String,
+    /// Always true; tells a stub from a full campaign.
+    pub stub: bool,
+    pub first_seen: i64,
+    pub last_seen: i64,
+    /// Attempts recorded as members across all windows.
+    pub attempt_count: u32,
+    /// Set when the campaign was folded into another; follow it.
+    pub merged_into: Option<String>,
+    pub notes: Vec<String>,
+}
+
+impl CampaignStub {
+    fn new(tenant_id: &str, c: StoredCampaign) -> Self {
+        CampaignStub {
+            campaign_id: c.campaign_id,
+            tenant_id: tenant_id.to_string(),
+            stub: true,
+            first_seen: c.first_seen,
+            last_seen: c.last_seen,
+            attempt_count: c.attempts,
+            notes: vec![match &c.merged_into {
+                Some(into) => format!("This campaign was merged into {into}."),
+                None => "Fewer than two attempts of this campaign are in this window. Pass                          since and until around first_seen and last_seen for the full                          campaign."
+                    .into(),
+            }],
+            merged_into: c.merged_into,
+        }
+    }
+}
+
+/// A full campaign, or a stub for one recorded outside the window.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum CampaignView {
+    Full(Box<Campaign>),
+    Stub(CampaignStub),
+}
+
+/// The registry record for one campaign id, if the tenant has one.
+async fn stored(
+    state: &AppState,
+    tenant_id: &str,
+    campaign_id: &str,
+) -> Result<Option<StoredCampaign>, ApiError> {
+    Ok(state
+        .store
+        .campaign_records(tenant_id, vec![campaign_id.to_string()])
+        .await?
+        .into_iter()
+        .next())
+}
+
 async fn model(
     state: &AppState,
     tenant_id: &str,
@@ -110,7 +170,15 @@ async fn model(
     until: Option<i64>,
 ) -> Result<WindowModel, ApiError> {
     let (since, until) = window_bounds(state, since, until);
-    window_model(state, tenant_id, since, until, Iocs::Attach).await
+    window_model(
+        state,
+        tenant_id,
+        since,
+        until,
+        Iocs::Attach,
+        Campaigns::Full,
+    )
+    .await
 }
 
 fn find(m: WindowModel, campaign_id: &str) -> Result<(Campaign, WindowModel), ApiError> {
@@ -185,13 +253,21 @@ async fn get_one(
     auth: Auth,
     Path(campaign_id): Path<String>,
     Query(q): Query<WindowQuery>,
-) -> Result<Json<Campaign>, ApiError> {
+) -> Result<Json<CampaignView>, ApiError> {
     let who = auth.require(Scope::CampaignsRead)?;
     if !valid_campaign_id(&campaign_id) {
         return Err(ApiError::not_found("campaign"));
     }
     let m = model(&state, &who.tenant_id, q.since, q.until).await?;
-    Ok(Json(find(m, &campaign_id)?.0))
+    if let Some(c) = m.campaigns.get(&campaign_id) {
+        return Ok(Json(CampaignView::Full(Box::new(c.clone()))));
+    }
+    // Recorded, but not listed in this window: a stub, so ids on attempts
+    // always resolve.
+    stored(&state, &who.tenant_id, &campaign_id)
+        .await?
+        .map(|c| Json(CampaignView::Stub(CampaignStub::new(&who.tenant_id, c))))
+        .ok_or_else(|| ApiError::not_found("campaign"))
 }
 
 /// Member attempts, newest activity first, with `campaign_id` filled.
@@ -207,18 +283,27 @@ async fn attempts(
         return Err(ApiError::not_found("campaign"));
     }
     let m = model(&state, &who.tenant_id, q.since, q.until).await?;
-    let (_, m) = find(m, &campaign_id)?;
+    let listed = m.campaigns.get(&campaign_id).is_some();
+    let truncated = m.truncated;
     let mut items: Vec<Attempt> = m
         .attempts
         .into_iter()
         .filter(|a| a.campaign_id.as_deref() == Some(campaign_id.as_str()))
         .collect();
+    if !listed
+        && items.is_empty()
+        && stored(&state, &who.tenant_id, &campaign_id)
+            .await?
+            .is_none()
+    {
+        return Err(ApiError::not_found("campaign"));
+    }
     items.sort_by(|a, b| (b.last_seen, &b.attempt_id).cmp(&(a.last_seen, &a.attempt_id)));
     items.truncate(page_limit(q.limit));
     Ok(Json(CampaignAttempts {
         campaign_id,
         items,
-        truncated: m.truncated,
+        truncated,
     }))
 }
 
@@ -260,7 +345,7 @@ async fn list_actions(
     }
     let items = state
         .store
-        .campaign_actions(&who.tenant_id, MAX_ACTIONS)
+        .campaign_actions(&who.tenant_id, MAX_FEEDBACK_ACTIONS)
         .await?
         .into_iter()
         .filter(|a| {
@@ -322,8 +407,26 @@ async fn act(
             "attempt_ids takes at most {MAX_ACTION_ATTEMPTS} attempts"
         )));
     }
+    crate::routes::check_rate(
+        &state,
+        &who,
+        "campaign.action",
+        state.limits.campaign_actions_per_hour,
+        crate::routes::HOUR_MS,
+    )
+    .await?;
+    // One window build: cluster, validate, record, then cluster again over
+    // the same inputs with the new action.
     let m = model(&state, &who.tenant_id, q.since, q.until).await?;
-    let (c, m) = find(m, &campaign_id)?;
+    let (c, mut m) = find(m, &campaign_id)?;
+    let anchors = |c: &Campaign| -> Vec<String> {
+        c.attempt_ids
+            .iter()
+            .rev()
+            .take(MAX_ANCHORS)
+            .cloned()
+            .collect()
+    };
 
     let mut merge = Vec::new();
     for id in body.campaign_ids.iter().flatten() {
@@ -335,7 +438,7 @@ async fn act(
         })?;
         merge.push(CampaignRef {
             campaign_id: other.campaign_id.clone(),
-            anchor_attempt_id: other.seed.attempt_id.clone(),
+            anchor_attempt_ids: anchors(other),
         });
     }
     let attempt_ids = body.attempt_ids.clone().unwrap_or_default();
@@ -353,7 +456,7 @@ async fn act(
         action_id: (state.ids)(),
         kind: body.action,
         campaign_id: campaign_id.clone(),
-        anchor_attempt_id: c.seed.attempt_id.clone(),
+        anchor_attempt_ids: anchors(&c),
         title: body.title.map(|t| t.trim().to_string()),
         status: body.status,
         merge,
@@ -381,8 +484,10 @@ async fn act(
     rec.detail = serde_json::to_value(&action).unwrap_or(serde_json::Value::Null);
     state.store.append_audit(rec).await?;
 
-    let m = model(&state, &who.tenant_id, q.since, q.until).await?;
-    let campaign = m.campaigns.get(&campaign_id).cloned();
+    let mut inputs = m.inputs.take().expect("full model has inputs");
+    inputs.actions.push(action.clone());
+    let after = run_clustering(&state, &who.tenant_id, &inputs, &m.attempts, &m.iocs, true).await;
+    let campaign = after.get(&campaign_id).cloned();
     Ok(Json(ActionResult { action, campaign }))
 }
 

@@ -17,7 +17,7 @@ The contract is [`schemas/attempt.schema.json`](../schemas/attempt.schema.json).
 | `event_ids`, `payload_refs` | The capture events and R2 objects that make up the attempt. |
 | `hook_hits` | Vulnerable-path hooks that fired (#32), with stage and CVE id. |
 | `ioc_refs` | Ids of the IOCs extracted from the attempt, in order of first appearance ([iocs.md](iocs.md), #34). Filled by the API read model; `attempt::build` alone leaves it empty. |
-| `campaign_id` | The campaign the attempt was clustered into, or null ([campaigns.md](campaigns.md), #33). Filled by the API read model from the same window; `attempt::build` alone leaves it null. |
+| `campaign_id` | The campaign the attempt was clustered into, or null ([campaigns.md](campaigns.md), #33). Filled by the API read model: by clustering on the list, from the campaign registry on the detail route, so ids hold as the window moves ([campaigns.md](campaigns.md#api)); `attempt::build` alone leaves it null. |
 | `labels` | Analyst labels. |
 | `noise` | Targeted versus mass score for the source (below). |
 

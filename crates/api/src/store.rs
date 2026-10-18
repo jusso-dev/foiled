@@ -261,12 +261,37 @@ pub trait Store: Send + Sync {
     /// Record an analyst decision, replacing any earlier one for the link.
     fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()>;
 
-    /// Analyst actions on campaigns (#33): the newest `limit`, oldest first.
+    /// Analyst actions on campaigns (#33), oldest first: every structural
+    /// action (label, status, merge, split) and the newest `feedback_limit`
+    /// feedback actions.
     fn campaign_actions(
         &self,
         tenant_id: &str,
-        limit: usize,
+        feedback_limit: usize,
     ) -> StoreFuture<'_, Vec<foiled_core::campaign::CampaignAction>>;
+
+    /// Recorded campaign per attempt, for these attempts (#33 registry).
+    fn campaign_memberships(
+        &self,
+        tenant_id: &str,
+        attempt_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<(String, String)>>;
+
+    /// Registry records for these campaign ids, with member counts.
+    fn campaign_records(
+        &self,
+        tenant_id: &str,
+        campaign_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::StoredCampaign>>;
+
+    /// Apply a registry update: `created_at` is kept, first and last seen
+    /// only widen, memberships are replaced.
+    fn update_campaign_registry(
+        &self,
+        tenant_id: &str,
+        update: foiled_core::campaign::RegistryUpdate,
+        now: i64,
+    ) -> StoreFuture<'_, ()>;
 
     /// Append an analyst campaign action. Actions are never edited.
     fn append_campaign_action(
