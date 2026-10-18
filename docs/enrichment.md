@@ -322,7 +322,7 @@ Restricted rows stay in bounds because `noise_inputs` only sees what `usable_fac
 
 **Confidence layer (#27).** Facts reach #27 in two ways. First, through the noise score, as evidence with `source: noise_score`: high noise lowers confidence that the activity is a targeted novel exploit, but cannot alone suppress a vuln-path hook or a sequence fingerprint, and a ThreatSieve benign-service classification strongly down-ranks actor and campaign auto-links. Second, directly, as evidence with `source: enrichment`, weighted by the configured weight times the Fact's `confidence / 100`. Enrichment evidence is capped so that it can never alone take a link to `high`, the evidence entry names the provider and Fact key so nothing is hidden, and a Fact past its `ttl_secs` contributes nothing.
 
-**ATT&CK mapping (#26).** Foiled's own technique labels come from what the decoy saw. CrowdSec's `crowdsec.mitre_techniques` and `crowdsec.behaviors` are an outside check on them: when CrowdSec agrees with a technique Foiled already assigned, the `attempt_technique` link gains a small `enrichment` evidence entry; when CrowdSec lists a technique Foiled did not see, it is shown as a hint for the analyst and never creates a link on its own. CrowdSec `cves` are used the same way as a cross-check for CVE mapping (#12).
+**ATT&CK mapping (#26).** Foiled's own technique labels come from what the decoy saw. The design is for outside technique and CVE hints to check them: when a source agrees with a technique Foiled already assigned, the `attempt_technique` link gains a small `enrichment` evidence entry; when it lists a technique Foiled did not see, it is shown as a hint for the analyst and never creates a link on its own, and CVE hints cross-check CVE mapping (#12) the same way. No Fact feeds this today: the direct CrowdSec parser that produced technique, behaviour and CVE Facts is gone, and ThreatSieve's lookup carries no per-IP technique list yet (open item below).
 
 **Actor matching (#29).** Infrastructure Facts are inputs to actor and campaign matching: `asn.number` and `asn.org`, `geo.country`, and ThreatSieve relationships (`threatsieve.related`) as low-weight context. They raise the score of a "possible association" only alongside behavioural evidence from the capture itself; ASN or country alone never names an actor, and a link supported only by third-party Facts stays internal to the operator's console. YARA matches on quarantined payloads are tool evidence for the same matching (#29) and campaign clustering (#33).
 
@@ -384,7 +384,8 @@ Nothing here has been run against a live ThreatSieve by this project.
 ## Open items
 
 - A first run against a live ThreatSieve (ThreatSieve PR #33).
-- Feed `noise_inputs` into the attempts read model in the API (#25), with restricted inputs left out of any exported score.
+- Feed `noise_inputs` into the attempts read model in the API (#25), with restricted inputs left out of any exported score (a machine-readable `restricted` marker on `NoiseScore` for exporters to check).
+- Technique and CVE hints for ATT&CK mapping (#26) from ThreatSieve, once its lookup returns them per IP.
 - The sweep cron that re-sends observables of recent attempts with no fresh cache row.
 - Turning providers on without a redeploy (the config is bundled at build time).
 - An operator-only view of third-party Facts (needs an operator role, #14).

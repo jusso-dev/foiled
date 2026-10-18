@@ -993,7 +993,8 @@ pub struct NoiseFacts {
     /// `threatsieve.classification`: `malicious`, `suspicious`, `benign` or
     /// `unknown`.
     pub classification: Option<String>,
-    /// `threatsieve.tags`, clipped, at most [`MAX_NOISE_TAGS`].
+    /// `threatsieve.tags`, clipped, without commas, at most
+    /// [`MAX_NOISE_TAGS`].
     pub tags: Vec<String>,
     /// True when any input above came from a `threatsieve_restricted` row:
     /// the reading tenant's own lookup, never for export.
@@ -1029,17 +1030,19 @@ pub fn noise_inputs(usable: &[ObservedFacts], ip: &Observable) -> NoiseFacts {
     };
     let scanner = newest("threatsieve.scanner").and_then(Value::as_bool);
     let benign_service = newest("threatsieve.benign_service").and_then(Value::as_bool);
+    // Only ThreatSieve's four documented values; anything else is unknown.
     let classification = newest("threatsieve.classification")
         .and_then(Value::as_str)
-        .map(clip)
-        .filter(|s| !s.is_empty());
+        .map(str::to_ascii_lowercase)
+        .filter(|c| ["malicious", "suspicious", "benign", "unknown"].contains(&c.as_str()));
     let tags = newest("threatsieve.tags")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
         .map(clip)
-        .filter(|s| !s.is_empty())
+        // Evidence joins tags with ", ", so a comma would forge a second tag.
+        .filter(|s| !s.is_empty() && !s.contains(','))
         .take(MAX_NOISE_TAGS)
         .collect();
     NoiseFacts {
@@ -1411,7 +1414,7 @@ mod tests {
                     ts(
                         THREATSIEVE,
                         "threatsieve.classification",
-                        Value::from("suspicious"),
+                        Value::from("Suspicious"),
                         NOW,
                     ),
                     ts(
@@ -1425,7 +1428,7 @@ mod tests {
                     ts(
                         THREATSIEVE,
                         "threatsieve.tags",
-                        json!(["bruteforce", "", "web\u{7}scan"]),
+                        json!(["bruteforce", "", "web\u{7}scan", "a, b"]),
                         NOW,
                     ),
                 ],
@@ -1468,9 +1471,39 @@ mod tests {
                 ),
                 ts(THREATSIEVE, "greynoise.noise", Value::Bool(true), NOW),
                 ts(THREATSIEVE, "threatsieve.scanner", Value::from("yes"), NOW),
+                ts(
+                    THREATSIEVE,
+                    "threatsieve.classification",
+                    Value::from("<b>evil</b>"),
+                    NOW,
+                ),
             ],
         )];
         assert_eq!(noise_inputs(&usable, &src), NoiseFacts::default());
+    }
+
+    #[test]
+    fn noise_inputs_newest_wins_across_shared_and_restricted() {
+        let src = Observable::ip("203.0.113.7").unwrap();
+        let key = "threatsieve.scanner";
+        let both = |shared_at: i64, restricted_at: i64| {
+            let usable = vec![observed(
+                "203.0.113.7",
+                vec![
+                    ts(THREATSIEVE, key, Value::Bool(false), shared_at),
+                    ts(
+                        THREATSIEVE_RESTRICTED,
+                        key,
+                        Value::Bool(true),
+                        restricted_at,
+                    ),
+                ],
+            )];
+            let n = noise_inputs(&usable, &src);
+            (n.scanner, n.restricted)
+        };
+        assert_eq!(both(NOW, NOW - 1), (Some(false), false));
+        assert_eq!(both(NOW - 1, NOW), (Some(true), true));
     }
 
     #[test]
