@@ -1,0 +1,283 @@
+{
+  "campaign_id": "cmp_2eb2760245d4b65e168cb56f",
+  "tenant_id": "t1",
+  "tenant_scope": "tenant",
+  "title": "Payload hash 5e884898da28047151d0e56f8dc6292773603d0d... on 3 decoys",
+  "status": "active",
+  "first_seen": 1792285323000,
+  "last_seen": 1792285733000,
+  "seed": {
+    "attempt_id": "att_01b0403bb68495616e0632d7",
+    "features": [
+      "payload_sha256",
+      "request_shape"
+    ]
+  },
+  "attempt_ids": [
+    "att_01b0403bb68495616e0632d7",
+    "att_3ab567879f742113c84b0532",
+    "att_1393a0b8612cd33c09e9ca2f"
+  ],
+  "decoy_ids": [
+    "dcy-edge-fra-1",
+    "dcy-edge-sgp-1",
+    "dcy-edge-syd-1"
+  ],
+  "sensor_ids": [
+    "sensor-fra-1",
+    "sensor-sgp-1",
+    "sensor-syd-1"
+  ],
+  "catalogue_ids": [
+    "foiled/demo-app/1.0.0"
+  ],
+  "members": [
+    {
+      "attempt_id": "att_01b0403bb68495616e0632d7",
+      "decoy_id": "dcy-edge-syd-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "sensor_id": "sensor-syd-1",
+      "src": "203.0.113.21",
+      "first_seen": 1792285323000,
+      "last_seen": 1792285323000,
+      "state": "exploit",
+      "noise_score": 10,
+      "joined_by": [
+        {
+          "signal_id": "campaign:payload_sha256:830e955b9f11",
+          "feature": "payload_sha256",
+          "families": [
+            "payload"
+          ],
+          "strength": "strong",
+          "weight": 100,
+          "display": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+          "with_attempt_id": "att_3ab567879f742113c84b0532",
+          "ioc_id": "ioc_830e955b9f1166cec5e69580"
+        },
+        {
+          "signal_id": "campaign:request_shape:939bb8bac023",
+          "feature": "request_shape",
+          "families": [
+            "payload"
+          ],
+          "strength": "weak",
+          "weight": 40,
+          "display": "/api/upload?path=../../tmp/.w with python-requests/2.31",
+          "with_attempt_id": "att_3ab567879f742113c84b0532"
+        }
+      ]
+    },
+    {
+      "attempt_id": "att_3ab567879f742113c84b0532",
+      "decoy_id": "dcy-edge-sgp-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "sensor_id": "sensor-sgp-1",
+      "src": "203.0.113.22",
+      "first_seen": 1792285418000,
+      "last_seen": 1792285418000,
+      "state": "exploit",
+      "noise_score": 10,
+      "joined_by": [
+        {
+          "signal_id": "campaign:payload_sha256:830e955b9f11",
+          "feature": "payload_sha256",
+          "families": [
+            "payload"
+          ],
+          "strength": "strong",
+          "weight": 100,
+          "display": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+          "with_attempt_id": "att_01b0403bb68495616e0632d7",
+          "ioc_id": "ioc_830e955b9f1166cec5e69580"
+        },
+        {
+          "signal_id": "campaign:request_shape:939bb8bac023",
+          "feature": "request_shape",
+          "families": [
+            "payload"
+          ],
+          "strength": "weak",
+          "weight": 40,
+          "display": "/api/upload?path=../../tmp/.w with python-requests/2.31",
+          "with_attempt_id": "att_01b0403bb68495616e0632d7"
+        }
+      ]
+    },
+    {
+      "attempt_id": "att_1393a0b8612cd33c09e9ca2f",
+      "decoy_id": "dcy-edge-fra-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "sensor_id": "sensor-fra-1",
+      "src": "203.0.113.23",
+      "first_seen": 1792285733000,
+      "last_seen": 1792285733000,
+      "state": "exploit",
+      "noise_score": 10,
+      "joined_by": [
+        {
+          "signal_id": "campaign:payload_sha256:830e955b9f11",
+          "feature": "payload_sha256",
+          "families": [
+            "payload"
+          ],
+          "strength": "strong",
+          "weight": 100,
+          "display": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+          "with_attempt_id": "att_3ab567879f742113c84b0532",
+          "ioc_id": "ioc_830e955b9f1166cec5e69580"
+        },
+        {
+          "signal_id": "campaign:request_shape:939bb8bac023",
+          "feature": "request_shape",
+          "families": [
+            "payload"
+          ],
+          "strength": "weak",
+          "weight": 40,
+          "display": "/api/upload?path=../../tmp/.w with python-requests/2.31",
+          "with_attempt_id": "att_3ab567879f742113c84b0532"
+        }
+      ]
+    }
+  ],
+  "feature_summary": {
+    "infrastructure": {
+      "src_ips": {
+        "count": 3,
+        "values": [
+          "203[.]0[.]113[.]21",
+          "203[.]0[.]113[.]22",
+          "203[.]0[.]113[.]23"
+        ]
+      },
+      "asns": [],
+      "stage2_urls": {
+        "count": 0,
+        "values": []
+      },
+      "callback_domains": {
+        "count": 0,
+        "values": []
+      },
+      "callback_ips": {
+        "count": 0,
+        "values": []
+      }
+    },
+    "ttp": {
+      "techniques": [
+        "T1190"
+      ],
+      "behaviour_fingerprints": {
+        "count": 0,
+        "values": []
+      },
+      "cmdlines": {
+        "count": 0,
+        "values": []
+      }
+    },
+    "targeting": {
+      "pattern": "mixed",
+      "attempts": 3,
+      "sources": 3,
+      "decoys_touched": 3,
+      "sensors_touched": 3,
+      "products_touched": 1,
+      "visible_decoys": 6,
+      "coverage_pct": 50,
+      "noise_bands": {
+        "targeted": 3,
+        "mixed": 0,
+        "mass": 0,
+        "unknown": 0
+      },
+      "catalogue_ids": [
+        "foiled/demo-app/1.0.0"
+      ],
+      "cves": [
+        "FOILED-DEMO-0001"
+      ],
+      "advisory_timing": [
+        {
+          "cve_id": "FOILED-DEMO-0001",
+          "published_at": 1792800000000,
+          "first_seen": 1792285323000,
+          "offset_hours": -143,
+          "before_disclosure": true
+        }
+      ],
+      "evidence": [
+        "touched 3 of 6 visible decoy(s) running the same products (50%)",
+        "first attempt on FOILED-DEMO-0001 came 143 hour(s) before its advisory"
+      ]
+    },
+    "payload": {
+      "payload_sha256": {
+        "count": 1,
+        "values": [
+          "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"
+        ]
+      },
+      "file_sha256": {
+        "count": 0,
+        "values": []
+      },
+      "request_substrings": {
+        "count": 0,
+        "values": []
+      },
+      "request_shapes": {
+        "count": 1,
+        "values": [
+          "/api/upload?path=../../tmp/.w with python-requests/2.31"
+        ]
+      }
+    }
+  },
+  "shared_ioc_ids": [
+    "ioc_63eaf78383fcfb78f6b227f4",
+    "ioc_830e955b9f1166cec5e69580",
+    "ioc_e7df1029345af85ff27112c9"
+  ],
+  "confidence_ref": "/v0/campaigns/cmp_2eb2760245d4b65e168cb56f/evidence",
+  "confidence": {
+    "score": 48,
+    "band": "medium",
+    "wording": "possible",
+    "publishable": false,
+    "evidence": [
+      {
+        "signal_id": "campaign:payload_sha256:830e955b9f11",
+        "source": "campaign_cluster",
+        "weight": 100,
+        "summary": "3 attempts share payload hash 5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+        "ref": "ioc_830e955b9f1166cec5e69580"
+      },
+      {
+        "signal_id": "campaign:request_shape:939bb8bac023",
+        "source": "campaign_cluster",
+        "weight": 40,
+        "summary": "3 attempts share request shape /api/upload?path=../../tmp/.w with python-requests/2.31"
+      },
+      {
+        "signal_id": "campaign:noise:cmp_2eb2760245d4b65e168cb56f",
+        "source": "noise_score",
+        "weight": 10,
+        "summary": "lowest member source noise score 10"
+      }
+    ],
+    "caps_applied": []
+  },
+  "suggested_actor_links": [],
+  "analyst": {
+    "title": null,
+    "status": null,
+    "feedback": null,
+    "merged_from": [],
+    "split_from": null,
+    "action_ids": []
+  },
+  "notes": []
+}

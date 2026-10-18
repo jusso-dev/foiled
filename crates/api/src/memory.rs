@@ -26,6 +26,8 @@ struct Inner {
     events: Vec<CaptureEvent>,
     heartbeats: HashMap<(String, String), (serde_json::Value, i64)>,
     overrides: Vec<(String, LinkOverride)>,
+    campaign_actions: Vec<(String, foiled_core::campaign::CampaignAction)>,
+    campaign_registry: HashMap<String, foiled_core::campaign::Registry>,
     /// Audit appends with this action fail, to test storage outages.
     fail_audit_action: Option<String>,
     facts: Vec<(String, ObservedFacts)>,
@@ -106,6 +108,15 @@ impl MemoryStore {
     /// would leave them (#11).
     pub fn add_facts(&self, tenant_id: &str, facts: ObservedFacts) {
         self.lock().facts.push((tenant_id.to_string(), facts));
+    }
+
+    /// The campaign registry recorded for a tenant (tests).
+    pub fn campaign_registry(&self, tenant_id: &str) -> foiled_core::campaign::Registry {
+        self.lock()
+            .campaign_registry
+            .get(tenant_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -467,6 +478,99 @@ impl Store for MemoryStore {
             .map(|(_, o)| o.clone())
             .collect();
         ready(Ok(out))
+    }
+
+    fn campaign_actions(
+        &self,
+        tenant_id: &str,
+        feedback_limit: usize,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::CampaignAction>> {
+        let mut out: Vec<_> = self
+            .lock()
+            .campaign_actions
+            .iter()
+            .filter(|(t, _)| t == tenant_id)
+            .map(|(_, a)| a.clone())
+            .collect();
+        out.sort_by(|a, b| (a.at, &a.action_id).cmp(&(b.at, &b.action_id)));
+        let feedback = out.iter().filter(|a| !a.is_structural()).count();
+        let mut shed = feedback.saturating_sub(feedback_limit);
+        out.retain(|a| {
+            if !a.is_structural() && shed > 0 {
+                shed -= 1;
+                return false;
+            }
+            true
+        });
+        ready(Ok(out))
+    }
+
+    fn campaign_memberships(
+        &self,
+        tenant_id: &str,
+        attempt_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<(String, String)>> {
+        let g = self.lock();
+        let out = g
+            .campaign_registry
+            .get(tenant_id)
+            .map(|r| {
+                attempt_ids
+                    .into_iter()
+                    .filter_map(|a| r.members.get(&a).map(|c| (a.clone(), c.clone())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        ready(Ok(out))
+    }
+
+    fn campaign_records(
+        &self,
+        tenant_id: &str,
+        campaign_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::StoredCampaign>> {
+        let g = self.lock();
+        let out = g
+            .campaign_registry
+            .get(tenant_id)
+            .map(|r| {
+                campaign_ids
+                    .iter()
+                    .filter_map(|c| r.campaigns.get(c).cloned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        ready(Ok(out))
+    }
+
+    fn update_campaign_registry(
+        &self,
+        tenant_id: &str,
+        update: foiled_core::campaign::RegistryUpdate,
+        _now: i64,
+    ) -> StoreFuture<'_, ()> {
+        self.lock()
+            .campaign_registry
+            .entry(tenant_id.to_string())
+            .or_default()
+            .apply(&update);
+        ready(Ok(()))
+    }
+
+    fn append_campaign_action(
+        &self,
+        tenant_id: &str,
+        action: foiled_core::campaign::CampaignAction,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        if g.campaign_actions
+            .iter()
+            .any(|(t, a)| t == tenant_id && a.action_id == action.action_id)
+        {
+            return ready(Err(StoreError("duplicate campaign action".into())));
+        }
+        g.campaign_actions.push((tenant_id.to_string(), action));
+        ready(Ok(()))
     }
 
     fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()> {

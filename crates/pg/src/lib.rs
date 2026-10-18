@@ -28,6 +28,14 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         "0004_capture_events_source_key",
         include_str!("../../../migrations/postgres/0004_capture_events_source_key.sql"),
     ),
+    (
+        "0005_campaign_actions",
+        include_str!("../../../migrations/postgres/0005_campaign_actions.sql"),
+    ),
+    (
+        "0006_campaign_registry",
+        include_str!("../../../migrations/postgres/0006_campaign_registry.sql"),
+    ),
 ];
 
 /// Arbitrary constant key for the migration advisory lock.
@@ -396,4 +404,204 @@ pub async fn link_overrides(
             note: r.get("note"),
         })
         .collect())
+}
+
+/// Append one analyst campaign action (#33). `body` is the whole
+/// `CampaignAction` as JSON; the other columns are copied out of it for
+/// filtering and the CHECK constraint.
+pub async fn append_campaign_action(
+    client: &Client,
+    tenant_id: &str,
+    action: &foiled_core::campaign::CampaignAction,
+) -> Result<(), Error> {
+    let body = serde_json::to_value(action).unwrap_or(serde_json::Value::Null);
+    client
+        .execute(
+            "INSERT INTO campaign_actions (tenant_id, action_id, campaign_id, kind, analyst_id, at, body)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &[
+                &tenant_id,
+                &action.action_id,
+                &action.campaign_id,
+                &action.kind.as_str(),
+                &action.analyst_id,
+                &action.at,
+                &body,
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Every structural campaign action (label, status, merge, split) for a
+/// tenant and the newest `feedback_limit` feedback actions, oldest first.
+/// Rows whose body no longer parses are skipped rather than failing the
+/// read.
+pub async fn campaign_actions(
+    client: &Client,
+    tenant_id: &str,
+    feedback_limit: i64,
+) -> Result<Vec<foiled_core::campaign::CampaignAction>, Error> {
+    let rows = client
+        .query(
+            "SELECT body, at, action_id FROM campaign_actions
+             WHERE tenant_id = $1 AND kind <> 'feedback'
+             UNION ALL
+             (SELECT body, at, action_id FROM campaign_actions
+              WHERE tenant_id = $1 AND kind = 'feedback'
+              ORDER BY at DESC, action_id DESC LIMIT $2)
+             ORDER BY at, action_id",
+            &[&tenant_id, &feedback_limit],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .filter_map(|r| serde_json::from_value(r.get::<_, serde_json::Value>("body")).ok())
+        .collect())
+}
+
+/// Recorded campaign per attempt (#33), for the attempts given.
+pub async fn campaign_memberships(
+    client: &Client,
+    tenant_id: &str,
+    attempt_ids: &[String],
+) -> Result<Vec<(String, String)>, Error> {
+    let rows = client
+        .query(
+            "SELECT attempt_id, campaign_id FROM campaign_members
+             WHERE tenant_id = $1 AND attempt_id = ANY($2)",
+            &[&tenant_id, &attempt_ids],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| (r.get("attempt_id"), r.get("campaign_id")))
+        .collect())
+}
+
+/// Registry records for these campaign ids, with their recorded member
+/// counts.
+pub async fn campaign_records(
+    client: &Client,
+    tenant_id: &str,
+    campaign_ids: &[String],
+) -> Result<Vec<foiled_core::campaign::StoredCampaign>, Error> {
+    let rows = client
+        .query(
+            "SELECT c.campaign_id, c.created_at, c.first_seen, c.last_seen, c.merged_into,
+                    (SELECT count(*) FROM campaign_members m
+                     WHERE m.tenant_id = c.tenant_id AND m.campaign_id = c.campaign_id) AS attempts
+             FROM campaigns c WHERE c.tenant_id = $1 AND c.campaign_id = ANY($2)
+             ORDER BY c.campaign_id",
+            &[&tenant_id, &campaign_ids],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| foiled_core::campaign::StoredCampaign {
+            campaign_id: r.get("campaign_id"),
+            created_at: r.get("created_at"),
+            first_seen: r.get("first_seen"),
+            last_seen: r.get("last_seen"),
+            merged_into: r.get("merged_into"),
+            attempts: u32::try_from(r.get::<_, i64>("attempts")).unwrap_or(u32::MAX),
+        })
+        .collect())
+}
+
+/// Apply a registry update in one transaction, as two multi-row upserts.
+/// Writes converge whatever order concurrent or stale readers commit in:
+/// `created_at` keeps the oldest value, first and last seen only widen,
+/// `merged_into` is write-once (and a CHECK keeps it off the campaign
+/// itself), and a membership only moves to an older campaign (smaller
+/// `created_at`, then id).
+pub async fn update_campaign_registry(
+    client: &Client,
+    tenant_id: &str,
+    update: &foiled_core::campaign::RegistryUpdate,
+    now: i64,
+) -> Result<(), Error> {
+    if update.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<&str> = update
+        .campaigns
+        .iter()
+        .map(|c| c.campaign_id.as_str())
+        .collect();
+    let created: Vec<i64> = update.campaigns.iter().map(|c| c.created_at).collect();
+    let first: Vec<i64> = update.campaigns.iter().map(|c| c.first_seen).collect();
+    let last: Vec<i64> = update.campaigns.iter().map(|c| c.last_seen).collect();
+    let merged: Vec<Option<&str>> = update
+        .campaigns
+        .iter()
+        .map(|c| c.merged_into.as_deref().filter(|m| *m != c.campaign_id))
+        .collect();
+    let attempts: Vec<&str> = update
+        .members
+        .iter()
+        .map(|m| m.attempt_id.as_str())
+        .collect();
+    let member_of: Vec<&str> = update
+        .members
+        .iter()
+        .map(|m| m.campaign_id.as_str())
+        .collect();
+    let seen: Vec<i64> = update
+        .members
+        .iter()
+        .map(|m| m.attempt_first_seen)
+        .collect();
+    client.batch_execute("BEGIN").await?;
+    let step = async {
+        if !ids.is_empty() {
+            client
+                .execute(
+                    "INSERT INTO campaigns (tenant_id, campaign_id, created_at, first_seen, last_seen, merged_into, updated_at)
+                     SELECT $1, t.c, t.cr, t.f, t.l, t.m, $7
+                     FROM UNNEST($2::text[], $3::bigint[], $4::bigint[], $5::bigint[], $6::text[]) AS t(c, cr, f, l, m)
+                     ON CONFLICT (tenant_id, campaign_id) DO UPDATE SET
+                       created_at = LEAST(campaigns.created_at, EXCLUDED.created_at),
+                       first_seen = LEAST(campaigns.first_seen, EXCLUDED.first_seen),
+                       last_seen = GREATEST(campaigns.last_seen, EXCLUDED.last_seen),
+                       merged_into = COALESCE(campaigns.merged_into, EXCLUDED.merged_into),
+                       updated_at = EXCLUDED.updated_at",
+                    &[&tenant_id, &ids, &created, &first, &last, &merged, &now],
+                )
+                .await?;
+        }
+        if !attempts.is_empty() {
+            client
+                .execute(
+                    "INSERT INTO campaign_members (tenant_id, attempt_id, campaign_id, attempt_first_seen, recorded_at)
+                     SELECT $1, t.a, t.c, t.f, $5
+                     FROM UNNEST($2::text[], $3::text[], $4::bigint[]) AS t(a, c, f)
+                     ON CONFLICT (tenant_id, attempt_id) DO UPDATE SET
+                       campaign_id = EXCLUDED.campaign_id,
+                       recorded_at = EXCLUDED.recorded_at
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM campaigns o
+                         WHERE o.tenant_id = campaign_members.tenant_id
+                           AND o.campaign_id = campaign_members.campaign_id)
+                       OR EXISTS (
+                         SELECT 1 FROM campaigns n, campaigns o
+                         WHERE n.tenant_id = campaign_members.tenant_id
+                           AND n.campaign_id = EXCLUDED.campaign_id
+                           AND o.tenant_id = campaign_members.tenant_id
+                           AND o.campaign_id = campaign_members.campaign_id
+                           AND (n.created_at, n.campaign_id) < (o.created_at, o.campaign_id))",
+                    &[&tenant_id, &attempts, &member_of, &seen, &now],
+                )
+                .await?;
+        }
+        Ok::<(), Error>(())
+    }
+    .await;
+    match step {
+        Ok(()) => client.batch_execute("COMMIT").await,
+        Err(e) => {
+            client.batch_execute("ROLLBACK").await?;
+            Err(e)
+        }
+    }
 }

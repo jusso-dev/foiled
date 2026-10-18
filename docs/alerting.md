@@ -43,7 +43,7 @@ Dedupe keys are built from the facts below plus a time bucket of the dedupe wind
 | `vuln_path_hook_fired` | high | Attempt builder (#25, #32) | A hook fired at the trigger stage. Medium when the same attempt also raised `decoy_compromised`. | src IP + CVE | 1 h |
 | `cve_assessed` | medium | Confidence layer (#12, #27) | A CVE assessment tier was promoted, for example possible to likely. | subject (CVE id) | 1 day |
 | `predisclosure_spike` | high | Predisclosure watchlist (#12, #35) | A watchlist path or signature spiked with no matching advisory. | subject (watchlist id) | 1 h |
-| `campaign_updated` | medium | Campaign clustering (#33) | A campaign was created, grew or merged. | campaign id | 1 day |
+| `campaign_updated` | medium | Campaign clustering (#33, `campaign::alerts`) | A campaign was created, grew or merged. Low while the campaign is `emerging` ([campaigns.md](campaigns.md#alerts)). | campaign id | 1 day |
 | `edge_sensor_offline` | high | Sensor liveness (#31) | An edge sensor stopped forwarding past its grace period. | subject (sensor id) | 1 h |
 | `review_queue_item` | low | Review queue (#35) | A queue item was created. Never itself sent to the queue. | subject (queue item id) | 1 day |
 | `decoy_compromised` | high | Attempt builder, rotation (#8) | Attempt reached post-exploitation, or a decoy entered `quarantined` with a compromise reason: `reverse_shell`, `egress_blocked`, `yara_match` or `canary_used`. | decoy + type | 1 h |

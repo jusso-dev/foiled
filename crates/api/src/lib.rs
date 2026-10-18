@@ -57,6 +57,8 @@ pub struct Limits {
     pub ingest_batches_per_minute: u32,
     /// Lifetime of issued client certificates.
     pub cert_validity_days: u32,
+    /// Campaign analyst actions per principal per hour (#33).
+    pub campaign_actions_per_hour: u32,
 }
 
 impl Default for Limits {
@@ -74,6 +76,7 @@ impl Default for Limits {
             renewals_per_day: 4,
             ingest_batches_per_minute: 120,
             cert_validity_days: foiled_core::enrolment::DEFAULT_CERT_VALIDITY_DAYS,
+            campaign_actions_per_hour: 60,
         }
     }
 }
@@ -148,6 +151,7 @@ fn rest_routes() -> Router<AppState> {
         .merge(routes::exports::router())
         .merge(routes::attempts::router())
         .merge(routes::iocs::router())
+        .merge(routes::campaigns::router())
 }
 
 /// The REST API alone. MCP tool calls are replayed against this router, so
