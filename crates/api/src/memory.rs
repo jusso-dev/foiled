@@ -873,7 +873,7 @@ impl Store for MemoryStore {
                 && addresses.contains(&e.observable.value)
                 && e.is_fresh(now)
             {
-                h.update(format!("e|{}|{}|{}\n", e.key(), e.fetched_at, e.ttl_secs));
+                h.update(format!("e|{}\n", crate::routes::taxii::cache_row_input(e)));
             }
         }
         ready(Ok(hex::encode(h.finalize())))

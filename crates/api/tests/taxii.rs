@@ -11,8 +11,8 @@ use axum::body::Body;
 use foiled_api::auth::sha256_hex;
 use foiled_api::memory::MemoryStore;
 use foiled_api::routes::taxii::{
-    Budget, DEFAULT_BUDGET, LEASE_MS, collection_id, materialise, materialise_all,
-    materialise_tick, materialise_with,
+    Budget, DEFAULT_BUDGET, LEASE_MS, QUIET_REBUILDS_PER_RUN, collection_id, materialise,
+    materialise_all, materialise_tick, materialise_with,
 };
 use foiled_api::store::{DayRecord, LinkOverride, NewVersion};
 use foiled_api::store::{Store, TokenRecord};
@@ -631,6 +631,44 @@ async fn suppressed_links_are_revoked_for_subscribers() {
     )
     .await;
     assert_eq!(json(&body)["objects"][0]["revoked"], true);
+    check_log_golden("taxii-log", s).await;
+}
+
+/// The latest version of every object in the log as one bundle, kept as
+/// `testdata/exports/stix/<name>.json` so CI runs stix2-validator over
+/// what TAXII serves (revoked and reissued versions included). To
+/// regenerate after an intended change, run with FOILED_BLESS=1.
+async fn check_log_golden(name: &str, state: &AppState) {
+    let (rows, _) = poll(state, "", 1000).await;
+    let mut latest = BTreeMap::new();
+    merge(&mut latest, rows);
+    if let Ok(dir) = std::env::var("FOILED_TAXII_DUMP") {
+        let (all, _) = poll(state, "&match[version]=all", 1000).await;
+        std::fs::write(
+            format!("{dir}/{name}-all.json"),
+            serde_json::to_string_pretty(&all).unwrap(),
+        )
+        .unwrap();
+    }
+    let got = serde_json::json!({
+        "type": "bundle",
+        "id": format!("bundle--{}", foiled_core::intel::uuid5::uuid_v5(
+            foiled_core::intel::FOILED_NAMESPACE,
+            &format!("golden|{name}"),
+        )),
+        "objects": latest.into_values().collect::<Vec<_>>(),
+    });
+    let problems = stix::problems(&got);
+    assert!(problems.is_empty(), "{problems:#?}");
+    let path = format!(
+        "{}/../../testdata/exports/stix/{name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    if std::env::var("FOILED_BLESS").is_ok() {
+        std::fs::write(&path, serde_json::to_string_pretty(&got).unwrap() + "\n").unwrap();
+    }
+    let want: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(got, want, "{path}");
 }
 
 /// Content an object had before comes back as the newest version, so
@@ -1334,6 +1372,65 @@ async fn late_enrichment_rebuilds_days() {
     h.now.store(T0 + 2 * HOUR, Ordering::SeqCst);
     let r = materialise(s, "t1").await.unwrap();
     assert!(r.days_written >= 1, "{r:?}");
+}
+
+/// A change that touches the inputs of every day but none of their events
+/// rebuilds at most `QUIET_REBUILDS_PER_RUN` days per run, the rest in
+/// later runs, and a cache refresh that only moves the fetch time
+/// rebuilds nothing.
+#[tokio::test]
+async fn quiet_rebuilds_are_spread_and_refreshes_rebuild_nothing() {
+    let mut evs = Vec::new();
+    for n in 0..4 {
+        evs.extend(day_events(n));
+    }
+    let h = harness_with(evs).await;
+    let s = &h.state;
+    let mut now = day_start(3) + 6 * HOUR;
+    h.now.store(now, Ordering::SeqCst);
+    while materialise(s, "t1").await.unwrap().incomplete {}
+    let entry = |at: i64| CacheEntry {
+        provider: "team_asn".into(),
+        observable: Observable::ip("203.0.113.60").unwrap(),
+        fetched_at: at,
+        ttl_secs: 604_800,
+        facts: vec![Fact {
+            provider: "team_asn".into(),
+            key: "asn.number".into(),
+            value: serde_json::json!(64498),
+            confidence: 90,
+            observed_at: at,
+            ttl_secs: 604_800,
+            raw_ref: None,
+        }],
+        tenant_id: None,
+    };
+    // New enrichment for the address every day shares.
+    now += HOUR;
+    h.store.add_cache_entry(entry(now));
+    h.now.store(now + 1, Ordering::SeqCst);
+    let mut rebuilt = Vec::new();
+    loop {
+        let r = materialise(s, "t1").await.unwrap();
+        // One part per day here, so parts count the days rebuilt.
+        assert!(r.parts <= QUIET_REBUILDS_PER_RUN, "{r:?}");
+        rebuilt.push(r.parts);
+        if !r.incomplete {
+            break;
+        }
+    }
+    assert_eq!(rebuilt.iter().sum::<usize>(), 4, "{rebuilt:?}");
+    assert!(rebuilt.len() >= 2, "{rebuilt:?}");
+    // The same facts fetched again later: nothing to rebuild.
+    now += HOUR;
+    h.store.add_cache_entry(entry(now));
+    h.now.store(now + 1, Ordering::SeqCst);
+    let r = materialise(s, "t1").await.unwrap();
+    assert_eq!(
+        (r.days_written, r.parts, r.incomplete),
+        (0, 0, false),
+        "{r:?}"
+    );
 }
 
 /// Each scheduled tick serves a bounded number of tenants and the next

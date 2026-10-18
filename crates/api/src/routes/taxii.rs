@@ -36,6 +36,7 @@ use axum::{Json, Router};
 use foiled_core::audit::Outcome;
 use foiled_core::auth::{Principal, Role, Scope};
 use foiled_core::confidence::{Band, ConfidenceConfig, LinkKind};
+use foiled_core::enrichment::CacheEntry;
 use foiled_core::intel::log::{
     Evidence, History, LogCursor, LogQuery, PUBLISHED, StixVersion, VersionFilter, parse_timestamp,
     plan, reissue_id, revocable, revocation, rewrite_ids,
@@ -214,7 +215,7 @@ async fn reissue_map(
 /// The signature input every day shares: a hash of the bundled rules,
 /// ATT&CK sidecar and catalogue, the confidence config and the
 /// materialiser version. When only this changes (a deploy), days are
-/// rebuilt at most [`CONFIG_REBUILDS_PER_RUN`] per run.
+/// rebuilt at most [`QUIET_REBUILDS_PER_RUN`] per run.
 fn config_digest(state: &AppState) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -225,8 +226,25 @@ fn config_digest(state: &AppState) -> String {
     hex::encode(h.finalize())
 }
 
-/// Days a run rebuilds only because the config digest changed.
-pub const CONFIG_REBUILDS_PER_RUN: usize = 1;
+/// Days a run rebuilds without new events in their window: only their
+/// other inputs (analyst decisions, campaigns, enrichment) or the config
+/// digest moved. An active campaign or a deploy can touch every day at
+/// once; those rebuilds are spread over runs, least recently served first.
+pub const QUIET_REBUILDS_PER_RUN: usize = 2;
+
+/// What a day's signature takes from one enrichment cache row: its key
+/// and the facts objects can carry, not when it was fetched, so a refresh
+/// that changes nothing rebuilds nothing. An expired row drops out of the
+/// lookup, so expiry still counts.
+pub fn cache_row_input(e: &CacheEntry) -> String {
+    let mut facts: Vec<String> = e
+        .facts
+        .iter()
+        .map(|f| format!("{}|{}|{}", f.provider, f.key, f.value))
+        .collect();
+    facts.sort();
+    format!("{}|{}", e.key(), facts.join(";"))
+}
 /// Attempts in one publishing chunk of a day's own objects.
 pub const ATTEMPT_CHUNK: usize = 200;
 
@@ -386,7 +404,9 @@ impl Run<'_> {
     async fn build(&mut self, days: &mut BTreeMap<i64, DayRecord>) -> Result<(), ApiError> {
         let today = self.now.div_euclid(DAY_MS) * DAY_MS;
         let config = config_digest(self.state);
-        let mut config_rebuilds = 0;
+        // Days whose events did not change, rebuilt at most
+        // QUIET_REBUILDS_PER_RUN per run.
+        let mut quiet: Vec<(i64, DayRecord)> = Vec::new();
         let mut todo: Vec<(i64, DayRecord)> = Vec::new();
         // The window's days, and any build still in progress (one that has
         // since left the window is finished, not abandoned).
@@ -415,8 +435,7 @@ impl Run<'_> {
                         .store
                         .stix_day_inputs(self.tenant_id, PUBLISHED, day, self.now)
                         .await?;
-                    let own = format!("{events}#{inputs}");
-                    let signature = format!("{own}#{config}");
+                    let signature = format!("{events}#{inputs}#{config}");
                     if rec.signature == signature {
                         self.r.days_skipped += 1;
                         continue;
@@ -424,22 +443,24 @@ impl Run<'_> {
                     if events.starts_with("0:") && !days.contains_key(&day) {
                         continue;
                     }
-                    // Only the config moved: spread those rebuilds out.
-                    if rec.signature.starts_with(&format!("{own}#")) {
-                        if config_rebuilds >= CONFIG_REBUILDS_PER_RUN {
-                            self.r.incomplete = true;
-                            continue;
-                        }
-                        config_rebuilds += 1;
-                    }
+                    let is_quiet = rec.signature.starts_with(&format!("{events}#"));
                     rec.progress = Some(DayProgress {
                         signature,
                         ..Default::default()
                     });
+                    if is_quiet {
+                        quiet.push((day, rec));
+                        continue;
+                    }
                 }
             }
             todo.push((day, rec));
         }
+        quiet.sort_by_key(|(day, rec)| (rec.served_ms, -day));
+        if quiet.len() > QUIET_REBUILDS_PER_RUN {
+            self.r.incomplete = true;
+        }
+        todo.extend(quiet.into_iter().take(QUIET_REBUILDS_PER_RUN));
         todo.sort_by_key(|(day, rec)| (rec.served_ms, -day));
         for (day, rec) in todo {
             let left = self.budget.parts.saturating_sub(self.r.parts);

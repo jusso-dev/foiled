@@ -2184,7 +2184,7 @@ impl Store for CfStore {
                 )
                 .await?
                 .iter()
-                .map(|e| format!("{}|{}|{}", e.key(), e.fetched_at, e.ttl_secs))
+                .map(crate::routes::taxii::cache_row_input)
                 .collect();
             rows.sort();
             use sha2::{Digest, Sha256};
