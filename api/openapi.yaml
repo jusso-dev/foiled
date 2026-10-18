@@ -1551,7 +1551,9 @@ paths:
       description: |
         `confirm` is the only way an actor link reaches `high`, the wording
         "confirmed association" and exports (#13); it needs a note saying
-        why. `reject` suppresses the link (score 0, never suggested or
+        why. It covers the subject's attempts at that moment only: later
+        members are listed in `new_since_confirmation`, are not exported as
+        confirmed, and send the link back to the review queue. `reject` suppresses the link (score 0, never suggested or
         exported). `reopen` returns it to pending. The latest decision per
         campaign or attempt and actor is stored and applies on every later
         read. Written to the audit log as `actor_link.<decision>` with the
