@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use foiled_core::actor::{
-    ActorCatalogue, ActorLink, ActorReport, AttackGroups, LinkStatus, SubjectInput, SubjectKind,
-    attach_suggestions, export_links, subjects, suggest, wording_problems,
+    ActorCatalogue, ActorDecision, ActorLink, ActorReport, AttackGroups, LinkStatus, SubjectInput,
+    SubjectKind, attach_suggestions, export_links, subjects, suggest, wording_problems,
 };
 use foiled_core::attack::{AttackRule, AttackSidecar};
 use foiled_core::attempt::{DEFAULT_IDLE_GAP_MS, ExtraSignals, StateSignal, build};
@@ -74,14 +74,31 @@ fn catalogue() -> ActorCatalogue {
 struct Fixture {
     links: Vec<ActorLink>,
     campaigns: Vec<foiled_core::campaign::Campaign>,
+    subjects: Vec<foiled_core::actor::Subject>,
 }
 
-fn run(decisions: &BTreeMap<(String, String), Override>) -> Fixture {
-    let raw: serde_json::Value = load("testdata/campaigns/fleet-wave.input.json");
-    let geo: serde_json::Value = load("testdata/actors/fleet-wave.input.json");
+type Decisions = BTreeMap<(String, String), ActorDecision>;
+
+fn run(decisions: &Decisions) -> Fixture {
+    run_input(
+        "testdata/campaigns/fleet-wave.input.json",
+        "testdata/actors/fleet-wave.input.json",
+        decisions,
+    )
+}
+
+/// Build attempts, IOCs, campaigns and actor links from `events_rel`
+/// (`events`, `now`, optional `asns`) with source countries from `geo_rel`.
+fn run_input(events_rel: &str, geo_rel: &str, decisions: &Decisions) -> Fixture {
+    let raw: serde_json::Value = load(events_rel);
+    let geo: serde_json::Value = load(geo_rel);
     let now = raw["now"].as_i64().unwrap();
     let events: Vec<CaptureEvent> = serde_json::from_value(raw["events"].clone()).unwrap();
-    let asns: BTreeMap<String, u32> = serde_json::from_value(raw["asns"].clone()).unwrap();
+    for e in &events {
+        assert!(e.problems(now).is_empty(), "{}", e.event_id);
+    }
+    let asns: BTreeMap<String, u32> =
+        serde_json::from_value(raw.get("asns").cloned().unwrap_or_default()).unwrap_or_default();
     let countries: BTreeMap<String, String> =
         serde_json::from_value(geo["countries"].clone()).unwrap();
     let rules = Rules {
@@ -126,30 +143,37 @@ fn run(decisions: &BTreeMap<(String, String), Override>) -> Fixture {
         tenant_id: "t1",
         campaigns: &clustering.campaigns,
         attempts: &attempts,
+        lone_attempts: true,
         signals: &signals,
         iocs: &iocs,
         asns: &asns,
         countries: &countries,
+        events: &events,
     });
-    assert_eq!(
-        subj.iter()
-            .filter(|s| s.kind == SubjectKind::Campaign)
-            .count(),
-        2
-    );
-    assert_eq!(
-        subj.iter()
-            .filter(|s| s.kind == SubjectKind::Attempt)
-            .count(),
-        1,
-        "the bystander probe"
-    );
     let links = suggest(&catalogue(), &cfg, &subj, decisions);
     attach_suggestions(&mut clustering.campaigns, &links);
     Fixture {
         links,
         campaigns: clustering.campaigns,
+        subjects: subj,
     }
+}
+
+fn confirm(l: &ActorLink, attempts: &[String]) -> Decisions {
+    BTreeMap::from([(
+        (l.subject_id.clone(), l.actor_id.clone()),
+        ActorDecision {
+            subject_id: l.subject_id.clone(),
+            actor_id: l.actor_id.clone(),
+            decision: Override {
+                feedback: Feedback::TruePositive,
+                analyst_id: "lead".into(),
+                at: 1,
+                note: "Callback address and loader match the advisory.".into(),
+            },
+            attempt_ids: attempts.to_vec(),
+        },
+    )])
 }
 
 fn check_golden(name: &str, links: &[ActorLink]) {
@@ -190,6 +214,21 @@ fn check_golden(name: &str, links: &[ActorLink]) {
 fn fleet_wave_gets_one_medium_possible_association_and_geo_only_gets_none() {
     let f = run(&BTreeMap::new());
     check_golden("fleet-wave", &f.links);
+    assert_eq!(
+        f.subjects
+            .iter()
+            .filter(|s| s.kind == SubjectKind::Campaign)
+            .count(),
+        2
+    );
+    assert_eq!(
+        f.subjects
+            .iter()
+            .filter(|s| s.kind == SubjectKind::Attempt)
+            .count(),
+        1,
+        "the bystander probe"
+    );
 
     // #29 validation: the stage-2 campaign shares techniques, a callback
     // domain and IP, targeting and an ASN with EXAMPLE-CLUSTER-01.
@@ -261,17 +300,7 @@ fn fleet_wave_gets_one_medium_possible_association_and_geo_only_gets_none() {
 fn analyst_confirmation_is_the_only_way_to_high_and_exports() {
     let base = run(&BTreeMap::new());
     let l = &base.links[0];
-    let mut d = BTreeMap::new();
-    d.insert(
-        (l.subject_id.clone(), l.actor_id.clone()),
-        Override {
-            feedback: Feedback::TruePositive,
-            analyst_id: "lead".into(),
-            at: 1,
-            note: "Callback host and loader match the advisory.".into(),
-        },
-    );
-    let f = run(&d);
+    let f = run(&confirm(l, &l.attempt_ids));
     let c = &f.links[0];
     assert_eq!(c.status, LinkStatus::Confirmed);
     assert_eq!(
@@ -286,6 +315,62 @@ fn analyst_confirmation_is_the_only_way_to_high_and_exports() {
         assert_eq!(links[0].wording, "confirmed association");
         assert_eq!(links[0].target, c.label);
     }
+
+    // Confirmed while the campaign had one member: the second one joined
+    // later, is not covered, never exports as confirmed and goes back to
+    // review.
+    let f = run(&confirm(l, &l.attempt_ids[..1]));
+    let c = &f.links[0];
+    assert_eq!(c.status, LinkStatus::Confirmed);
+    assert_eq!(c.confirmed_attempt_ids, l.attempt_ids[..1]);
+    assert_eq!(c.new_since_confirmation, l.attempt_ids[1..]);
+    assert!(c.review_queue);
+    let ex = export_links(&f.links);
+    assert_eq!(ex.keys().collect::<Vec<_>>(), [&l.attempt_ids[0]]);
+}
+
+#[test]
+fn a_callback_the_attacker_named_counts_as_sent_not_observed() {
+    // JNDI-style: the request names stage2.example.invalid, the decoy then
+    // looks it up and connects. EXAMPLE-CLUSTER-01 lists that domain.
+    let f = run_input(
+        "testdata/actors/jndi-callback.input.json",
+        "testdata/actors/jndi-callback.input.json",
+        &BTreeMap::new(),
+    );
+    let l = f
+        .links
+        .iter()
+        .find(|l| l.actor_id == "report:example-cluster-01")
+        .expect("a weak link to review");
+    assert_eq!(l.band, Band::Low, "{}", l.score);
+    assert!(!l.matched.indicators.is_empty());
+    assert!(
+        l.matched.indicators.iter().all(|i| !i.observed),
+        "{:#?}",
+        l.matched
+    );
+    assert!(
+        l.confidence
+            .evidence
+            .iter()
+            .all(|e| e.source != foiled_core::confidence::EvidenceSource::ActorIndicatorOverlap)
+    );
+    assert!(l.not_counted.iter().any(|n| n.contains("false flag")));
+    assert!(
+        l.matched.indicators.len() >= 2,
+        "the domain and the address reached"
+    );
+    // In the fleet wave the stage-2 host came from a download command in
+    // the post-exploit hook, so the domain and the address the decoy
+    // reached for it are sent too; the source address the attack came from
+    // is observed and carries the link to medium.
+    let fleet = run(&BTreeMap::new());
+    let ind = &fleet.links[0].matched.indicators;
+    let observed = |d: &str| ind.iter().find(|i| i.display == d).unwrap().observed;
+    assert!(!observed("stage2[.]example[.]invalid"));
+    assert!(!observed("192[.]0[.]2[.]80"));
+    assert!(observed("192[.]0[.]2[.]10"));
 }
 
 #[test]

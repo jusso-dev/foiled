@@ -1,5 +1,5 @@
 {
-  "description": "Actor possible-association over testdata/campaigns/fleet-wave.input.json (#29 validation) with the fictional reports in testdata/actors/reports/. Every source address is placed in user-assigned country XA, which both reports also name. The stage-2 campaign shares techniques, a callback domain and IP, targeting and an ASN with EXAMPLE-CLUSTER-01 and should get one medium possible association with report links. The payload-hash campaign and the bystander share only geography (and, for EXAMPLE-nexus, an ASN) and should get none.",
+  "description": "Actor possible-association over testdata/campaigns/fleet-wave.input.json (#29 validation) with the fictional reports in testdata/actors/reports/. Every source address is placed in user-assigned country XA, which both reports also name. The stage-2 campaign shares techniques, a source address, targeting and an ASN with EXAMPLE-CLUSTER-01, plus a callback domain and address that the attacker's own download command named (so they count as sent, not observed), and should get one medium possible association with report links. The payload-hash campaign and the bystander share only geography (and, for EXAMPLE-nexus, an ASN) and should get none.",
   "campaigns": "fleet-wave",
   "countries": {
     "192.0.2.10": "XA",

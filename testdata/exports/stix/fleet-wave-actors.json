@@ -1,5 +1,5 @@
 {
-  "id": "bundle--0f427b3e-bf6d-515c-82c0-8c7ce9a9eb2d",
+  "id": "bundle--f72a9a85-2fdb-5515-9a29-32e4238fb54e",
   "objects": [
     {
       "created": "2026-01-01T00:00:00.000Z",
@@ -677,12 +677,16 @@
           "source": "actor_ttp_overlap"
         },
         {
-          "points": 31,
+          "points": 21,
           "source": "actor_indicator_overlap"
         },
         {
           "points": 10,
           "source": "actor_targeting"
+        },
+        {
+          "points": 10,
+          "source": "actor_payload_overlap"
         }
       ],
       "x_foiled_link_kind": "attempt_actor",
@@ -802,12 +806,16 @@
           "source": "actor_ttp_overlap"
         },
         {
-          "points": 31,
+          "points": 21,
           "source": "actor_indicator_overlap"
         },
         {
           "points": 10,
           "source": "actor_targeting"
+        },
+        {
+          "points": 10,
+          "source": "actor_payload_overlap"
         }
       ],
       "x_foiled_link_kind": "attempt_actor",

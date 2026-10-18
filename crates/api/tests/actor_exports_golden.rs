@@ -17,8 +17,8 @@ use foiled_api::catalogue::Catalogue;
 use foiled_api::links::{attack_rules, attack_sidecar, cve_rules, matcher_signals};
 use foiled_api::routes::exports::{OverrideIndex, WindowLinks, export_input};
 use foiled_core::actor::{
-    ActorCatalogue, ActorLink, ActorReport, AttackGroups, LinkStatus, SubjectInput, export_links,
-    subjects, suggest,
+    ActorCatalogue, ActorDecision, ActorLink, ActorReport, AttackGroups, LinkStatus, SubjectInput,
+    export_links, subjects, suggest,
 };
 use foiled_core::attempt::{DEFAULT_IDLE_GAP_MS, build};
 use foiled_core::campaign::{Input, Params, Registry, attach, attempt_signals, cluster};
@@ -93,25 +93,33 @@ fn selection(confirm: &[&str], opts: &ExportOptions) -> (Selection, Vec<ActorLin
         chain.feature_summary.ttp.techniques.push(t.into());
     }
     let chain_id = chain.campaign_id.clone();
+    let chain_members = chain.attempt_ids.clone();
     let subj = subjects(&SubjectInput {
         tenant_id: "t1",
         campaigns: &clustering.campaigns,
         attempts: &attempts,
+        lone_attempts: true,
         signals: &signals,
         iocs: &x,
         asns: &asns,
         countries: &BTreeMap::new(),
+        events: &events,
     });
     let decisions = confirm
         .iter()
         .map(|a| {
             (
                 (chain_id.clone(), a.to_string()),
-                Override {
-                    feedback: Feedback::TruePositive,
-                    analyst_id: "lead".into(),
-                    at: now,
-                    note: "Reviewed against the cited sources.".into(),
+                ActorDecision {
+                    subject_id: chain_id.clone(),
+                    actor_id: a.to_string(),
+                    decision: Override {
+                        feedback: Feedback::TruePositive,
+                        analyst_id: "lead".into(),
+                        at: now,
+                        note: "Reviewed against the cited sources.".into(),
+                    },
+                    attempt_ids: chain_members.clone(),
                 },
             )
         })

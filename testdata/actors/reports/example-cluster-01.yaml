@@ -28,6 +28,7 @@ techniques: [T1190, T1059.004, T1105]
 indicators:
   - { type: domain, value: stage2.example.invalid }
   - { type: ip, value: 192.0.2.80, source: 1 }
+  - { type: ip, value: 192.0.2.10, source: 1 }
   - { type: cidr, value: 203.0.113.128/25 }
   - { type: sha256, value: 965d7fd31d6ff8eabb9813b058ea3420e100fe252a30e17d4fdc81f541ce2f08 }
 targeting:
