@@ -193,6 +193,30 @@ pub const BINDINGS: &[Binding] = &[
         data_dir: "testdata/mcp/results",
         schema: "schemas/mcp-tool-result.schema.json",
     },
+    Binding {
+        data_dir: "testdata/radar/points",
+        schema: "schemas/radar-point.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/radar/expected",
+        schema: "schemas/radar-feed.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/review/expected",
+        schema: "schemas/review-item.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/write-ups/examples",
+        schema: "schemas/write-up.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/public/pages",
+        schema: "schemas/public-exploit-page.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/public/lists",
+        schema: "schemas/public-exploit-list.schema.json",
+    },
 ];
 
 /// Directories never scanned for schema files.

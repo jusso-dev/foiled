@@ -57,7 +57,109 @@ async fn fetch(
     state.uploads = upload_config(&env);
     state.job_signer = job_signer(&env).map(Arc::new);
     state.cert_issuer = cloudflare_issuer(&env).map(|i| Arc::new(i) as Arc<dyn CertIssuer>);
+    if let Ok(radar) = env.analytics_engine("RADAR") {
+        state.radar_sink = Arc::new(AnalyticsSink(radar));
+    }
+    state.publisher_tenants = Arc::new(tenant_list(&env, "PUBLISHER_TENANTS"));
+    state.research_tenants = Arc::new(tenant_list(&env, "RESEARCH_TENANTS"));
+    if let Some(p) = zone_purger(&env) {
+        state.cache_purger = Arc::new(p);
+    }
     Ok(router(state).call(req).await?)
+}
+
+/// A comma separated tenant list var: `PUBLISHER_TENANTS` (may publish
+/// public pages) or `RESEARCH_TENANTS` (decoys count as research sensors),
+/// #35. Unset means none.
+fn tenant_list(env: &Env, name: &str) -> Vec<String> {
+    env.var(name)
+        .map(|v| {
+            v.to_string()
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Purges public page URLs with the zone purge API (#35). Needs the var
+/// `PUBLIC_SITE_ORIGIN` (`https://...`), the var `PUBLIC_ZONE_ID` and the
+/// secret `CF_CACHE_PURGE_API_TOKEN` (Zone, Cache Purge only).
+struct ZonePurger {
+    origin: String,
+    zone_id: String,
+    api_token: String,
+}
+
+fn zone_purger(env: &Env) -> Option<ZonePurger> {
+    let origin = env.var("PUBLIC_SITE_ORIGIN").ok()?.to_string();
+    if !origin.starts_with("https://") {
+        return None;
+    }
+    Some(ZonePurger {
+        origin: origin.trim_end_matches('/').to_string(),
+        zone_id: env.var("PUBLIC_ZONE_ID").ok()?.to_string(),
+        api_token: env.secret("CF_CACHE_PURGE_API_TOKEN").ok()?.to_string(),
+    })
+}
+
+impl crate::sinks::CachePurger for ZonePurger {
+    fn purge(&self, paths: Vec<String>) -> crate::sinks::PurgeFuture<'_> {
+        Box::pin(SendFuture::new(async move {
+            let files: Vec<String> = paths
+                .iter()
+                .map(|p| format!("{}{p}", self.origin))
+                .collect();
+            let body = serde_json::json!({ "files": files }).to_string();
+            let we = |e: worker::Error| e.to_string();
+            let headers = worker::Headers::new();
+            headers
+                .set("authorization", &format!("Bearer {}", self.api_token))
+                .map_err(we)?;
+            headers
+                .set("content-type", "application/json")
+                .map_err(we)?;
+            let mut init = worker::RequestInit::new();
+            init.with_method(worker::Method::Post)
+                .with_headers(headers)
+                .with_body(Some(JsValue::from_str(&body)));
+            let url = format!(
+                "https://api.cloudflare.com/client/v4/zones/{}/purge_cache",
+                self.zone_id
+            );
+            let req = worker::Request::new_with_init(&url, &init).map_err(we)?;
+            let res = worker::Fetch::Request(req).send().await.map_err(we)?;
+            let status = res.status_code();
+            if (200..300).contains(&status) {
+                Ok(())
+            } else {
+                Err(format!("cache purge failed ({status})"))
+            }
+        }))
+    }
+}
+
+/// Radar rollups to the `RADAR` Analytics Engine dataset (#35).
+struct AnalyticsSink(worker::AnalyticsEngineDataset);
+
+impl crate::sinks::RadarSink for AnalyticsSink {
+    fn write(&self, points: &[foiled_core::radar::AnalyticsPoint]) -> Result<(), String> {
+        for p in points {
+            let mut b = AnalyticsEngineDataPointBuilder::new().indexes([p.index.as_str()]);
+            for blob in &p.blobs {
+                b = b.add_blob(blob.as_str());
+            }
+            for d in &p.doubles {
+                b = b.add_double(*d);
+            }
+            self.0
+                .write_data_point(&b.build())
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
 }
 
 fn now_ms() -> i64 {
@@ -1793,6 +1895,199 @@ impl Store for CfStore {
             };
             let client = self.pg().await?;
             foiled_pg::put_actor_decision(&client, &t, &row)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn review_states(
+        &self,
+        tenant_id: &str,
+        item_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<foiled_core::review::ReviewState>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::review_states(&client, &t, &item_ids)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn put_review_state(
+        &self,
+        tenant_id: &str,
+        state: foiled_core::review::ReviewState,
+        expected: u32,
+    ) -> StoreFuture<'_, bool> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::put_review_state(&client, &t, &state, expected)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn insert_writeup(
+        &self,
+        w: foiled_core::writeup::WriteUp,
+        actor_id: &str,
+    ) -> StoreFuture<'_, ()> {
+        let actor = actor_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::insert_writeup(&client, &w, &actor)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn get_writeup(
+        &self,
+        tenant_id: &str,
+        writeup_id: &str,
+    ) -> StoreFuture<'_, Option<foiled_core::writeup::WriteUp>> {
+        let (t, id) = (tenant_id.to_string(), writeup_id.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::get_writeup(&client, &t, &id).await.map_err(err)
+        })
+    }
+
+    fn list_writeups(
+        &self,
+        tenant_id: &str,
+        status: Option<foiled_core::writeup::WriteUpStatus>,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<foiled_core::writeup::WriteUp>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::list_writeups(&client, &t, status.map(|s| s.as_str()), limit as i64)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn update_writeup(
+        &self,
+        w: foiled_core::writeup::WriteUp,
+        expected: u32,
+        action: &str,
+        actor_id: &str,
+    ) -> StoreFuture<'_, bool> {
+        let (action, actor) = (action.to_string(), actor_id.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::update_writeup(&client, &w, expected, &action, &actor)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn writeup_versions(
+        &self,
+        tenant_id: &str,
+        writeup_id: &str,
+    ) -> StoreFuture<'_, Vec<crate::store::WriteUpVersion>> {
+        let (t, id) = (tenant_id.to_string(), writeup_id.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            let rows = foiled_pg::writeup_versions(&client, &t, &id)
+                .await
+                .map_err(err)?;
+            Ok(rows
+                .into_iter()
+                .map(|r| crate::store::WriteUpVersion {
+                    writeup: r.writeup,
+                    action: r.action,
+                    actor_id: r.actor_id,
+                    at: r.at,
+                })
+                .collect())
+        })
+    }
+
+    fn put_public_page(
+        &self,
+        tenant_id: &str,
+        writeup_id: &str,
+        page: foiled_core::writeup::PublicPage,
+    ) -> StoreFuture<'_, bool> {
+        let (t, id) = (tenant_id.to_string(), writeup_id.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::put_public_page(&client, &t, &id, &page)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn remove_public_page(&self, tenant_id: &str, writeup_id: &str) -> StoreFuture<'_, ()> {
+        let (t, id) = (tenant_id.to_string(), writeup_id.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::remove_public_page(&client, &t, &id)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn public_page(
+        &self,
+        slug: &str,
+        now: i64,
+    ) -> StoreFuture<'_, Option<foiled_core::writeup::PublicPage>> {
+        let slug = slug.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::public_page(&client, &slug, now)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn public_pages(
+        &self,
+        now: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<foiled_core::writeup::PublicPageSummary>> {
+        wrap(async move {
+            let client = self.pg().await?;
+            let pages = foiled_pg::public_pages(&client, now, limit as i64)
+                .await
+                .map_err(err)?;
+            Ok(pages.iter().map(|p| p.summary_row()).collect())
+        })
+    }
+
+    fn put_radar_points(
+        &self,
+        tenant_id: &str,
+        day: i64,
+        points: Vec<foiled_core::radar::RadarPoint>,
+    ) -> StoreFuture<'_, ()> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::put_radar_points(&client, &t, day, &points)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn radar_points(
+        &self,
+        tenant_id: Option<&str>,
+        since: i64,
+        until: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<foiled_core::radar::RadarPoint>> {
+        let t = tenant_id.map(str::to_string);
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::radar_points(&client, t.as_deref(), since, until, limit as i64)
                 .await
                 .map_err(err)
         })

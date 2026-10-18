@@ -60,6 +60,8 @@ pub enum Channel {
     Sentrypeer,
     /// Delayed public IOCs on exploit pages and datasets (#35).
     PublicIocs,
+    /// Aggregated radar counts across tenants on the fleet radar (#35).
+    Radar,
 }
 
 /// `on` or `off`. Also accepts a YAML boolean, because YAML 1.1 parsers read a
@@ -220,6 +222,43 @@ pub struct PublicIocsPolicy {
     pub tlp: Tlp,
 }
 
+/// Radar settings (#35): which sensors may feed the fleet radar and the
+/// minimum counts before a bucket is shown. The radar is trusted-side only.
+/// See `docs/radar.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RadarPolicy {
+    pub enabled: bool,
+    /// Sensor kinds whose data may be counted. Each sensor must also be
+    /// opted in, so an edge sensor counts only after its owner opts in.
+    pub sensor_kinds: Vec<SensorKind>,
+    /// A bucket (one key on one day) is shown only with at least this many
+    /// distinct sources. At least 2.
+    pub min_sources: u32,
+    /// And at least this many distinct sensors.
+    pub min_sensors: u32,
+    /// Edge sensor data counts in a bucket only when at least this many
+    /// distinct tenants contribute edge data to it. At least 2. A tenant's
+    /// own decoys count as edge data unless the operator designated the
+    /// tenant as research.
+    pub min_edge_tenants: u32,
+    /// Lowest confidence band (#27) counted. Links must also be publishable.
+    pub min_confidence: Band,
+}
+
+impl Default for RadarPolicy {
+    fn default() -> Self {
+        RadarPolicy {
+            enabled: true,
+            sensor_kinds: vec![SensorKind::Research, SensorKind::Edge],
+            min_sources: 3,
+            min_sensors: 1,
+            min_edge_tenants: 3,
+            min_confidence: Band::Medium,
+        }
+    }
+}
+
 /// The whole of `configs/contribute-back.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -232,6 +271,9 @@ pub struct SharePolicy {
     pub edge_sensors_default: Toggle,
     pub channels: Channels,
     pub public_iocs: PublicIocsPolicy,
+    /// Absent in older files; the defaults apply.
+    #[serde(default)]
+    pub radar: RadarPolicy,
 }
 
 impl Default for SharePolicy {
@@ -263,6 +305,7 @@ impl Default for SharePolicy {
                 min_confidence: Band::High,
                 tlp: Tlp::Clear,
             },
+            radar: RadarPolicy::default(),
         }
     }
 }
@@ -291,6 +334,7 @@ impl SharePolicy {
                 &self.channels.sentrypeer.sensor_kinds,
             ),
             Channel::PublicIocs => (self.public_iocs.enabled, &self.public_iocs.sensor_kinds),
+            Channel::Radar => (self.radar.enabled, &self.radar.sensor_kinds),
         }
     }
 
@@ -309,6 +353,15 @@ impl SharePolicy {
                 "edge_sensors_default must be off: customer sensor data is shared only after an explicit opt-in"
                     .to_string(),
             );
+        }
+        if self.radar.min_sources < 2 {
+            out.push("radar.min_sources must be at least 2".to_string());
+        }
+        if self.radar.min_edge_tenants < 2 {
+            out.push("radar.min_edge_tenants must be at least 2".to_string());
+        }
+        if self.radar.min_sensors < 1 {
+            out.push("radar.min_sensors must be at least 1".to_string());
         }
         if !is_env_var_name(&self.channels.dshield.contact_email_env) {
             out.push(format!(
@@ -438,11 +491,12 @@ mod tests {
         SharePolicy::default()
     }
 
-    const ALL: [Channel; 4] = [
+    const ALL: [Channel; 5] = [
         Channel::Dshield,
         Channel::Crowdsec,
         Channel::Sentrypeer,
         Channel::PublicIocs,
+        Channel::Radar,
     ];
 
     #[test]
@@ -687,6 +741,28 @@ mod tests {
         let text = serde_json::to_string(&p).unwrap();
         let back: SharePolicy = serde_json::from_str(&text).unwrap();
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn radar_counts_research_and_opted_in_edge_only() {
+        let p = policy();
+        assert!(may_share(&p, SensorKind::Research, true, Channel::Radar));
+        assert!(!may_share(
+            &p,
+            SensorKind::Edge,
+            p.default_opt_in(SensorKind::Edge),
+            Channel::Radar
+        ));
+        assert!(may_share(&p, SensorKind::Edge, true, Channel::Radar));
+        let mut weak = policy();
+        weak.radar.min_sources = 1;
+        weak.radar.min_edge_tenants = 1;
+        assert_eq!(weak.problems().len(), 2, "{:?}", weak.problems());
+        // Older files without a radar section still load, with defaults.
+        let mut v = serde_json::to_value(policy()).unwrap();
+        v.as_object_mut().unwrap().remove("radar");
+        let back: SharePolicy = serde_json::from_value(v).unwrap();
+        assert_eq!(back.radar, RadarPolicy::default());
     }
 
     #[test]

@@ -1,0 +1,26 @@
+{
+  "age_ms": 18000000,
+  "assignee": null,
+  "band": "medium",
+  "claimed_at": null,
+  "created_at": 1792288923000,
+  "decided_at": null,
+  "decided_by": null,
+  "item_id": "rq_ed84f89e8e2ba21df04d2096",
+  "kind": "campaign_label",
+  "note": "",
+  "priority": 259,
+  "score": 53,
+  "sla_breached": false,
+  "sla_due_at": 1792548123000,
+  "sla_hours": 72,
+  "snoozed_until": null,
+  "status": "open",
+  "subject": {
+    "campaign_id": "cmp_b61ebed681d410ce4b3d19fb"
+  },
+  "tenant_id": "t1",
+  "title": "Possible campaign: Stage-2 URL hxxp://stage2[.]example[.]invalid/m.sh on 2 decoys",
+  "version": 0,
+  "wording": "possible"
+}

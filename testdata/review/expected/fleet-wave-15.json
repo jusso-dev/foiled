@@ -1,0 +1,26 @@
+{
+  "age_ms": 21600000,
+  "assignee": null,
+  "band": "medium",
+  "claimed_at": null,
+  "created_at": 1792285323000,
+  "decided_at": null,
+  "decided_by": null,
+  "item_id": "rq_e6e61c6158f3ea125659d8bb",
+  "kind": "campaign_label",
+  "note": "",
+  "priority": 256,
+  "score": 48,
+  "sla_breached": false,
+  "sla_due_at": 1792544523000,
+  "sla_hours": 72,
+  "snoozed_until": null,
+  "status": "open",
+  "subject": {
+    "campaign_id": "cmp_2eb2760245d4b65e168cb56f"
+  },
+  "tenant_id": "t1",
+  "title": "Possible campaign: Payload hash 5e884898da28047151d0e56f8dc6292773603d0d... on 3 decoys",
+  "version": 0,
+  "wording": "possible"
+}

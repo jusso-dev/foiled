@@ -1,0 +1,26 @@
+{
+  "age_ms": 18000000,
+  "assignee": null,
+  "band": "high",
+  "claimed_at": null,
+  "created_at": 1792288923000,
+  "decided_at": null,
+  "decided_by": null,
+  "item_id": "rq_05ba261c683c3d5f6d4ba7c3",
+  "kind": "ioc_publication",
+  "note": "",
+  "priority": 308,
+  "score": 98,
+  "sla_breached": false,
+  "sla_due_at": 1792461723000,
+  "sla_hours": 48,
+  "snoozed_until": null,
+  "status": "open",
+  "subject": {
+    "ioc_id": "ioc_c2a20db8e7502bf8de80669e"
+  },
+  "tenant_id": "t1",
+  "title": "Release payload_sha256 indicator 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 after the public delay",
+  "version": 0,
+  "wording": "we assess as"
+}

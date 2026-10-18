@@ -1,0 +1,62 @@
+[
+  {
+    "rule": "assessed-wording",
+    "severity": "error",
+    "location": "title",
+    "message": "CVE-2099-0002 is not confirmed by an analyst: say \"we assess as\" in the same paragraph"
+  },
+  {
+    "rule": "confirmed-without-analyst",
+    "severity": "error",
+    "location": "title",
+    "message": "\"confirmed\" is only for a CVE or technique an analyst confirmed, named in the same paragraph"
+  },
+  {
+    "rule": "actor-wording",
+    "severity": "error",
+    "location": "summary",
+    "message": "actor links are a \"possible association\" and must say so in the same paragraph"
+  },
+  {
+    "rule": "tenant-data",
+    "severity": "error",
+    "location": "summary",
+    "message": "contains a tenant id: remove all tenant data"
+  },
+  {
+    "rule": "ip-address",
+    "severity": "error",
+    "location": "summary",
+    "message": "contains an IP address outside the documentation ranges: indicators are released through the delayed IOC list, not the body"
+  },
+  {
+    "rule": "assessed-wording",
+    "severity": "error",
+    "location": "body block 1",
+    "message": "CVE-2099-0002 is not confirmed by an analyst: say \"we assess as\" in the same paragraph"
+  },
+  {
+    "rule": "tenant-data",
+    "severity": "error",
+    "location": "body block 1",
+    "message": "contains an internal id or tenant field: remove it"
+  },
+  {
+    "rule": "personal-information",
+    "severity": "error",
+    "location": "body block 1",
+    "message": "contains an email address: remove personal information"
+  },
+  {
+    "rule": "placeholder",
+    "severity": "error",
+    "location": "body block 1",
+    "message": "contains a placeholder (TODO, TBD, lorem and similar)"
+  },
+  {
+    "rule": "sources",
+    "severity": "error",
+    "location": "body",
+    "message": "link at least one public source (advisory, NVD, vendor) for the CVEs"
+  }
+]

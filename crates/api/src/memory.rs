@@ -11,10 +11,15 @@ use foiled_core::enrich_pipeline::{EnrichPurgeCounts, EnrichPurgePlan, ProviderF
 use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
 
+use foiled_core::radar::{AnalyticsPoint, RadarPoint};
+use foiled_core::review::ReviewState;
+use foiled_core::writeup::{PublicPage, PublicPageSummary, WriteUp, WriteUpStatus};
+
+use crate::sinks::RadarSink;
 use crate::store::{
     AgentCerts, AgentQuery, AuditQuery, BudgetOutcome, DecoyQuery, EnrolmentTokenRecord,
     IdentityRecord, IpIocRow, JobRecord, LinkOverride, NewCert, Store, StoreError, StoreFuture,
-    TokenRecord,
+    TokenRecord, WriteUpVersion,
 };
 
 #[derive(Default)]
@@ -33,6 +38,12 @@ struct Inner {
     actor_decisions: Vec<(String, foiled_core::actor::ActorDecision)>,
     /// Audit appends with this action fail, to test storage outages.
     fail_audit_action: Option<String>,
+    /// Write-up updates with this action lose their version check (tests).
+    fail_writeup_action: Option<String>,
+    /// Public page removals fail (tests).
+    fail_page_removal: bool,
+    /// Review state writes that roll a decision back fail (tests).
+    fail_review_rollback: bool,
     cache: Vec<CacheEntry>,
     fail_enrichment: bool,
     budget: HashMap<(String, &'static str, i64), u32>,
@@ -41,6 +52,12 @@ struct Inner {
     enrolment_tokens: Vec<EnrolmentTokenRecord>,
     /// CA reference for each bound certificate, by fingerprint.
     issuer_refs: HashMap<String, String>,
+    review_states: HashMap<(String, String), ReviewState>,
+    writeups: Vec<WriteUp>,
+    writeup_versions: Vec<(String, WriteUpVersion)>,
+    /// Tenant, write-up id and page.
+    public_pages: Vec<(String, String, PublicPage)>,
+    radar: Vec<RadarPoint>,
 }
 
 #[derive(Default)]
@@ -68,6 +85,32 @@ impl MemoryStore {
 
     pub fn jobs(&self) -> Vec<JobRecord> {
         self.lock().jobs.clone()
+    }
+
+    /// Make every later write-up update recorded as `action` lose its
+    /// version check, as a concurrent writer would (tests only).
+    pub fn fail_writeup_update_for(&self, action: &str) {
+        self.lock().fail_writeup_action = Some(action.to_string());
+    }
+
+    /// Make review state rollbacks (a `needs_attention` item written back
+    /// to an undecided state) fail (tests only).
+    pub fn fail_review_rollback(&self, fail: bool) {
+        self.lock().fail_review_rollback = fail;
+    }
+
+    /// Campaign actions stored for a tenant (tests).
+    pub fn campaign_action_count(&self, tenant_id: &str) -> usize {
+        self.lock()
+            .campaign_actions
+            .iter()
+            .filter(|(t, _)| t == tenant_id)
+            .count()
+    }
+
+    /// Make public page removals fail, or work again (tests only).
+    pub fn fail_page_removal(&self, fail: bool) {
+        self.lock().fail_page_removal = fail;
     }
 
     /// Make every later audit append with `action` fail (tests only).
@@ -145,6 +188,21 @@ impl MemoryStore {
             .get(tenant_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Put a stored write-up straight into place (tests: to set up states
+    /// the API would refuse, such as a draft holding a public page).
+    pub fn force_writeup(&self, w: WriteUp) {
+        let mut g = self.lock();
+        g.writeups.retain(|x| x.writeup_id != w.writeup_id);
+        g.writeups.push(w);
+    }
+
+    /// Store a public page directly (tests).
+    pub fn force_public_page(&self, tenant_id: &str, writeup_id: &str, page: PublicPage) {
+        self.lock()
+            .public_pages
+            .push((tenant_id.into(), writeup_id.into(), page));
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -787,6 +845,250 @@ impl Store for MemoryStore {
         ready(Ok(()))
     }
 
+    fn link_overrides_many(
+        &self,
+        tenant_id: &str,
+        attempt_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<LinkOverride>> {
+        let wanted: std::collections::HashSet<String> = attempt_ids.into_iter().collect();
+        let out = self
+            .lock()
+            .overrides
+            .iter()
+            .filter(|(t, o)| t == tenant_id && wanted.contains(&o.attempt_id))
+            .map(|(_, o)| o.clone())
+            .collect();
+        ready(Ok(out))
+    }
+
+    fn review_states(
+        &self,
+        tenant_id: &str,
+        item_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<ReviewState>> {
+        let g = self.lock();
+        let out = item_ids
+            .into_iter()
+            .filter_map(|i| g.review_states.get(&(tenant_id.to_string(), i)).cloned())
+            .collect();
+        ready(Ok(out))
+    }
+
+    fn put_review_state(
+        &self,
+        tenant_id: &str,
+        state: ReviewState,
+        expected: u32,
+    ) -> StoreFuture<'_, bool> {
+        let mut g = self.lock();
+        let key = (tenant_id.to_string(), state.item_id.clone());
+        if g.fail_review_rollback
+            && !state.status.decided()
+            && g.review_states
+                .get(&key)
+                .is_some_and(|s| s.status == foiled_core::review::ReviewStatus::NeedsAttention)
+        {
+            return ready(Err(StoreError("review state unavailable".into())));
+        }
+        let current = g.review_states.get(&key).map_or(0, |s| s.version);
+        if current != expected {
+            return ready(Ok(false));
+        }
+        g.review_states.insert(key, state);
+        ready(Ok(true))
+    }
+
+    fn insert_writeup(&self, w: WriteUp, actor_id: &str) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        if g.writeups.iter().any(|x| x.writeup_id == w.writeup_id) {
+            return ready(Err(StoreError("duplicate write-up".into())));
+        }
+        g.writeup_versions.push((
+            w.tenant_id.clone(),
+            WriteUpVersion {
+                writeup: w.clone(),
+                action: "create".into(),
+                actor_id: actor_id.into(),
+                at: w.updated_at,
+            },
+        ));
+        g.writeups.push(w);
+        ready(Ok(()))
+    }
+
+    fn get_writeup(&self, tenant_id: &str, writeup_id: &str) -> StoreFuture<'_, Option<WriteUp>> {
+        let found = self
+            .lock()
+            .writeups
+            .iter()
+            .find(|w| w.tenant_id == tenant_id && w.writeup_id == writeup_id)
+            .cloned();
+        ready(Ok(found))
+    }
+
+    fn list_writeups(
+        &self,
+        tenant_id: &str,
+        status: Option<WriteUpStatus>,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<WriteUp>> {
+        let mut out: Vec<WriteUp> = self
+            .lock()
+            .writeups
+            .iter()
+            .filter(|w| w.tenant_id == tenant_id && status.is_none_or(|s| w.status == s))
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| (b.updated_at, &b.writeup_id).cmp(&(a.updated_at, &a.writeup_id)));
+        out.truncate(limit);
+        ready(Ok(out))
+    }
+
+    fn update_writeup(
+        &self,
+        w: WriteUp,
+        expected: u32,
+        action: &str,
+        actor_id: &str,
+    ) -> StoreFuture<'_, bool> {
+        let mut g = self.lock();
+        if g.fail_writeup_action.as_deref() == Some(action) {
+            return ready(Ok(false));
+        }
+        let Some(pos) = g
+            .writeups
+            .iter()
+            .position(|x| x.tenant_id == w.tenant_id && x.writeup_id == w.writeup_id)
+        else {
+            return ready(Ok(false));
+        };
+        if g.writeups[pos].version != expected {
+            return ready(Ok(false));
+        }
+        g.writeup_versions.push((
+            w.tenant_id.clone(),
+            WriteUpVersion {
+                writeup: w.clone(),
+                action: action.into(),
+                actor_id: actor_id.into(),
+                at: w.updated_at,
+            },
+        ));
+        g.writeups[pos] = w;
+        ready(Ok(true))
+    }
+
+    fn writeup_versions(
+        &self,
+        tenant_id: &str,
+        writeup_id: &str,
+    ) -> StoreFuture<'_, Vec<WriteUpVersion>> {
+        let out = self
+            .lock()
+            .writeup_versions
+            .iter()
+            .filter(|(t, v)| t == tenant_id && v.writeup.writeup_id == writeup_id)
+            .map(|(_, v)| v.clone())
+            .collect();
+        ready(Ok(out))
+    }
+
+    fn put_public_page(
+        &self,
+        tenant_id: &str,
+        writeup_id: &str,
+        page: PublicPage,
+    ) -> StoreFuture<'_, bool> {
+        let mut g = self.lock();
+        if g.public_pages
+            .iter()
+            .any(|(_, w, p)| p.slug == page.slug && w != writeup_id)
+        {
+            return ready(Ok(false));
+        }
+        // Written by version: an older snapshot never replaces a newer one.
+        if g.public_pages
+            .iter()
+            .any(|(t, w, p)| t == tenant_id && w == writeup_id && p.version > page.version)
+        {
+            return ready(Ok(true));
+        }
+        g.public_pages
+            .retain(|(t, w, _)| !(t == tenant_id && w == writeup_id));
+        g.public_pages
+            .push((tenant_id.into(), writeup_id.into(), page));
+        ready(Ok(true))
+    }
+
+    fn remove_public_page(&self, tenant_id: &str, writeup_id: &str) -> StoreFuture<'_, ()> {
+        if self.lock().fail_page_removal {
+            return ready(Err(StoreError("page store unavailable".into())));
+        }
+        self.lock()
+            .public_pages
+            .retain(|(t, w, _)| !(t == tenant_id && w == writeup_id));
+        ready(Ok(()))
+    }
+
+    fn public_page(&self, slug: &str, now: i64) -> StoreFuture<'_, Option<PublicPage>> {
+        let found = self
+            .lock()
+            .public_pages
+            .iter()
+            .find(|(_, _, p)| p.slug == slug && p.visible_from <= now)
+            .map(|(_, _, p)| p.clone());
+        ready(Ok(found))
+    }
+
+    fn public_pages(&self, now: i64, limit: usize) -> StoreFuture<'_, Vec<PublicPageSummary>> {
+        let mut out: Vec<PublicPageSummary> = self
+            .lock()
+            .public_pages
+            .iter()
+            .filter(|(_, _, p)| p.visible_from <= now)
+            .map(|(_, _, p)| p.summary_row())
+            .collect();
+        out.sort_by(|a, b| (b.visible_from, &b.slug).cmp(&(a.visible_from, &a.slug)));
+        out.truncate(limit);
+        ready(Ok(out))
+    }
+
+    fn put_radar_points(
+        &self,
+        tenant_id: &str,
+        day: i64,
+        points: Vec<RadarPoint>,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        g.radar
+            .retain(|p| !(p.tenant_id == tenant_id && p.day == day));
+        g.radar.extend(
+            points
+                .into_iter()
+                .filter(|p| p.tenant_id == tenant_id && p.day == day),
+        );
+        ready(Ok(()))
+    }
+
+    fn radar_points(
+        &self,
+        tenant_id: Option<&str>,
+        since: i64,
+        until: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<RadarPoint>> {
+        let mut out: Vec<RadarPoint> = self
+            .lock()
+            .radar
+            .iter()
+            .filter(|p| tenant_id.is_none_or(|t| p.tenant_id == t))
+            .filter(|p| p.day >= since && p.day < until)
+            .cloned()
+            .collect();
+        out.truncate(limit);
+        ready(Ok(out))
+    }
+
     fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()> {
         let mut g = self.lock();
         g.overrides.retain(|(t, x)| {
@@ -1044,5 +1346,54 @@ impl Store for MemoryStore {
             }
         }
         ready(Ok(()))
+    }
+}
+
+/// Radar sink that keeps every point, for tests (#35). The Worker writes to
+/// Analytics Engine instead.
+#[derive(Default)]
+pub struct MemoryRadarSink {
+    points: Mutex<Vec<AnalyticsPoint>>,
+}
+
+impl MemoryRadarSink {
+    pub fn points(&self) -> Vec<AnalyticsPoint> {
+        self.points
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+}
+
+impl RadarSink for MemoryRadarSink {
+    fn write(&self, points: &[AnalyticsPoint]) -> Result<(), String> {
+        self.points
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend_from_slice(points);
+        Ok(())
+    }
+}
+
+/// Cache purger that records every purge, for tests (#35).
+#[derive(Default)]
+pub struct MemoryCachePurger {
+    paths: Mutex<Vec<Vec<String>>>,
+}
+
+impl MemoryCachePurger {
+    /// Every purge call, in order.
+    pub fn purges(&self) -> Vec<Vec<String>> {
+        self.paths.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+impl crate::sinks::CachePurger for MemoryCachePurger {
+    fn purge(&self, paths: Vec<String>) -> crate::sinks::PurgeFuture<'_> {
+        self.paths
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(paths);
+        Box::pin(std::future::ready(Ok(())))
     }
 }

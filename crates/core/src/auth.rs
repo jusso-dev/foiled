@@ -69,6 +69,7 @@ scopes! {
     IocsRead => "iocs:read",
     ReviewRead => "review:read",
     ReviewWrite => "review:write",
+    ReviewPublish => "review:publish",
     SensorsRead => "sensors:read",
     SensorsWrite => "sensors:write",
     HostsRead => "hosts:read",

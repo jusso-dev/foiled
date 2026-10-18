@@ -1,0 +1,376 @@
+{
+  "audience": "tenant",
+  "generated_at": 1792458000000,
+  "since": 1791936000000,
+  "until": 1792454400000,
+  "policy": {
+    "min_sources": 1,
+    "min_sensors": 1,
+    "min_edge_tenants": 1,
+    "min_confidence": "medium"
+  },
+  "series": [
+    {
+      "dimension": "cve",
+      "key": "CVE-2099-0001",
+      "label": "CVE-2099-0001",
+      "wording": "we assess as",
+      "total_attempts": 33,
+      "total_sources": 3,
+      "best_band": "high",
+      "first_day": 1791936000000,
+      "last_day": 1792368000000,
+      "days": [
+        {
+          "day": 1791936000000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        },
+        {
+          "day": 1792022400000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        },
+        {
+          "day": 1792108800000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        },
+        {
+          "day": 1792195200000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        },
+        {
+          "day": 1792281600000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        },
+        {
+          "day": 1792368000000,
+          "attempts": 18,
+          "publishable_attempts": 18,
+          "sources": 3
+        }
+      ],
+      "trend": {
+        "direction": "up",
+        "pct": 166
+      }
+    },
+    {
+      "dimension": "cve",
+      "key": "FOILED-DEMO-0001",
+      "label": "FOILED-DEMO-0001",
+      "wording": "we assess as",
+      "total_attempts": 6,
+      "total_sources": 3,
+      "best_band": "high",
+      "first_day": 1792368000000,
+      "last_day": 1792368000000,
+      "days": [
+        {
+          "day": 1791936000000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792022400000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792108800000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792195200000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792281600000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792368000000,
+          "attempts": 6,
+          "publishable_attempts": 6,
+          "sources": 3
+        }
+      ],
+      "trend": {
+        "direction": "up",
+        "pct": 100
+      }
+    },
+    {
+      "dimension": "cve",
+      "key": "CVE-2099-0009",
+      "label": "CVE-2099-0009",
+      "wording": "we assess as",
+      "total_attempts": 3,
+      "total_sources": 3,
+      "best_band": "medium",
+      "first_day": 1792368000000,
+      "last_day": 1792368000000,
+      "days": [
+        {
+          "day": 1791936000000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792022400000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792108800000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792195200000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792281600000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792368000000,
+          "attempts": 3,
+          "publishable_attempts": 0,
+          "sources": 3
+        }
+      ],
+      "trend": {
+        "direction": "up",
+        "pct": 100
+      }
+    },
+    {
+      "dimension": "cve",
+      "key": "CVE-2099-0011",
+      "label": "CVE-2099-0011",
+      "wording": "we assess as",
+      "total_attempts": 1,
+      "total_sources": 1,
+      "best_band": "high",
+      "first_day": 1792022400000,
+      "last_day": 1792022400000,
+      "days": [
+        {
+          "day": 1791936000000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792022400000,
+          "attempts": 1,
+          "publishable_attempts": 1,
+          "sources": 1
+        },
+        {
+          "day": 1792108800000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792195200000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792281600000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792368000000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        }
+      ],
+      "trend": {
+        "direction": "down",
+        "pct": -100
+      }
+    },
+    {
+      "dimension": "campaign",
+      "key": "cmp_0123456789abcdef01234567",
+      "label": "cmp_0123456789abcdef01234567",
+      "wording": "possible",
+      "total_attempts": 6,
+      "total_sources": 3,
+      "best_band": "medium",
+      "first_day": 1792281600000,
+      "last_day": 1792368000000,
+      "days": [
+        {
+          "day": 1791936000000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792022400000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792108800000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792195200000,
+          "attempts": 0,
+          "publishable_attempts": 0,
+          "sources": 0
+        },
+        {
+          "day": 1792281600000,
+          "attempts": 3,
+          "publishable_attempts": 0,
+          "sources": 3
+        },
+        {
+          "day": 1792368000000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        }
+      ],
+      "trend": {
+        "direction": "up",
+        "pct": 100
+      }
+    },
+    {
+      "dimension": "product",
+      "key": "foiled/demo-app",
+      "label": "Foiled Demo App",
+      "wording": "observed",
+      "total_attempts": 33,
+      "total_sources": 3,
+      "best_band": "high",
+      "first_day": 1791936000000,
+      "last_day": 1792368000000,
+      "days": [
+        {
+          "day": 1791936000000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        },
+        {
+          "day": 1792022400000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        },
+        {
+          "day": 1792108800000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        },
+        {
+          "day": 1792195200000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        },
+        {
+          "day": 1792281600000,
+          "attempts": 3,
+          "publishable_attempts": 3,
+          "sources": 3
+        },
+        {
+          "day": 1792368000000,
+          "attempts": 18,
+          "publishable_attempts": 18,
+          "sources": 3
+        }
+      ],
+      "trend": {
+        "direction": "up",
+        "pct": 166
+      }
+    }
+  ],
+  "cards": [
+    {
+      "card_id": "rc_240b59cd1faedfc1f9fadc24",
+      "kind": "new_cve_assessment",
+      "dimension": "cve",
+      "key": "FOILED-DEMO-0001",
+      "day": 1792368000000,
+      "attempts": 6,
+      "sources": 3,
+      "headline": "New: attempts we assess as targeting FOILED-DEMO-0001 from 3 sources"
+    },
+    {
+      "card_id": "rc_d003c3324547cbdcd4b8f286",
+      "kind": "campaign_emergence",
+      "dimension": "campaign",
+      "key": "cmp_0123456789abcdef01234567",
+      "day": 1792368000000,
+      "attempts": 3,
+      "sources": 3,
+      "headline": "Possible new campaign cmp_0123456789abcdef01234567: 3 attempts from 3 sources"
+    },
+    {
+      "card_id": "rc_87e82b99865f38e8a1e9a077",
+      "kind": "spike",
+      "dimension": "cve",
+      "key": "CVE-2099-0001",
+      "day": 1792368000000,
+      "attempts": 18,
+      "sources": 3,
+      "headline": "Attempts we assess as targeting CVE-2099-0001 rose to 18, up from an average of 3"
+    },
+    {
+      "card_id": "rc_83557d14a65b72e3a08f7bbf",
+      "kind": "spike",
+      "dimension": "product",
+      "key": "foiled/demo-app",
+      "day": 1792368000000,
+      "attempts": 18,
+      "sources": 3,
+      "headline": "Attempts against Foiled Demo App rose to 18, up from an average of 3"
+    }
+  ],
+  "suppressed_buckets": 0,
+  "notes": []
+}

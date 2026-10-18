@@ -25,7 +25,7 @@ Never skip, weaken or delete a test or check to get a pull request green. Fix th
 ## Language mix
 
 - **Rust** for the control plane and API (Axum on Cloudflare Workers via workers-rs, `crates/api`), shared types (`crates/core`, which must build for `wasm32`) and the sandbox host agent (`crates/hostd`).
-- **TypeScript** for the operator front end (`web/`, React Router on Workers) and the public exploit pages (`site/`, Astro).
+- **TypeScript** for the operator front end and the public exploit pages (`web/`, React Router on Workers; the public pages are the same build deployed as a separate Worker, [ADR 0011](docs/adr/0011-public-pages-on-the-web-worker.md)).
 
 Decoys themselves run off Workers, on sandbox hosts driven by the Rust host agent (#41).
 

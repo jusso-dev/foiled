@@ -1,0 +1,110 @@
+[
+  {
+    "type": "heading",
+    "level": 3,
+    "inlines": [
+      {
+        "type": "text",
+        "text": "What we saw"
+      }
+    ]
+  },
+  {
+    "type": "paragraph",
+    "inlines": [
+      {
+        "type": "text",
+        "text": "We assess as attempts against FOILED-DEMO-0001: uploads that climb out of the upload directory with "
+      },
+      {
+        "type": "code",
+        "text": "../"
+      },
+      {
+        "type": "text",
+        "text": " segments."
+      }
+    ]
+  },
+  {
+    "type": "heading",
+    "level": 3,
+    "inlines": [
+      {
+        "type": "text",
+        "text": "Behaviour"
+      }
+    ]
+  },
+  {
+    "type": "list",
+    "ordered": true,
+    "items": [
+      [
+        {
+          "type": "text",
+          "text": "A probe of "
+        },
+        {
+          "type": "code",
+          "text": "/api/upload"
+        },
+        {
+          "type": "text",
+          "text": "."
+        }
+      ],
+      [
+        {
+          "type": "text",
+          "text": "An upload with a traversal path."
+        }
+      ],
+      [
+        {
+          "type": "text",
+          "text": "A request for the dropped file."
+        }
+      ]
+    ]
+  },
+  {
+    "type": "paragraph",
+    "inlines": [
+      {
+        "type": "text",
+        "text": "Sources included 203.0.113.21 and 198[.]51[.]100[.]40, which are documentation addresses in this example."
+      }
+    ]
+  },
+  {
+    "type": "heading",
+    "level": 3,
+    "inlines": [
+      {
+        "type": "text",
+        "text": "Sources"
+      }
+    ]
+  },
+  {
+    "type": "list",
+    "ordered": false,
+    "items": [
+      [
+        {
+          "type": "link",
+          "text": "Advisory",
+          "href": "https://advisories.example.invalid/FOILED-DEMO-0001"
+        }
+      ],
+      [
+        {
+          "type": "link",
+          "text": "Exploited list",
+          "href": "/exploited"
+        }
+      ]
+    ]
+  }
+]

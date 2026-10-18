@@ -7,7 +7,7 @@ Foiled has three kinds of deployment. Two run decoys, one runs the trusted side.
 | | Research sensor | Edge sensor | Central backend |
 | --- | --- | --- | --- |
 | What it is | A sandbox host we (or a self-hosting operator) run, with the full runtime and capture on the box. | A lightweight sensor on someone else's host that forwards telemetry to a central backend. | The control plane, ingest, attempts, confidence and radar on Cloudflare Workers. |
-| Runs | `foiled-hostd` (#41), Firecracker micro-VMs (#3), emulation modules (#30), the network boundary (#4), capture (#9). | Mostly emulations (#30), or a thin proxy that forwards connections. Full Firecracker is optional and documented as heavy (#31). | `foiled-api`, `foiled-web`, `foiled-site` Workers, D1, Postgres via Hyperdrive, Queues, R2, Durable Objects, AI Gateway, Analytics Engine (#40). |
+| Runs | `foiled-hostd` (#41), Firecracker micro-VMs (#3), emulation modules (#30), the network boundary (#4), capture (#9). | Mostly emulations (#30), or a thin proxy that forwards connections. Full Firecracker is optional and documented as heavy (#31). | `foiled-api`, `foiled-web`, `foiled-public` Workers, D1, Postgres via Hyperdrive, Queues, R2, Durable Objects, AI Gateway, Analytics Engine (#40). |
 | Whose host | Ours, or the operator's own. | The customer's or a fleet partner's. | Cloudflare. |
 | Trust | Hostile zone. Holds only its own mTLS identity. | Hostile zone on a host we do not control. Holds only its own mTLS identity, bound to one tenant. | Trusted zone. Holds all secrets and data stores. |
 | Talks to the backend | Dials out over HTTPS with mTLS (host role). | Dials out over HTTPS with mTLS (sensor role). | Never dials into a sensor or host. |

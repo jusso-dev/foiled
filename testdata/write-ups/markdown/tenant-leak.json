@@ -1,0 +1,11 @@
+[
+  {
+    "type": "paragraph",
+    "inlines": [
+      {
+        "type": "text",
+        "text": "Attempts against CVE-2099-0002 hit decoy att_0123456789abcdef01234567. Contact soc@customer.example for details. TODO add sources."
+      }
+    ]
+  }
+]

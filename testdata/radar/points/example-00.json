@@ -1,0 +1,16 @@
+{
+  "day": 1791936000000,
+  "tenant_id": "t-research",
+  "sensor": "decoy:dcy-r1",
+  "sensor_kind": "research",
+  "shared": true,
+  "dimension": "cve",
+  "key": "CVE-2099-0001",
+  "product": "foiled/demo-app",
+  "source": "616ef8cf195eed4d",
+  "attempts": 1,
+  "score": 85,
+  "band": "high",
+  "publishable": true,
+  "predisclosure": false
+}

@@ -1,0 +1,16 @@
+{
+  "day": 1792368000000,
+  "tenant_id": "t-research",
+  "sensor": "decoy:dcy-r1",
+  "sensor_kind": "research",
+  "shared": true,
+  "dimension": "campaign",
+  "key": "cmp_0123456789abcdef01234567",
+  "product": "foiled/demo-app",
+  "source": "feb46f9a655a4559",
+  "attempts": 1,
+  "score": 65,
+  "band": "medium",
+  "publishable": true,
+  "predisclosure": false
+}

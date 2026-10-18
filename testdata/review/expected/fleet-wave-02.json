@@ -1,0 +1,26 @@
+{
+  "age_ms": 18000000,
+  "assignee": null,
+  "band": "high",
+  "claimed_at": null,
+  "created_at": 1792288923000,
+  "decided_at": null,
+  "decided_by": null,
+  "item_id": "rq_1e79269890c27634980033ce",
+  "kind": "ioc_publication",
+  "note": "",
+  "priority": 310,
+  "score": 100,
+  "sla_breached": false,
+  "sla_due_at": 1792461723000,
+  "sla_hours": 48,
+  "snoozed_until": null,
+  "status": "open",
+  "subject": {
+    "ioc_id": "ioc_f05a1d4493587eb8d88c238b"
+  },
+  "tenant_id": "t1",
+  "title": "Release http_path indicator /api/upload?path=../../../dev/shm/.m after the public delay",
+  "version": 0,
+  "wording": "we assess as"
+}

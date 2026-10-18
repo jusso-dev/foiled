@@ -11,6 +11,10 @@ pub mod exports;
 pub mod hosts;
 pub mod ingest;
 pub mod iocs;
+pub mod public;
+pub mod radar;
+pub mod review;
+pub mod writeups;
 
 use foiled_core::audit::{AuditRecord, Outcome};
 use foiled_core::auth::Principal;

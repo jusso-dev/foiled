@@ -10,5 +10,30 @@
   // No workers.dev or preview URLs: they would bypass Cloudflare Access (docs/deploy/workers.md).
   "workers_dev": false,
   "preview_urls": false,
-  "services": [{ "binding": "API", "service": "foiled-api" }]
+  "services": [{ "binding": "API", "service": "foiled-api" }],
+  // The console serves every route and must stay behind Cloudflare Access.
+  // Any value other than "console" is treated as the public surface (fail closed).
+  "vars": { "FOILED_SURFACE": "console" },
+  "env": {
+    // Public exploit pages (#35), deployed with `--env public`. The
+    // same build, but the Worker serves only the public allow-list in
+    // app/lib/surface.ts and 404s everything else. There is no Access policy
+    // in front of it. It calls only the unauthenticated /v0/public/ API routes.
+    "public": {
+      "name": "foiled-public",
+      "workers_dev": false,
+      "preview_urls": false,
+      "services": [{ "binding": "API", "service": "foiled-api" }],
+      "vars": { "FOILED_SURFACE": "public" },
+      // Per-client limit (app/lib/rate-limit.ts): 120 requests a minute per
+      // CF-Connecting-IP, then 429. The console has no binding.
+      "ratelimits": [
+        {
+          "name": "PUBLIC_RATE_LIMIT",
+          "namespace_id": "3501",
+          "simple": { "limit": 120, "period": 60 }
+        }
+      ]
+    }
+  }
 }

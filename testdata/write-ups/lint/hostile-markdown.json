@@ -1,0 +1,32 @@
+[
+  {
+    "rule": "raw-html",
+    "severity": "error",
+    "location": "title",
+    "message": "raw HTML is not allowed: it is shown as text, never rendered"
+  },
+  {
+    "rule": "exploit-code",
+    "severity": "error",
+    "location": "body",
+    "message": "code blocks in bash are not allowed: no working exploit code"
+  },
+  {
+    "rule": "raw-html",
+    "severity": "error",
+    "location": "body block 1",
+    "message": "raw HTML is not allowed: it is shown as text, never rendered"
+  },
+  {
+    "rule": "exploit-code",
+    "severity": "error",
+    "location": "body block 4",
+    "message": "looks runnable (curl): mask it with [REDACTED] or defang it"
+  },
+  {
+    "rule": "unsafe-link",
+    "severity": "error",
+    "location": "body",
+    "message": "only https:// and site-relative links are kept: fix or remove the others"
+  }
+]
