@@ -52,24 +52,41 @@ pub const FINGERPRINT_VERSION: u32 = 1;
 const FINGERPRINT_DOMAIN: &str = "foiled-behaviour-fingerprint/v1";
 const REDACTED: &str = "REDACTED";
 
-/// Parameter and field names whose values are treated as secrets.
-const SECRET_KEYS: &[&str] = &[
-    "access_token",
+/// A parameter, field or header whose name contains one of these (ignoring
+/// case) has its value treated as a secret: `password`, `X-Api-Key`,
+/// `X-Amz-Signature`, `db_passwd`, `sessid`.
+const SECRET_KEY_PARTS: &[&str] = &[
+    "secret",
+    "token",
+    "password",
+    "passwd",
+    "pwd",
+    "api-key",
     "api_key",
     "apikey",
+    "private_key",
+    "private-key",
+    "privatekey",
+    "signature",
+    "session",
+    "sessid",
     "auth",
     "credential",
-    "credentials",
+    "cookie",
     "jwt",
-    "pass",
-    "passwd",
-    "password",
-    "pwd",
-    "secret",
-    "session",
-    "sessionid",
-    "token",
 ];
+
+/// Names that are secrets only as a whole word (`pass=`, `key=`), because
+/// as substrings they would hit ordinary names (`passport`, `monkey`).
+const SECRET_KEY_WORDS: &[&str] = &["pass", "key", "sig", "sid"];
+
+/// Longest parameter or header name considered.
+const MAX_KEY_CHARS: usize = 48;
+
+fn secret_key(name: &str) -> bool {
+    let k = name.trim_start_matches('-').to_ascii_lowercase();
+    SECRET_KEY_WORDS.contains(&k.as_str()) || SECRET_KEY_PARTS.iter().any(|p| k.contains(p))
+}
 
 /// Command-line flags whose next word is a secret.
 const SECRET_FLAGS: &[&str] = &[
@@ -320,7 +337,7 @@ pub fn ioc_id(ty: IocType, value: &str) -> String {
 /// local part of email addresses. Returns the new text and whether anything
 /// changed. Linear in the input.
 pub fn redact(s: &str) -> (String, bool) {
-    let out = redact_emails(&redact_flags(&redact_pairs(&redact_userinfo(s))));
+    let out = redact_emails(&redact_pairs(&redact_flags(&redact_userinfo(s))));
     let changed = out != s;
     (out, changed)
 }
@@ -349,38 +366,70 @@ fn redact_userinfo(s: &str) -> String {
 }
 
 fn value_end(c: char) -> bool {
-    matches!(c, '&' | ';' | '\'' | '"' | '#') || c.is_whitespace()
+    matches!(c, '&' | ';' | '\'' | '"' | '#' | ',' | '}' | ']') || c.is_whitespace()
 }
 
+fn key_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-')
+}
+
+/// Redact the value after a secret-looking name in query strings
+/// (`password=x`), headers (`X-Api-Key: x`) and JSON (`"password":"x"`).
+/// The name is matched by [`secret_key`]. Look-back is bounded, so this is
+/// linear in the input.
 fn redact_pairs(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         out.push(c);
-        if c != '=' {
+        if c != '=' && c != ':' {
             continue;
         }
         let before = &out[..out.len() - 1];
-        let key_len = before
+        // JSON keys end with a quote before the colon.
+        let quoted = c == ':' && (before.ends_with('"') || before.ends_with('\''));
+        let name_end = before.len() - usize::from(quoted);
+        let key_len = before[..name_end]
             .chars()
             .rev()
-            .take(33)
-            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+            .take(MAX_KEY_CHARS + 1)
+            .take_while(|ch| key_char(*ch))
             .count();
-        if key_len == 0 || key_len > 32 {
+        if key_len == 0 || key_len > MAX_KEY_CHARS {
             continue;
         }
-        let key = before[before.len() - key_len..].to_ascii_lowercase();
-        let starts_word = before[..before.len() - key_len]
+        let key = &before[name_end - key_len..name_end];
+        let starts_word = before[..name_end - key_len]
             .chars()
             .next_back()
-            .is_none_or(|p| matches!(p, '?' | '&' | ';' | '\'' | '"' | '-') || p.is_whitespace());
-        if !starts_word || !SECRET_KEYS.contains(&key.as_str()) {
+            .is_none_or(|p| {
+                matches!(p, '?' | '&' | ';' | '\'' | '"' | '{' | ',' | '(' | '[')
+                    || p.is_whitespace()
+            });
+        if !starts_word || !secret_key(key) {
             continue;
         }
+        // A header or JSON value may follow spaces and an opening quote.
+        if c == ':' {
+            while chars.peek().is_some_and(|n| *n == ' ' || *n == '\t') {
+                out.push(chars.next().unwrap_or(' '));
+            }
+        }
+        let quote = match chars.peek() {
+            Some(&q @ ('"' | '\'')) => {
+                out.push(q);
+                chars.next();
+                Some(q)
+            }
+            _ => None,
+        };
         let mut skipped = false;
         while let Some(&n) = chars.peek() {
-            if value_end(n) {
+            let end = match quote {
+                Some(q) => n == q,
+                None => value_end(n),
+            };
+            if end {
                 break;
             }
             chars.next();
@@ -416,13 +465,22 @@ fn redact_flags(s: &str) -> String {
     out
 }
 
+/// Replace the local part of email addresses, written plainly or with the
+/// `@` URL-encoded (`%40`).
 fn redact_emails(s: &str) -> String {
     let local_char =
         |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-');
     let mut out = String::with_capacity(s.len());
     for (i, c) in s.char_indices() {
-        if c == '@' {
-            let domain: String = s[i + 1..]
+        let sep = if c == '@' {
+            1
+        } else if c == '%' && s[i..].get(..3).is_some_and(|x| x == "%40") {
+            3
+        } else {
+            0
+        };
+        if sep > 0 {
+            let domain: String = s[i + sep..]
                 .chars()
                 .take(254)
                 .take_while(|d| d.is_ascii_alphanumeric() || matches!(d, '.' | '-'))
@@ -580,6 +638,48 @@ fn names_canary(v: &str, e: &CaptureEvent) -> bool {
         || text(e, "canary_id").is_some_and(|id| v.contains(id))
 }
 
+/// Parse an address literal, including the single-number (`2852039166`)
+/// and hexadecimal (`0xa9fea9fe`) IPv4 forms URLs accept.
+fn parse_ip(raw: &str) -> Option<IpAddr> {
+    let raw = raw.trim().trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = raw.parse::<IpAddr>() {
+        return Some(ip.to_canonical());
+    }
+    let n = match raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+        None if raw.bytes().all(|b| b.is_ascii_digit()) => raw.parse::<u32>().ok()?,
+        None => return None,
+    };
+    Some(IpAddr::V4(std::net::Ipv4Addr::from(n)))
+}
+
+/// True for addresses that are the decoy's own or the platform's network:
+/// private, loopback, link-local (including the cloud metadata address
+/// 169.254.169.254), carrier-grade NAT, unique local (fd00::/8), multicast
+/// and unspecified. These are never IOCs, whether bare or inside a URL.
+fn internal_ip(ip: IpAddr) -> bool {
+    Observable::ip(&ip.to_string()).is_ok_and(|o| !o.is_external_lookup_eligible())
+}
+
+/// Local and platform names: `localhost`, `.local`, `.internal` (which
+/// covers `metadata.google.internal`), `.home.arpa`, `.lan`, `.localdomain`
+/// and reverse lookups.
+fn internal_name(d: &str) -> bool {
+    d == "localhost"
+        || [
+            ".localhost",
+            ".local",
+            ".internal",
+            ".home.arpa",
+            ".lan",
+            ".localdomain",
+            ".in-addr.arpa",
+            ".ip6.arpa",
+        ]
+        .iter()
+        .any(|s| d.ends_with(s))
+}
+
 fn norm_ip(raw: &str) -> Option<(IocType, String)> {
     let o = Observable::ip(raw).ok()?;
     // The decoy's own network (guest, bridge, resolver) is never an IOC.
@@ -595,9 +695,12 @@ fn norm_ip(raw: &str) -> Option<(IocType, String)> {
 }
 
 fn norm_domain(raw: &str) -> Option<String> {
+    if parse_ip(raw).is_some() {
+        return None;
+    }
     let o = Observable::domain(raw).ok()?;
-    // Single-label names are local, not attacker infrastructure.
-    o.value.contains('.').then_some(o.value)
+    // Single-label and local names are not attacker infrastructure.
+    (o.value.contains('.') && !internal_name(&o.value)).then_some(o.value)
 }
 
 /// Host part of a URL authority or a Host header, without port or
@@ -645,8 +748,8 @@ impl Sink<'_> {
     /// A host name or address literal, as found in a Host header or URL.
     fn host(&mut self, raw: &str, role: IocRole, field: &str) {
         let h = host_of(raw.trim());
-        if h.parse::<IpAddr>().is_ok() {
-            self.ip(h, role, field);
+        if let Some(ip) = parse_ip(h) {
+            self.ip(&ip.to_string(), role, field);
         } else if !names_canary(h, self.e)
             && let Some(d) = norm_domain(h)
         {
@@ -685,6 +788,15 @@ impl Sink<'_> {
         );
         let (v, redacted) = redact(&lowered);
         let host = url_authority(&v).map(host_of).unwrap_or("").to_string();
+        // A URL on the decoy's own network, the metadata service or a local
+        // name is not attacker infrastructure.
+        let internal = match parse_ip(&host) {
+            Some(ip) => internal_ip(ip),
+            None => !host.contains('.') || internal_name(&host),
+        };
+        if internal {
+            return;
+        }
         self.push(IocType::Url, v, redacted, role, field);
         if !host.is_empty() {
             self.host(&host, role, field);
@@ -958,25 +1070,75 @@ fn candidates(e: &CaptureEvent, opts: ExtractOptions, out: &mut Vec<Candidate>) 
 // Behaviour fingerprint
 // ---------------------------------------------------------------------------
 
-/// Path without query values, digit runs folded to `0`, plus the sorted
-/// query parameter names: `/api/upload?path`.
-fn path_shape(p: &str) -> String {
+/// Placeholder for an argument or path part kept out of a fingerprint.
+const FOLDED: &str = "*";
+
+/// Protocol commands whose first argument is a subcommand (`CONFIG SET`),
+/// not a value. Every other command contributes its verb only, so keys,
+/// passwords and payloads never reach a fingerprint.
+const SUBCOMMAND_VERBS: &[&str] = &[
+    "ACL", "CLIENT", "CLUSTER", "COMMAND", "CONFIG", "DEBUG", "FUNCTION", "MEMORY", "MODULE",
+    "OBJECT", "SCRIPT", "XGROUP", "XINFO",
+];
+
+/// A short word kept as is in a fingerprint step, or [`FOLDED`]. Anything
+/// long, unusual or naming a canary is folded, so attacker-chosen values
+/// (secrets, random names, canaries) never appear in steps and never make
+/// two runs of the same tool differ.
+fn step_word(w: &str, max: usize, e: &CaptureEvent) -> String {
+    let ok = !w.is_empty()
+        && w.chars().nth(max).is_none()
+        && w.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '~'))
+        && !names_canary(w, e);
+    if ok {
+        w.to_string()
+    } else {
+        FOLDED.to_string()
+    }
+}
+
+/// Path without query values, digit runs folded to `0`, long or token-like
+/// segments folded to `*` and the rest passed through [`step_word`], plus the sorted query parameter names:
+/// `/api/upload?path`.
+fn path_shape(p: &str, e: &CaptureEvent) -> String {
     let (path, query) = p.split_once('?').unwrap_or((p, ""));
     let path = path.split('#').next().unwrap_or("");
-    let mut shaped = String::new();
-    let mut in_digits = false;
-    for c in path.chars().take(96) {
-        if c.is_ascii_digit() {
-            if !in_digits {
-                shaped.push('0');
+    let fold_digits = |seg: &str| {
+        let mut out = String::new();
+        let mut in_digits = false;
+        for c in seg.chars() {
+            if c.is_ascii_digit() {
+                if !in_digits {
+                    out.push('0');
+                }
+                in_digits = true;
+            } else {
+                out.push(c);
+                in_digits = false;
             }
-            in_digits = true;
-        } else {
-            shaped.push(c);
-            in_digits = false;
         }
-    }
-    let names: BTreeSet<&str> = query
+        out
+    };
+    let segments: Vec<String> = path
+        .split('/')
+        .take(16)
+        .map(|seg| {
+            // Long mixed letter and digit segments are ids or tokens.
+            let token_like = seg.chars().nth(7).is_some()
+                && seg.chars().any(|c| c.is_ascii_digit())
+                && seg.chars().any(|c| c.is_ascii_alphabetic());
+            if seg.is_empty() {
+                String::new()
+            } else if token_like || seg.chars().nth(32).is_some() {
+                FOLDED.to_string()
+            } else {
+                step_word(&fold_digits(seg), 32, e)
+            }
+        })
+        .collect();
+    let mut shaped = segments.join("/");
+    let names: BTreeSet<String> = query
         .split('#')
         .next()
         .unwrap_or("")
@@ -984,6 +1146,7 @@ fn path_shape(p: &str) -> String {
         .filter_map(|kv| kv.split('=').next())
         .filter(|k| !k.is_empty())
         .take(16)
+        .map(|k| step_word(k, 32, e))
         .collect();
     if !names.is_empty() {
         shaped.push('?');
@@ -993,12 +1156,17 @@ fn path_shape(p: &str) -> String {
 }
 
 /// Program name of a command line: the first word's basename.
-fn program(line: &str) -> Option<String> {
+fn program(line: &str, e: &CaptureEvent) -> Option<String> {
     let first = line.split_whitespace().next()?;
     let first = first.trim_matches(|c| matches!(c, '\'' | '"' | '(' | '`'));
     let base = first.rsplit('/').next().unwrap_or(first);
-    let base: String = base.chars().take(32).collect();
-    (!base.is_empty()).then_some(base)
+    (!base.is_empty()).then(|| step_word(base, 32, e))
+}
+
+/// An attacker-supplied verb (HTTP method, protocol command, DNS type),
+/// upper case.
+fn verb(v: &str, e: &CaptureEvent) -> String {
+    step_word(&v.to_ascii_uppercase(), 24, e)
 }
 
 fn stage(s: HookStage) -> &'static str {
@@ -1018,56 +1186,60 @@ fn steps_for(e: &CaptureEvent) -> Vec<String> {
             if let Some(m) = text(e, "method") {
                 vec![format!(
                     "http {} {}",
-                    m.to_ascii_uppercase(),
-                    path_shape(text(e, "path").unwrap_or("/"))
+                    verb(m, e),
+                    path_shape(text(e, "path").unwrap_or("/"), e)
                 )]
             } else if let Some(c) = text(e, "command") {
-                let first = words(e.data.get("args"))
-                    .and_then(|a| a.split_whitespace().next().map(str::to_ascii_uppercase))
-                    .unwrap_or_default();
-                vec![
-                    format!("cmd {} {first}", c.to_ascii_uppercase())
-                        .trim_end()
-                        .to_string(),
-                ]
+                let cmd = verb(c, e);
+                let sub = SUBCOMMAND_VERBS
+                    .contains(&cmd.as_str())
+                    .then(|| words(e.data.get("args")))
+                    .flatten()
+                    .and_then(|a| a.split_whitespace().next().map(|w| verb(w, e)));
+                vec![match sub {
+                    Some(sub) => format!("cmd {cmd} {sub}"),
+                    None => format!("cmd {cmd}"),
+                }]
             } else {
                 vec![]
             }
         }
         Channel::Hook => match &e.hook {
-            Some(h) => std::iter::once(format!("hook {} {}", h.hook_id, stage(h.stage)))
-                .chain(
-                    h.cmd_lines
-                        .iter()
-                        .filter_map(|l| program(l))
-                        .map(|p| format!("exec {p}")),
-                )
-                .collect(),
+            Some(h) => std::iter::once(format!(
+                "hook {} {}",
+                step_word(&h.hook_id, 96, e),
+                stage(h.stage)
+            ))
+            .chain(
+                h.cmd_lines
+                    .iter()
+                    .filter_map(|l| program(l, e))
+                    .map(|p| format!("exec {p}")),
+            )
+            .collect(),
             None => vec![],
         },
         Channel::Process => ["cmdline", "argv"]
             .iter()
             .find_map(|k| words(e.data.get(*k)))
-            .and_then(|l| program(&l))
+            .and_then(|l| program(&l, e))
             .map(|p| vec![format!("exec {p}")])
             .unwrap_or_default(),
-        Channel::Dns => vec![format!(
-            "dns {}",
-            text(e, "qtype").unwrap_or("A").to_ascii_uppercase()
-        )],
+        Channel::Dns => vec![format!("dns {}", verb(text(e, "qtype").unwrap_or("A"), e))],
         Channel::Egress => {
             if text(e, "detector") == Some("beacon") {
                 vec!["canary beacon".to_string()]
             } else {
                 vec![format!(
                     "egress {}",
-                    text(e, "method")
-                        .map(str::to_ascii_uppercase)
-                        .unwrap_or_else(|| "CONNECT".into())
+                    verb(text(e, "method").unwrap_or("CONNECT"), e)
                 )]
             }
         }
-        Channel::Filesystem => vec![format!("fs {}", text(e, "op").unwrap_or("write"))],
+        Channel::Filesystem => vec![format!(
+            "fs {}",
+            step_word(text(e, "op").unwrap_or("write"), 24, e)
+        )],
         Channel::Quarantine => vec!["quarantine".to_string()],
         Channel::Network => vec![],
     };
@@ -1334,6 +1506,9 @@ pub fn extract(
         let mut dropped: BTreeSet<String> = BTreeSet::new();
         let mut has_file = false;
         for c in cands {
+            // Before the cap: a file hash that is dropped by the cap was
+            // still captured, so the attempt is not file-limited.
+            has_file |= c.ty == IocType::FileSha256;
             let id = ioc_id(c.ty, &c.value);
             if !kept.contains(&id) {
                 if refs.len() >= MAX_IOCS_PER_ATTEMPT {
@@ -1343,7 +1518,6 @@ pub fn extract(
                 kept.insert(id.clone());
                 refs.push(id.clone());
             }
-            has_file |= c.ty == IocType::FileSha256;
             accs.entry(id).or_insert_with(|| Acc::new(&c, a)).add(c, a);
         }
 
@@ -1429,8 +1603,13 @@ pub fn extract(
 /// Fill `ioc_refs` on each attempt from an extraction over the same
 /// attempts.
 pub fn attach_refs(attempts: &mut [Attempt], extraction: &Extraction) {
+    let by_id: BTreeMap<&str, &AttemptIocs> = extraction
+        .attempts
+        .iter()
+        .map(|a| (a.attempt_id.as_str(), a))
+        .collect();
     for a in attempts {
-        if let Some(x) = extraction.for_attempt(&a.attempt_id) {
+        if let Some(x) = by_id.get(a.attempt_id.as_str()) {
             a.ioc_refs = x.ioc_refs.clone();
         }
     }
@@ -1456,47 +1635,62 @@ pub fn apply_enrichment(iocs: &mut [Ioc], facts: &BTreeMap<Observable, Vec<Fact>
         .iter_mut()
         .filter(|i| matches!(i.ioc_type, IocType::Ip | IocType::Ipv6))
     {
-        let Some(fs) = Observable::ip(&i.value).ok().and_then(|o| facts.get(&o)) else {
-            continue;
-        };
-        let mut newest: BTreeMap<(String, String), &Fact> = BTreeMap::new();
-        for f in fs
-            .iter()
-            .filter(|f| f.key.starts_with("asn.") || f.key.starts_with("geo."))
-        {
-            let k = (f.provider.clone(), f.key.clone());
-            if newest
-                .get(&k)
-                .is_none_or(|g| f.observed_at >= g.observed_at)
-            {
-                newest.insert(k, f);
-            }
+        if let Some(fs) = Observable::ip(&i.value).ok().and_then(|o| facts.get(&o)) {
+            i.enrichment = context_refs(fs);
         }
-        i.enrichment = newest
-            .into_values()
-            .map(|f| EnrichmentRef {
-                provider: f.provider.clone(),
-                key: f.key.clone(),
-                value: match &f.value {
-                    Value::String(s) => Value::String(printable(s)),
-                    v => v.clone(),
-                },
-                observed_at: f.observed_at,
-                shareable: !is_never_redistribute(&f.provider),
-            })
-            .collect();
     }
 }
 
+/// ASN and country refs from an address's Facts: the newest `asn.*` and
+/// `geo.*` Fact per provider and key, sorted by provider then key, with
+/// provider text escaped.
+pub fn context_refs(facts: &[Fact]) -> Vec<EnrichmentRef> {
+    let mut newest: BTreeMap<(&str, &str), &Fact> = BTreeMap::new();
+    for f in facts
+        .iter()
+        .filter(|f| f.key.starts_with("asn.") || f.key.starts_with("geo."))
+    {
+        let k = (f.provider.as_str(), f.key.as_str());
+        if newest
+            .get(&k)
+            .is_none_or(|g| f.observed_at >= g.observed_at)
+        {
+            newest.insert(k, f);
+        }
+    }
+    newest
+        .into_values()
+        .map(|f| EnrichmentRef {
+            provider: f.provider.clone(),
+            key: f.key.clone(),
+            value: match &f.value {
+                Value::String(s) => Value::String(printable(s)),
+                v => v.clone(),
+            },
+            observed_at: f.observed_at,
+            shareable: !is_never_redistribute(&f.provider),
+        })
+        .collect()
+}
+
+/// The refs that may leave the operator's console: never-redistribute
+/// providers are dropped, whatever `shareable` says.
+pub fn export_refs(refs: &[EnrichmentRef]) -> Vec<EnrichmentRef> {
+    refs.iter()
+        .filter(|r| r.shareable && !is_never_redistribute(&r.provider))
+        .cloned()
+        .collect()
+}
+
 /// IOCs as they may leave the operator's console (#13, #35, #37): enrichment
-/// refs from never-redistribute providers are dropped. Everything else is
-/// already observed by Foiled's own decoys.
+/// refs pass through [`export_refs`]. Everything else is already observed by
+/// Foiled's own decoys. The CSV export uses the same guard on its ASN
+/// columns.
 pub fn redact_for_export(iocs: &[Ioc]) -> Vec<Ioc> {
     iocs.iter()
         .cloned()
         .map(|mut i| {
-            i.enrichment
-                .retain(|r| r.shareable && !is_never_redistribute(&r.provider));
+            i.enrichment = export_refs(&i.enrichment);
             i
         })
         .collect()
@@ -1560,7 +1754,27 @@ mod tests {
                 "/login?user=bob&password=REDACTED&x=1",
             ),
             ("/a?token=abc", "/a?token=REDACTED"),
-            ("/a?mytoken=abc", "/a?mytoken=abc"),
+            ("/a?mytoken=abc", "/a?mytoken=REDACTED"),
+            ("/a?PassWord=abc&monkey=1", "/a?PassWord=REDACTED&monkey=1"),
+            (
+                "/a?db_passwd=x&pass=y&key=z",
+                "/a?db_passwd=REDACTED&pass=REDACTED&key=REDACTED",
+            ),
+            (
+                "/a?Api-Key=x&private_key=y&sessid=z",
+                "/a?Api-Key=REDACTED&private_key=REDACTED&sessid=REDACTED",
+            ),
+            (
+                "/b?X-Amz-Credential=AKIDEXAMPLE&X-Amz-Signature=abc123&X-Amz-Date=1",
+                "/b?X-Amz-Credential=REDACTED&X-Amz-Signature=REDACTED&X-Amz-Date=1",
+            ),
+            (
+                r#"{"user":"bob","password":"hunter2","n":1}"#,
+                r#"{"user":"bob","password":"REDACTED","n":1}"#,
+            ),
+            (r#"{"apiToken": 12345}"#, r#"{"apiToken": REDACTED}"#),
+            ("X-Api-Key: abc123", "X-Api-Key: REDACTED"),
+            ("cookie: sid=abc", "cookie: REDACTED"),
             (
                 "curl http://u:p@203.0.113.9/x",
                 "curl http://REDACTED@203.0.113.9/x",
@@ -1572,13 +1786,21 @@ mod tests {
             ("app --password=hunter2", "app --password=REDACTED"),
             (
                 "Authorization: Bearer abc.def",
-                "Authorization: Bearer REDACTED",
+                "Authorization: REDACTED REDACTED",
             ),
             (
                 "mail admin@example.invalid now",
                 "mail REDACTED@example.invalid now",
             ),
+            (
+                "/subscribe?to=admin%40example.invalid",
+                "/subscribe?to=REDACTED%40example.invalid",
+            ),
             ("ssh root@203.0.113.9", "ssh root@203.0.113.9"),
+            (
+                "http://stage2.example.invalid:8080/x",
+                "http://stage2.example.invalid:8080/x",
+            ),
             ("/plain/path", "/plain/path"),
         ];
         for (raw, want) in cases {
@@ -1934,6 +2156,187 @@ mod tests {
         let out = redact_for_export(&x.iocs);
         assert_eq!(out[0].enrichment.len(), 1);
         assert_eq!(out[0].enrichment[0].provider, "team_asn");
+    }
+
+    #[test]
+    fn protocol_secrets_and_canaries_stay_out_of_fingerprints() {
+        let attempt = |pw: &str, id: &str| {
+            parse(vec![
+                ev(
+                    &format!("{id}1"),
+                    T0,
+                    "application",
+                    "203.0.113.7",
+                    json!({"command": "AUTH", "args": [pw]}),
+                ),
+                ev(
+                    &format!("{id}2"),
+                    T0 + 1,
+                    "application",
+                    "203.0.113.7",
+                    json!({"command": "CONFIG", "args": ["SET", "dir", "/var/spool/cron"]}),
+                ),
+                ev(
+                    &format!("{id}3"),
+                    T0 + 2,
+                    "application",
+                    "203.0.113.7",
+                    json!({"command": "SET", "args": ["vt-canary-ak-0000", "x"]}),
+                ),
+                hook(
+                    &format!("{id}4"),
+                    T0 + 3,
+                    "203.0.113.7",
+                    "trigger",
+                    json!({}),
+                ),
+            ])
+        };
+        let (_, a) = run(
+            &attempt("vt-canary-ak-5b0e9d2a71c4f836", "a"),
+            ExtractOptions::default(),
+        );
+        let (_, b) = run(&attempt("hunter2", "b"), ExtractOptions::default());
+        let (_, c) = run(&attempt("correct horse", "c"), ExtractOptions::default());
+        let fa = values(&a, IocType::BehaviourFingerprint);
+        assert_eq!(fa.len(), 1);
+        assert_eq!(
+            fa,
+            values(&b, IocType::BehaviourFingerprint),
+            "passwords do not change bf1"
+        );
+        assert_eq!(fa, values(&c, IocType::BehaviourFingerprint));
+        let steps = a
+            .iocs
+            .iter()
+            .find_map(|i| i.fingerprint.clone())
+            .unwrap()
+            .steps;
+        assert_eq!(
+            steps,
+            vec![
+                "cmd AUTH",
+                "cmd CONFIG SET",
+                "cmd SET",
+                "hook demo-app.upload-path-traversal trigger"
+            ]
+        );
+        for x in [&a, &b, &c] {
+            for i in &x.iocs {
+                let all = format!("{} {} {:?}", i.value, i.display, i.fingerprint);
+                assert!(
+                    !all.contains("canary") && !all.contains("hunter2") && !all.contains("horse"),
+                    "{all}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fingerprint_folds_odd_path_segments_and_methods() {
+        let events = parse(vec![
+            ev(
+                "e1",
+                T0,
+                "application",
+                "203.0.113.7",
+                json!({"method": "G\u{202E}ET",
+                "path": "/reset/0123456789abcdef0123456789abcdef0123/vt-canary-ak-1/x?token=1"}),
+            ),
+            hook("e2", T0 + 1, "203.0.113.7", "trigger", json!({})),
+        ]);
+        let (_, x) = run(&events, ExtractOptions::default());
+        let steps = x
+            .iocs
+            .iter()
+            .find_map(|i| i.fingerprint.clone())
+            .unwrap()
+            .steps;
+        assert_eq!(steps[0], "http * /reset/*/*/x?token");
+    }
+
+    #[test]
+    fn internal_hosts_are_never_iocs() {
+        let mut egress = ev(
+            "e2",
+            T0 + 10,
+            "egress",
+            "10.85.1.2",
+            json!({"host": "metadata.google.internal", "method": "GET", "path": "/computeMetadata/v1/"}),
+        );
+        egress["dst"] = json!({"ip": "169.254.169.254", "port": 80});
+        let events = parse(vec![
+            hook(
+                "e1",
+                T0,
+                "203.0.113.7",
+                "trigger",
+                json!({"cmd_lines": [
+                    "curl http://169.254.169.254/latest/meta-data/",
+                    "curl http://[fd00::1]/x http://2852039166/y http://0xa9fea9fe/z",
+                    "wget http://printer.local/a http://intranet/b http://localhost:8080/c",
+                    "curl http://stage2.example.invalid/ok"
+                ]}),
+            ),
+            egress,
+            ev(
+                "e3",
+                T0 + 20,
+                "dns",
+                "10.85.1.2",
+                json!({"query": "metadata.google.internal"}),
+            ),
+            ev(
+                "e4",
+                T0 + 21,
+                "dns",
+                "10.85.1.2",
+                json!({"query": "7.2.0.192.in-addr.arpa"}),
+            ),
+        ]);
+        let (_, x) = run(&events, ExtractOptions::default());
+        assert_eq!(
+            values(&x, IocType::Url),
+            vec!["http://stage2.example.invalid/ok"]
+        );
+        assert_eq!(values(&x, IocType::Domain), vec!["stage2.example.invalid"]);
+        assert!(values(&x, IocType::DnsQuery).is_empty());
+        assert_eq!(values(&x, IocType::Ip), vec!["203.0.113.7"]);
+        assert!(values(&x, IocType::Ipv6).is_empty());
+    }
+
+    #[test]
+    fn a_capped_file_hash_still_counts_as_a_file() {
+        let sha = "c1c5d1b2f75673adc7db8fbf8bf1ab10f405dac8e71ce3cb8d7d0fef7fdeb172";
+        let lines: Vec<String> = (0..MAX_IOCS_PER_ATTEMPT)
+            .map(|i| format!("echo {i}"))
+            .collect();
+        let events = parse(vec![
+            hook("e1", T0, "203.0.113.7", "trigger", json!({})),
+            hook(
+                "e2",
+                T0 + 1,
+                "203.0.113.7",
+                "post_exploit",
+                json!({"cmd_lines": lines}),
+            ),
+            ev(
+                "e3",
+                T0 + 2,
+                "quarantine",
+                "203.0.113.7",
+                json!({"sha256": sha}),
+            ),
+        ]);
+        let (attempts, x) = run(&events, ExtractOptions::default());
+        let a = x.for_attempt(&attempts[0].attempt_id).unwrap();
+        assert_eq!(a.ioc_refs.len(), MAX_IOCS_PER_ATTEMPT);
+        assert!(
+            values(&x, IocType::FileSha256).is_empty(),
+            "dropped by the cap"
+        );
+        assert!(!a.file_ioc_limited, "but the file was captured");
+        assert!(a.notes.iter().any(|n| n.contains("not kept")));
     }
 
     #[test]

@@ -563,7 +563,7 @@ paths:
       tags: [attempts]
       operationId: overrideAttemptLink
       summary: Analyst override or feedback on a link (audited)
-      description: "`true_positive` confirms (score 100, wording confirmed), `false_positive` suppresses, `unsure` records feedback without changing the score. Written to the audit log as `link.override`."
+      description: "`true_positive` confirms (score 100, wording confirmed), `false_positive` suppresses, `unsure` records feedback without changing the score. Written to the audit log as `link.override`. `attempt_ioc` links are not accepted: an IOC is scored once across every attempt it was seen in, so there is no per-attempt link to override (docs/iocs.md)."
       x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [attempts:write]
@@ -804,7 +804,9 @@ paths:
       summary: IOC CSV export (source IPs seen at the tenant's decoys)
       description: |
         One row per source IP: `indicator_type, indicator, first_seen,
-        last_seen, event_count, decoy_ids, catalogue_ids, hook_cves`. Reads
+        last_seen, event_count, decoy_ids, catalogue_ids, hook_cves, asn,
+        as_org, country`. The ASN columns hold only context from providers
+        that may be redistributed (`docs/iocs.md#asn-context`). Reads
         live rows only, so data removed by the retention purge never returns
         (#16). Cells are RFC 4180 quoted and formula-safe. The richer IOC
         model (`/v0/iocs`, #34) and STIX, MISP and TAXII outputs (#13) build

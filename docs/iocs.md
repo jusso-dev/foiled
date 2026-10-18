@@ -95,11 +95,15 @@ By pipeline:
 Capture data can hold personal information about people who are not the attacker ([privacy-and-retention.md](privacy-and-retention.md#what-foiled-holds-and-why-it-matters)). Extraction follows the #16 defaults:
 
 - **Bodies stay hashed.** With `store_payloads: false` (the default, and what the API uses today) inline bodies and request slices are never IOC values. Their SHA-256 is a `payload_sha256` IOC instead. Request paths, user agents and protocol commands are access-log data and are extracted either way.
-- **Secrets are removed from text values** (`http_path`, `http_ua`, `request_substring`, `cmdline`, `url`): URL credentials (`http://REDACTED@host/`), values of secret-looking parameters (`password`, `pass`, `passwd`, `pwd`, `token`, `access_token`, `auth`, `api_key`, `apikey`, `secret`, `session`, `sessionid`, `jwt`, `credential`, `credentials`), the word after `--password`, `--pass`, `--token`, `--secret`, `--api-key`, `Bearer` and `Basic`, and the arguments of `AUTH`, `LOGIN` and `PASS` commands.
-- **Email local parts are removed**: `ops@example.invalid` becomes `REDACTED@example.invalid`.
+- **Secrets are removed from text values** (`http_path`, `http_ua`, `request_substring`, `cmdline`, `url`):
+  - URL credentials: `http://REDACTED@host/`.
+  - The value after any name that contains, ignoring case, `secret`, `token`, `password`, `passwd`, `pwd`, `api-key`, `api_key`, `apikey`, `private_key`, `signature`, `session`, `sessid`, `auth`, `credential`, `cookie` or `jwt`, or that is exactly `pass`, `key`, `sig` or `sid`. This covers query strings (`?X-Amz-Signature=...`, `&db_passwd=...`), JSON (`"password":"..."`), headers (`X-Api-Key: ...`, `Authorization: ...`) and flags (`--password=...`). Substring matching over-redacts on purpose (`author=` is redacted too).
+  - The word after `--password`, `--pass`, `--token`, `--secret`, `--api-key`, `Bearer` and `Basic`.
+  - The arguments of `AUTH`, `LOGIN` and `PASS` protocol commands.
+- **Email local parts are removed**, plain or URL-encoded: `ops@example.invalid` becomes `REDACTED@example.invalid` and `ops%40example.invalid` becomes `REDACTED%40example.invalid`.
 - `redacted: true` marks every IOC whose value was changed, so exports know it is not byte-exact. The id is computed over the redacted value, so it is still stable.
 - **Canaries are never IOCs.** Any value containing a canary prefix (`vt-canary-`, `vt_canary_`, `VTCANARY`, `vtcanary`), the planted database host or the `canary_id` of the event is skipped. They are Foiled's own secrets, and contribute-back must never publish them ([contribute-back.md](contribute-back.md#what-a-released-ioc-contains)).
-- **The decoy's own network is never an IOC.** Private, loopback, link-local, carrier-grade NAT, unique local and multicast addresses (the guest, the bridge, the resolver) are skipped, using the same rule as enrichment.
+- **The decoy's own network and the platform are never IOCs.** Private, loopback, link-local (including the cloud metadata address `169.254.169.254`), carrier-grade NAT, unique local (`fd00::/8`), multicast and unspecified addresses are skipped, using the same rule as enrichment. The rule applies to bare addresses and to URL hosts, including the single-number and hexadecimal IPv4 forms (`http://2852039166/`, `http://0xa9fea9fe/`). Local names are skipped as domains, DNS queries and URL hosts: single-label names, `localhost`, and names under `.localhost`, `.local`, `.internal` (which covers `metadata.google.internal`), `.home.arpa`, `.lan`, `.localdomain`, `.in-addr.arpa` and `.ip6.arpa`.
 - Values longer than 2,048 characters (512 for user agents) are dropped rather than cut, because a cut value is no longer exact. The hash of the request or file still stands.
 
 ## Display and defanging
@@ -122,14 +126,14 @@ After defanging, `display` goes through the same escaping as timeline summaries 
 
 - One IOC per type and value. Every sighting adds its event, attempt, decoy and catalogue entry; `first_seen` and `last_seen` cover them all.
 - Each attempt keeps at most 256 distinct IOCs; anything beyond is counted in the attempt's notes.
-- **`ioc_refs` on attempts** is filled by `ioc::attach_refs` in the API read model: every attempt returned by `/v0/attempts`, `/v0/attempts/{id}` and the timeline carries the ids of its IOCs, in order of first appearance. `attempt::build` itself still returns empty `ioc_refs`, so the attempt golden files and grouping stay independent of extraction.
+- **`ioc_refs` on attempts** is filled by `ioc::attach_refs` in the API read model: every attempt returned by `/v0/attempts`, `/v0/attempts/{id}` and the timeline carries the ids of its IOCs, in order of first appearance. The links and override routes never return attempts, so they skip extraction. Attaching refs is a single indexed pass, so it stays linear in the number of attempts. `attempt::build` itself still returns empty `ioc_refs`, so the attempt golden files and grouping stay independent of extraction.
 - `campaign_ids` copies each attempt's `campaign_id`, so when #33 assigns campaigns the IOCs follow with no change here.
 
 ## ASN context
 
 Address IOCs carry ASN and country context from enrichment Facts (#11): the newest `asn.number`, `asn.org` and `geo.country` Fact per provider. Reputation Facts (GreyNoise, CrowdSec, DShield) are triage context for the attempt, not part of the indicator, and are not copied.
 
-Each ref says whether it is `shareable`. `local_asn` is on the never-redistribute list because its dataset may be MaxMind GeoLite2 ([enrichment.md](enrichment.md)), so its refs are `shareable: false`. `ioc::redact_for_export` drops every non-shareable ref; exports (#13), the radar (#35) and contribute-back (#37) must call it.
+Each ref says whether it is `shareable`. `local_asn` is on the never-redistribute list because its dataset may be MaxMind GeoLite2 ([enrichment.md](enrichment.md)), so its refs are `shareable: false`. `ioc::redact_for_export` drops every non-shareable ref through `ioc::export_refs`; exports (#13), the radar (#35) and contribute-back (#37) must call it. The CSV export already does: its `asn`, `as_org` and `country` columns are filled only from refs that pass `export_refs`, so with the default providers they stay empty.
 
 The API asks the store for cached Facts (`Store::enrichment_facts`) for the addresses it is about to return. The in-memory store answers in tests; the Worker store answers nothing until the `foiled-enrich` consumer writes its cache (#11), so production IOCs have no ASN refs until then. The golden test uses the fake ASN table in `testdata/enrichment/asn.csv`.
 
@@ -143,12 +147,12 @@ A behaviour fingerprint is a stable id for "what the attacker did", independent 
 SHA-256( "foiled-behaviour-fingerprint/v1" + "\n" + join("\n", steps) )
 ```
 
-**Steps.** Each event in the attempt gives zero or more normalised steps. Volatile values (addresses, host names, query values, file names, ports) are left out so the same tool gives the same steps from anywhere.
+**Steps.** Each event in the attempt gives zero or more normalised steps. Volatile and attacker-chosen values (addresses, host names, query values, arguments, passwords, keys, file names, ports) are left out, so the same tool gives the same steps from anywhere and no secret or canary can reach a fingerprint.
 
 | Event | Step |
 | --- | --- |
-| HTTP request (`application` with `method`) | `http <METHOD> <path shape>`. The path shape is the path without query, digit runs folded to `0`, then `?` and the sorted, distinct query parameter names joined by `&`: `/api/upload?path=../x&token=1` becomes `/api/upload?path&token`. |
-| Protocol command (`application` with `command`) | `cmd <COMMAND> <FIRST ARG>`, upper case: `cmd CONFIG SET`. |
+| HTTP request (`application` with `method`) | `http <METHOD> <path shape>`. The path shape is the path without query, at most 16 segments; a segment longer than 32 characters or of 8 or more characters mixing letters and digits (an id or token) becomes `*`, other digit runs fold to `0`; then `?` and the sorted, distinct query parameter names joined by `&`: `/api/upload?path=../x&token=1` becomes `/api/upload?path&token` and `/reset/9f2c4e1a77b0/x` becomes `/reset/*/x`. |
+| Protocol command (`application` with `command`) | `cmd <COMMAND>`, upper case. Only for commands whose first argument is a subcommand (`ACL`, `CLIENT`, `CLUSTER`, `COMMAND`, `CONFIG`, `DEBUG`, `FUNCTION`, `MEMORY`, `MODULE`, `OBJECT`, `SCRIPT`, `XGROUP`, `XINFO`) is it added: `cmd CONFIG SET`. Other arguments, including `AUTH` passwords and `SET` keys, never appear: `AUTH hunter2` and `AUTH vt-canary-...` both give `cmd AUTH`. |
 | Hook (`hook`) | `hook <hook_id> <stage>`, then `exec <program>` for each of `cmd_lines`. |
 | Process (`process`) | `exec <program>`. |
 | DNS (`dns`) | `dns <QTYPE>` (`A` when missing). |
@@ -157,7 +161,7 @@ SHA-256( "foiled-behaviour-fingerprint/v1" + "\n" + join("\n", steps) )
 | Quarantine | `quarantine`. |
 | Network flows | None. Flows are too noisy to be behaviour. |
 
-`<program>` is the first word's basename (`/bin/sh -c ...` gives `sh`), at most 32 characters. Every step is escaped with `timeline::printable` before hashing, so the stored steps are exactly the hashed text.
+`<program>` is the first word's basename (`/bin/sh -c ...` gives `sh`). Every attacker-supplied word in a step (method, command, qtype, op, program, path segment, parameter name) must be at most 24 or 32 characters of letters, digits and `._+-~` and must not name a canary; otherwise it becomes `*`. Every step is escaped with `timeline::printable` before hashing, so the stored steps are exactly the hashed text.
 
 **Order.** Events are ordered by time, then hook `sequence_no`, then their steps (never by event id, which the sender chooses). An event's own steps keep their order. Consecutive repeats are collapsed, so a scanner that sends the same request ten times gives one step. At most 64 steps are hashed.
 
@@ -255,6 +259,8 @@ Each IOC is scored with the #27 model as a link of kind `attempt_ioc` (target: t
 
 At most 16 decoys and 16 attempts add evidence. The usual #27 rules apply: decoy evidence alone is `catalogue_only` and never publishable, the noise penalty cannot cancel a hook or signature, and wording is "we assess as" until an analyst confirms.
 
+**No per-attempt overrides.** An IOC is one value scored across every attempt it was seen in, so `POST /v0/attempts/{attempt_id}/links` refuses kind `attempt_ioc` with 400, and the override `kind` enum in OpenAPI and the `link_overrides` CHECK constraint (`migrations/postgres/0003_link_overrides.sql`) leave it out on purpose. Analyst feedback on indicators belongs with the review queue (#35), which would key it by `ioc_id`, not attempt.
+
 Worked numbers: a source that only probed one product scores 10 for the decoy, less 2 for a noise score of 10, so 8 (`low`, not publishable). Every IOC in the memory-only fixture scores 10 plus 60 for the hook, less 2: 68 (`medium`, publishable). A generic user agent such as `curl/8.0` scores the same as a rare one in the same attempt; consumers that want rarity should weigh `sightings` and campaign data.
 
 ## API
@@ -270,7 +276,7 @@ curl -sS -H "authorization: Bearer $FOILED_TOKEN" \
   "$FOILED_API/v0/iocs?type=url&value=hxxp://stage2%5B.%5Dexample%5B.%5Dinvalid/m.sh"
 ```
 
-`GET /v0/exports/iocs.csv` (#22) still exports source addresses only; #13 replaces it with full IOC exports built on this model.
+`GET /v0/exports/iocs.csv` (#22) still exports source addresses only, now with trailing `asn`, `as_org` and `country` columns that only ever hold shareable context (see [ASN context](#asn-context)). #13 replaces it with full IOC exports built on this model.
 
 ## Retention
 
@@ -299,4 +305,4 @@ Redaction, defanging and extraction are linear in the input; there is no regular
 
 - `crates/core/src/ioc.rs`: unit tests for redaction (including a hostile 200,000-character input), defanging and refanging, canary and private address exclusion, payload storage gating, memory-only handling, fingerprint stability across sources and input order, deduplication, confidence and export redaction.
 - `crates/lint/tests/iocs.rs`: golden test. [memory-only.input.json](../testdata/iocs/memory-only.input.json) and [file-drop.input.json](../testdata/iocs/file-drop.input.json) are grouped, extracted and enriched with the fake ASN table; the output must match `testdata/iocs/expected/` (one file per IOC, validated against the schema by `foiled-lint`). It also checks the #34 validation case (IP with ASN, user agent, domain and URL, behaviour fingerprint, no file hash) and that the fixtures cover every type. Regenerate with `FOILED_BLESS=1` and review the diff.
-- `crates/api/tests/iocs.rs`: the three endpoints, tenant isolation, scopes, filters, ASN context and `ioc_refs` on attempts and timelines.
+- `crates/api/tests/iocs.rs`: the three endpoints, tenant isolation, scopes, filters, ASN context, `ioc_refs` on attempts and timelines, the CSV export guard on never-redistribute ASN data, and the refusal of `attempt_ioc` overrides.

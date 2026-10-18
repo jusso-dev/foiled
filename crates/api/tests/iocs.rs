@@ -25,6 +25,15 @@ async fn harness() -> AppState {
         ("analyst", "t1", vec![Scope::IocsRead, Scope::AttemptsRead]),
         ("other", "t2", vec![Scope::IocsRead]),
         ("nobody", "t1", vec![Scope::AttemptsRead]),
+        (
+            "lead",
+            "t1",
+            vec![
+                Scope::AttemptsRead,
+                Scope::AttemptsWrite,
+                Scope::ExportsRead,
+            ],
+        ),
     ] {
         store.add_token(TokenRecord {
             id: id.into(),
@@ -64,6 +73,17 @@ async fn harness() -> AppState {
                 fact("asn.org", json!("Example Hosting")),
                 fact("greynoise.noise", json!(true)),
             ],
+        },
+    );
+    // A provider not on the never-redistribute list, for the export guard.
+    store.add_facts(
+        "t1",
+        ObservedFacts {
+            observable: Observable::ip("203.0.113.50").unwrap(),
+            facts: vec![Fact {
+                provider: "team_asn".into(),
+                ..fact("geo.country", json!("US"))
+            }],
         },
     );
     AppState::new(store, Arc::new(|| T0 + 3_600_000))
@@ -112,10 +132,11 @@ async fn search_lists_tenant_iocs_with_asn_context_and_no_file_hash() {
         .collect();
     assert_eq!(
         keys,
-        vec!["asn.number", "asn.org"],
+        vec!["asn.number", "asn.org", "geo.country"],
         "only ASN and geo facts"
     );
     assert_eq!(src["enrichment"][0]["shareable"], false);
+    assert_eq!(src["enrichment"][2]["shareable"], true);
     assert_eq!(src["display"], "203[.]0[.]113[.]50");
 
     // Another tenant sees nothing; a token without iocs:read is refused.
@@ -236,4 +257,61 @@ async fn attempts_carry_ioc_refs_and_the_attempt_view_explains_the_gap() {
     assert_eq!(st, StatusCode::NOT_FOUND);
     let (st, _) = get(&s, "nobody", &format!("/v0/attempts/{id}/iocs")).await;
     assert_eq!(st, StatusCode::FORBIDDEN);
+}
+
+async fn send(
+    state: &AppState,
+    tok: &str,
+    req: http::request::Builder,
+    body: Body,
+) -> (StatusCode, String) {
+    let req = req
+        .header("authorization", format!("Bearer fo_{tok}.{SECRET}"))
+        .header("content-type", "application/json")
+        .body(body)
+        .unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+#[tokio::test]
+async fn csv_export_keeps_never_redistribute_asn_data_out() {
+    let s = harness().await;
+    let (st, csv) = send(
+        &s,
+        "lead",
+        Request::get("/v0/exports/iocs.csv"),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(csv.lines().next().unwrap().ends_with(",asn,as_org,country"));
+    let row = csv
+        .lines()
+        .find(|l| l.starts_with("ipv4,203.0.113.50,"))
+        .unwrap();
+    // local_asn (ASN 64498, Example Hosting) is never exported; the
+    // shareable team_asn country is.
+    assert!(row.ends_with(",,,US"), "{row}");
+    assert!(!csv.contains("64498") && !csv.contains("Example Hosting"));
+}
+
+#[tokio::test]
+async fn ioc_links_cannot_be_overridden_per_attempt() {
+    let s = harness().await;
+    let (_, b) = get(&s, "analyst", "/v0/attempts").await;
+    let id = items(&b)[0]["attempt_id"].as_str().unwrap().to_string();
+    let body = json!({"kind": "attempt_ioc", "target": "ioc_000000000000000000000000",
+        "feedback": "false_positive", "note": "test"});
+    let (st, text) = send(
+        &s,
+        "lead",
+        Request::post(format!("/v0/attempts/{id}/links")),
+        Body::from(body.to_string()),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{text}");
+    assert!(text.contains("attempt_ioc"));
 }

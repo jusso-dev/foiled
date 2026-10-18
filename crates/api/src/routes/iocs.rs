@@ -14,6 +14,7 @@ use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use foiled_core::auth::Scope;
+use foiled_core::enrichment::{Fact, Observable};
 use foiled_core::ioc::{
     Ioc, IocRole, IocType, MAX_VALUE_CHARS, address_observables, apply_enrichment, refang,
 };
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::Auth;
 use crate::error::ApiError;
-use crate::routes::attempts::{window_bounds, window_model};
+use crate::routes::attempts::{Iocs, window_bounds, window_model};
 use crate::routes::page_limit;
 
 pub fn router() -> Router<AppState> {
@@ -76,13 +77,11 @@ async fn enrich(state: &AppState, tenant_id: &str, iocs: &mut [Ioc]) -> Result<(
     if observables.is_empty() {
         return Ok(());
     }
-    let facts: BTreeMap<_, _> = state
-        .store
-        .enrichment_facts(tenant_id, observables)
-        .await?
-        .into_iter()
-        .map(|o| (o.observable, o.facts))
-        .collect();
+    // The store may answer once per provider for the same observable.
+    let mut facts: BTreeMap<Observable, Vec<Fact>> = BTreeMap::new();
+    for o in state.store.enrichment_facts(tenant_id, observables).await? {
+        facts.entry(o.observable).or_default().extend(o.facts);
+    }
     apply_enrichment(iocs, &facts);
     Ok(())
 }
@@ -108,7 +107,7 @@ async fn search(
     }
     let wanted = q.value.as_deref().map(refang);
     let (since, until) = window_bounds(&state, q.since, q.until);
-    let m = window_model(&state, &who.tenant_id, since, until).await?;
+    let m = window_model(&state, &who.tenant_id, since, until, Iocs::Attach).await?;
     let mut items: Vec<Ioc> = m
         .iocs
         .iocs
@@ -157,7 +156,7 @@ async fn get_one(
         return Err(ApiError::not_found("ioc"));
     }
     let (since, until) = window_bounds(&state, q.since, q.until);
-    let m = window_model(&state, &who.tenant_id, since, until).await?;
+    let m = window_model(&state, &who.tenant_id, since, until, Iocs::Attach).await?;
     let mut found: Vec<Ioc> = m
         .iocs
         .iocs
@@ -179,7 +178,7 @@ async fn for_attempt(
 ) -> Result<Json<AttemptIocList>, ApiError> {
     let who = auth.require(Scope::IocsRead)?;
     let (since, until) = window_bounds(&state, q.since, q.until);
-    let m = window_model(&state, &who.tenant_id, since, until).await?;
+    let m = window_model(&state, &who.tenant_id, since, until, Iocs::Attach).await?;
     let summary = m
         .iocs
         .for_attempt(&attempt_id)
