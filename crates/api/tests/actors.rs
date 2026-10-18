@@ -365,6 +365,13 @@ async fn decisions_are_audited_scoped_and_change_the_link() {
     assert_eq!(rec.target.as_deref(), Some(id.as_str()));
     assert_eq!(rec.actor_id, "reviewer");
     assert_eq!(rec.detail["score_before"], items(&b)[0]["score"]);
+    // The confirmation records the members the analyst saw, and covers
+    // exactly those.
+    assert_eq!(rec.detail["attempt_ids"], items(&b)[0]["attempt_ids"]);
+    assert_eq!(l["confirmed_attempt_ids"], items(&b)[0]["attempt_ids"]);
+    assert_eq!(l["new_since_confirmation"], json!([]));
+    let stored = store.actor_decisions_for_tests();
+    assert_eq!(stored[0].attempt_ids.len(), 2);
 
     // Persisted: later reads see it, and the campaign suggestion says so.
     let (_, c) = get(&s, "analyst", "/v0/campaigns?include=actors").await;
@@ -521,4 +528,59 @@ async fn only_confirmed_actor_links_reach_exports() {
     )
     .await;
     assert!(objects(&bundle, "intrusion-set").is_empty());
+}
+
+#[tokio::test]
+async fn the_review_queue_includes_confirmations_that_do_not_cover_every_member() {
+    let (s, store) = harness().await;
+    let (_, b) = get(&s, "analyst", "/v0/actor-links").await;
+    let l = items(&b)[0].clone();
+    let id = l["link_id"].as_str().unwrap().to_string();
+    // Confirmed through the API: covers every member, so not in the queue.
+    let (st, _) = send(
+        &s,
+        "reviewer",
+        "POST",
+        &format!("/v0/actor-links/{id}/decision"),
+        json!({"decision": "confirm", "note": "Callback host matches the advisory."}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, q) = get(&s, "analyst", "/v0/actor-links?review_queue=true").await;
+    assert!(items(&q).is_empty(), "{q}");
+
+    // A confirmation that covered only one member (or none, as decisions
+    // stored before covered attempts were recorded): back in the queue,
+    // whatever its status, and flagged on the campaign suggestion.
+    let mut d = store.actor_decisions_for_tests().remove(0);
+    d.attempt_ids.truncate(1);
+    store.put_actor_decision("t1", d.clone()).await.unwrap();
+    let (_, q) = get(&s, "analyst", "/v0/actor-links?review_queue=true").await;
+    assert_eq!(items(&q).len(), 1, "{q}");
+    let queued = &items(&q)[0];
+    assert_eq!(queued["status"], "confirmed");
+    assert_eq!(
+        queued["new_since_confirmation"].as_array().unwrap().len(),
+        1
+    );
+    let (_, c) = get(
+        &s,
+        "analyst",
+        &format!("/v0/campaigns/{}", l["subject_id"].as_str().unwrap()),
+    )
+    .await;
+    assert_eq!(c["suggested_actor_links"][0]["review_queue"], true);
+    assert_eq!(c["suggested_actor_links"][0]["status"], "confirmed");
+
+    d.attempt_ids.clear();
+    store.put_actor_decision("t1", d).await.unwrap();
+    let (_, q) = get(&s, "analyst", "/v0/actor-links?review_queue=true").await;
+    assert_eq!(items(&q).len(), 1, "a legacy confirmation needs review");
+    assert_eq!(
+        items(&q)[0]["new_since_confirmation"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }

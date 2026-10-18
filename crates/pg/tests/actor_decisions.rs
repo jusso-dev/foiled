@@ -19,6 +19,7 @@ async fn latest_decision_per_link_wins_and_is_tenant_scoped() {
         analyst_id: "a1".into(),
         at: 1,
         note: "same callback host".into(),
+        attempt_ids: vec!["att_1".into(), "att_2".into()],
     };
     put_actor_decision(&c, &tenant, &row).await.unwrap();
     row.feedback = "false_positive".into();

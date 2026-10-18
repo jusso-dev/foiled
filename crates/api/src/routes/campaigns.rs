@@ -548,9 +548,7 @@ async fn act(
             &state,
             &who.tenant_id,
             std::slice::from_mut(c),
-            &[],
-            &m.iocs,
-            &inputs,
+            crate::routes::actors::Window::campaigns_of(&m, &inputs),
         )
         .await?;
     }

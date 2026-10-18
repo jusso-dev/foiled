@@ -1219,6 +1219,7 @@ impl Store for CfStore {
                             at: r.at,
                             note: r.note,
                         },
+                        attempt_ids: r.attempt_ids,
                     })
                 })
                 .collect())
@@ -1244,6 +1245,7 @@ impl Store for CfStore {
                 analyst_id: d.decision.analyst_id,
                 at: d.decision.at,
                 note: d.decision.note,
+                attempt_ids: d.attempt_ids,
             };
             let client = self.pg().await?;
             foiled_pg::put_actor_decision(&client, &t, &row)

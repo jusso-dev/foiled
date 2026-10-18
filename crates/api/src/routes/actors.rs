@@ -9,9 +9,12 @@
 //! publishes without an analyst. Only the decisions are stored. Every route
 //! is scoped to the caller's tenant.
 //!
-//! The review queue (#35) lists pending links with
-//! `GET /v0/actor-links?status=pending&review_queue=true` (or
-//! [`actor_model`]) and records decisions through [`record_decision`].
+//! The review queue (#35) lists every link that needs analyst attention
+//! with `GET /v0/actor-links?review_queue=true` (no `status` filter: a
+//! confirmed link with new members needs review too), or from
+//! [`actor_model`] filtered on `ActorLink::review_queue`, or from
+//! `Campaign::suggested_actor_links` filtered on `review_queue`, and records
+//! decisions through [`record_decision`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,6 +28,7 @@ use foiled_core::actor::{
 use foiled_core::attempt::Attempt;
 use foiled_core::auth::{Principal, Scope};
 use foiled_core::campaign::Campaign;
+use foiled_core::capture::CaptureEvent;
 use foiled_core::confidence::{ConfidenceConfig, Override};
 use foiled_core::ioc::Extraction;
 use serde::{Deserialize, Serialize};
@@ -164,11 +168,35 @@ pub(crate) struct ActorModel {
     pub links: Vec<ActorLink>,
     pub truncated: bool,
     subjects: Vec<Subject>,
-    decisions: BTreeMap<(String, String), Override>,
+    decisions: BTreeMap<(String, String), ActorDecision>,
 }
 
-/// Match campaigns (and, when `attempts` is not empty, the lone attempts
-/// among them) against the catalogue and fill `suggested_actor_links` on
+/// What [`match_window`] reads from a window model.
+#[derive(Clone, Copy)]
+pub(crate) struct Window<'a> {
+    pub attempts: &'a [Attempt],
+    /// Also match attempts in no listed campaign.
+    pub lone_attempts: bool,
+    pub events: &'a [CaptureEvent],
+    pub iocs: &'a Extraction,
+    pub inputs: &'a ClusterInputs,
+}
+
+impl<'a> Window<'a> {
+    /// Campaigns only, from a full window model.
+    pub(crate) fn campaigns_of(m: &'a WindowModel, inputs: &'a ClusterInputs) -> Self {
+        Window {
+            attempts: &m.attempts,
+            lone_attempts: false,
+            events: &m.events,
+            iocs: &m.iocs,
+            inputs,
+        }
+    }
+}
+
+/// Match campaigns (and, with `lone_attempts`, the attempts in none of
+/// them) against the catalogue and fill `suggested_actor_links` on
 /// `campaigns`. Store reads (source countries for the explanation, and
 /// analyst decisions) happen only for subjects that matched a profile, so
 /// a window with no candidate costs no extra read.
@@ -176,14 +204,12 @@ pub(crate) async fn match_window(
     state: &AppState,
     tenant_id: &str,
     campaigns: &mut [Campaign],
-    attempts: &[Attempt],
-    iocs: &Extraction,
-    inputs: &ClusterInputs,
+    w: Window<'_>,
 ) -> Result<
     (
         Vec<ActorLink>,
         Vec<Subject>,
-        BTreeMap<(String, String), Override>,
+        BTreeMap<(String, String), ActorDecision>,
     ),
     ApiError,
 > {
@@ -191,11 +217,13 @@ pub(crate) async fn match_window(
     let all = actor::subjects(&SubjectInput {
         tenant_id,
         campaigns,
-        attempts,
-        signals: &inputs.signals,
-        iocs,
-        asns: &inputs.asns,
+        attempts: w.attempts,
+        lone_attempts: w.lone_attempts,
+        signals: &w.inputs.signals,
+        iocs: w.iocs,
+        asns: &w.inputs.asns,
         countries: &BTreeMap::new(),
+        events: w.events,
     });
     let first = actor::suggest(&state.actors, &cfg, &all, &BTreeMap::new());
     let linked: BTreeSet<&str> = first.iter().map(|l| l.subject_id.as_str()).collect();
@@ -217,12 +245,12 @@ pub(crate) async fn match_window(
     for s in subjects.iter_mut() {
         s.set_countries(&countries);
     }
-    let decisions: BTreeMap<(String, String), Override> = state
+    let decisions: BTreeMap<(String, String), ActorDecision> = state
         .store
         .actor_decisions(tenant_id, subjects.iter().map(|s| s.id.clone()).collect())
         .await?
         .into_iter()
-        .map(|d| ((d.subject_id, d.actor_id), d.decision))
+        .map(|d| ((d.subject_id.clone(), d.actor_id.clone()), d))
         .collect();
     let links = actor::suggest(&state.actors, &cfg, &subjects, &decisions);
     actor::attach_suggestions(campaigns, &links);
@@ -281,9 +309,7 @@ pub(crate) async fn attach_to_campaign(
         state,
         tenant_id,
         std::slice::from_mut(campaign),
-        &[],
-        &m.iocs,
-        inputs,
+        Window::campaigns_of(m, inputs),
     )
     .await?;
     Ok(())
@@ -297,18 +323,20 @@ pub(crate) async fn attach_to_model(
     tenant_id: &str,
     m: &mut WindowModel,
 ) -> Result<(), ApiError> {
-    let Some(inputs) = m.inputs.as_ref() else {
+    let Some(inputs) = m.inputs.take() else {
         return Ok(());
     };
-    match_window(
+    let mut campaigns = std::mem::take(&mut m.campaigns.campaigns);
+    let r = match_window(
         state,
         tenant_id,
-        &mut m.campaigns.campaigns,
-        &[],
-        &m.iocs,
-        inputs,
+        &mut campaigns,
+        Window::campaigns_of(m, &inputs),
     )
-    .await?;
+    .await;
+    m.campaigns.campaigns = campaigns;
+    m.inputs = Some(inputs);
+    r?;
     Ok(())
 }
 
@@ -334,13 +362,15 @@ pub(crate) async fn actor_model(
     )
     .await?;
     let inputs = m.inputs.take().expect("full model has inputs");
+    let mut campaigns = std::mem::take(&mut m.campaigns.campaigns);
     let (links, subjects, decisions) = match_window(
         state,
         tenant_id,
-        &mut m.campaigns.campaigns,
-        &m.attempts,
-        &m.iocs,
-        &inputs,
+        &mut campaigns,
+        Window {
+            lone_attempts: true,
+            ..Window::campaigns_of(&m, &inputs)
+        },
     )
     .await?;
     Ok(ActorModel {
@@ -368,8 +398,9 @@ pub struct LinkQuery {
     /// A campaign or attempt id.
     pub subject_id: Option<String>,
     pub actor_id: Option<String>,
-    /// Only links the review queue should show (#35): pending and at or
-    /// above `radar_queue_min`.
+    /// Only links that need analyst attention (#35), whatever their
+    /// status: pending at or above `radar_queue_min`, or confirmed with
+    /// attempts the confirmation does not cover.
     pub review_queue: Option<bool>,
     /// 0 to 100.
     pub min_confidence: Option<u8>,
@@ -518,6 +549,9 @@ pub(crate) async fn record_decision(
                 subject_id: before.subject_id.clone(),
                 actor_id: before.actor_id.clone(),
                 decision: o.clone(),
+                // What the analyst saw: a confirmation covers these attempts
+                // only, never ones that join the campaign later.
+                attempt_ids: before.attempt_ids.clone(),
             },
         )
         .await?;
@@ -538,10 +572,18 @@ pub(crate) async fn record_decision(
         "band_before": before.band,
         "decision": decision,
         "note": note,
+        "attempt_ids": before.attempt_ids,
     });
     state.store.append_audit(rec).await?;
-    m.decisions
-        .insert((before.subject_id.clone(), before.actor_id.clone()), o);
+    m.decisions.insert(
+        (before.subject_id.clone(), before.actor_id.clone()),
+        ActorDecision {
+            subject_id: before.subject_id.clone(),
+            actor_id: before.actor_id.clone(),
+            decision: o,
+            attempt_ids: before.attempt_ids.clone(),
+        },
+    );
     let subject: Vec<Subject> = m
         .subjects
         .into_iter()
