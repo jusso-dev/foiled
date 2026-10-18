@@ -31,7 +31,10 @@ Every binding the Workers use, with the issue that owns the code that reads or w
 | `foiled-api` | `DB` | D1 database | `foiled-config` | #21 (also #5 catalogue, #31 sensor and host registry) | Config, decoy catalogue, tenants, users and roles, sensor and host registry with certificate fingerprints. |
 | `foiled-api` | `HYPERDRIVE` | Hyperdrive config | `foiled-pg` | #25 (also #21 audit, #27, #33, #34, #35) | Pooled connection to Postgres: attempts, IOCs, campaigns, confidence evidence, review queue, audit log, radar rollups. |
 | `foiled-api` | `INGEST` | Queue producer | `foiled-ingest` | #9 (envelope format), #31 (ingest auth) | Accepted capture envelopes and attempt summaries from hosts and sensors, and correlation jobs (#28). |
-| `foiled-api` | (consumer, no binding name) | Queue consumer | `foiled-ingest`, dead letters to `foiled-ingest-dlq` | #9 | Validates and writes envelopes to Postgres, fans out to `LIVE_STREAM` and `RADAR`. |
+| `foiled-api` | (consumer, no binding name) | Queue consumer | `foiled-ingest`, dead letters to `foiled-ingest-dlq` | #9 | Validates and writes envelopes to Postgres, fans out to `LIVE_STREAM` and `RADAR`, and sends observables to `ENRICH`. |
+| `foiled-api` | `ENRICH` | Queue producer | `foiled-enrich` | #11 | Observables to enrich, one message per tenant and observable ([enrichment.md](../enrichment.md#pipeline)). |
+| `foiled-api` | (consumer, no binding name) | Queue consumer | `foiled-enrich`, dead letters to `foiled-enrich-dlq` | #11 | Answers `local_asn` and asks ThreatSieve in batched lookups within D1 rate-limit budgets, and writes `enrich_cache`. The same Worker serves both queues and dispatches on the queue name. |
+| `foiled-api` | `THREATSIEVE` | Service Binding to ThreatSieve | `threatsieve-api-production` | #11 | `POST /v1/lookup`, the only external intel call ([enrichment.md](../enrichment.md#threatsieve)). Optional: without it, enrichment runs on `local_asn` alone. |
 | `foiled-api` | `EVIDENCE` | R2 bucket | `foiled-evidence` | #9 (retention #16) | Pcaps, file diffs, quarantined payloads and export bundles by `payload_ref`. Private: no public bucket URL, no custom domain. |
 | `foiled-api` | `LIVE_STREAM` | Durable Object namespace (class `LiveStream`) | migration tag `v1` | #14 | Live attempt stream to console clients over hibernating WebSockets. |
 | `foiled-api` | `AI` | Workers AI, called through AI Gateway (`AI_GATEWAY_ID` var) | gateway created in the dashboard | #28 | LLM correlation, with the logging policy from #16 and #28. |
@@ -64,7 +67,7 @@ Proposed names. The owning issue finalises each one.
 | `foiled-api` | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | #9 | R2 API token, scoped to the `foiled-evidence` bucket with object read and write only, used to mint short-lived single-object upload URLs. The R2 binding cannot presign. |
 | `foiled-api` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #21, #14 | Validate Cloudflare Access JWTs in the Worker. Not strictly secret, but they identify your account, so they stay out of the tree. |
 | `foiled-api` | `TOKEN_PEPPER` | #21 | Pepper for hashing API tokens at rest in D1. |
-| `foiled-api` | One secret per enrichment provider | #11 | Provider API keys. Names set in #11. |
+| `foiled-api` | `THREATSIEVE_API_KEY` | #11 | A ThreatSieve API key with scope `intel:read` only. Read by the `foiled-enrich` consumer and sent only over the `THREATSIEVE` Service Binding as a bearer token. Source keys (GreyNoise, CrowdSec and so on) live in ThreatSieve, not here ([enrichment.md](../enrichment.md#deploying-the-consumer)). |
 | `foiled-api` | `LLM_PROVIDER_API_KEY` (if an external model is used) | #28 | Key for an external model behind AI Gateway. |
 | `foiled-api` | `SHODAN_API_KEY` (optional) | #18 | Operator-supplied Shodan key for the Honeyscore self-check. Only set it if you enable the check ([fingerprint-resistance.md](../fingerprint-resistance.md)). |
 | `foiled-web` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #14 | Same Access check in the console Worker. |
@@ -106,6 +109,8 @@ export CLOUDFLARE_API_TOKEN=...       # scoped deploy token; never committed
    wrangler r2 bucket create foiled-evidence
    wrangler queues create foiled-ingest
    wrangler queues create foiled-ingest-dlq
+   wrangler queues create foiled-enrich
+   wrangler queues create foiled-enrich-dlq
    read -rs PG_URL   # paste the Postgres connection string; not echoed or saved to history
    wrangler hyperdrive create foiled-pg --connection-string="$PG_URL"
    unset PG_URL

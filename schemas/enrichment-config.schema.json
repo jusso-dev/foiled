@@ -2,12 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jusso-dev/foiled/schemas/enrichment-config.schema.json",
   "title": "Foiled enrichment config",
-  "description": "Enrichment providers, key variable names, cache TTLs and rate limits (#11). See docs/enrichment.md. Keys are never stored here, only the names of the Worker secrets that hold them.",
+  "description": "Enrichment: the local ASN table, the ThreatSieve lookup hub, cache TTLs and rate limits (#11). See docs/enrichment.md. Keys are never stored here, only the names of the Worker secrets that hold them.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "queue", "cache", "show_to_tenants", "providers"],
+  "required": [
+    "version",
+    "queue",
+    "cache",
+    "show_to_tenants",
+    "providers"
+  ],
   "properties": {
-    "version": { "const": 1 },
+    "version": {
+      "const": 1
+    },
     "queue": {
       "type": "string",
       "pattern": "^[a-z0-9-]{1,63}$",
@@ -16,9 +24,16 @@
     "cache": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["store", "negative_ttl_secs", "error_backoff_secs"],
+      "required": [
+        "store",
+        "negative_ttl_secs",
+        "error_backoff_secs"
+      ],
       "properties": {
-        "store": { "const": "d1", "description": "Cache rows and rate limit counters live in D1." },
+        "store": {
+          "const": "d1",
+          "description": "Cache rows and rate limit counters live in D1."
+        },
         "negative_ttl_secs": {
           "type": "integer",
           "minimum": 0,
@@ -33,31 +48,23 @@
     },
     "show_to_tenants": {
       "type": "boolean",
-      "description": "When false, third-party Facts are visible to operator roles only."
+      "description": "When false, Facts from third-party providers are left out of API responses. Provenance-checked ThreatSieve answers and a tenant's own restricted answers are still shown (docs/enrichment.md)."
     },
     "providers": {
       "type": "object",
       "additionalProperties": false,
       "description": "Every provider must also have a row in docs/compliance/licence-register.md, so no unlisted provider is accepted.",
-      "required": ["local_asn", "greynoise", "crowdsec", "dshield", "shadowserver", "huntio", "abuseipdb"],
+      "required": [
+        "local_asn",
+        "threatsieve"
+      ],
       "properties": {
-        "local_asn": { "$ref": "#/$defs/local_provider" },
-        "greynoise": { "$ref": "#/$defs/http_provider" },
-        "crowdsec": { "$ref": "#/$defs/http_provider" },
-        "dshield": {
-          "allOf": [
-            { "$ref": "#/$defs/http_provider" },
-            { "required": ["user_agent_env"] }
-          ]
+        "local_asn": {
+          "$ref": "#/$defs/local_provider"
         },
-        "shadowserver": {
-          "allOf": [
-            { "$ref": "#/$defs/http_provider" },
-            { "required": ["api_key_env", "api_secret_env"] }
-          ]
-        },
-        "huntio": { "$ref": "#/$defs/http_provider" },
-        "abuseipdb": { "$ref": "#/$defs/http_provider" }
+        "threatsieve": {
+          "$ref": "#/$defs/threatsieve_provider"
+        }
       }
     }
   },
@@ -71,7 +78,15 @@
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
-      "items": { "enum": ["ip", "domain", "sha256", "url"] }
+      "items": {
+        "enum": [
+          "ip",
+          "domain",
+          "sha256",
+          "url",
+          "cve"
+        ]
+      }
     },
     "ttl_secs": {
       "type": "integer",
@@ -82,47 +97,96 @@
     "local_provider": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "observables", "dataset_key", "ttl_secs"],
+      "required": [
+        "enabled",
+        "observables",
+        "dataset_key",
+        "ttl_secs"
+      ],
       "properties": {
-        "enabled": { "type": "boolean" },
-        "observables": { "$ref": "#/$defs/observables" },
+        "enabled": {
+          "type": "boolean"
+        },
+        "observables": {
+          "$ref": "#/$defs/observables"
+        },
         "dataset_key": {
           "type": "string",
           "pattern": "^[A-Za-z0-9._/-]+$",
           "description": "R2 object key of the operator-supplied start_ip,end_ip,asn,org,country CSV."
         },
-        "ttl_secs": { "$ref": "#/$defs/ttl_secs" }
+        "ttl_secs": {
+          "$ref": "#/$defs/ttl_secs"
+        }
       }
     },
-    "http_provider": {
+    "threatsieve_provider": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "observables", "api_key_required", "ttl_secs", "rate_limit"],
+      "required": [
+        "enabled",
+        "observables",
+        "binding",
+        "api_key_env",
+        "include",
+        "ttl_secs",
+        "batch_size",
+        "rate_limit"
+      ],
       "properties": {
-        "enabled": { "type": "boolean" },
-        "observables": { "$ref": "#/$defs/observables" },
-        "endpoint": {
-          "type": "string",
-          "pattern": "^https://",
-          "description": "HTTPS URL template. {ip}, {domain}, {sha256} or {url} is replaced with the encoded observable."
+        "enabled": {
+          "type": "boolean"
         },
-        "api_key_env": { "$ref": "#/$defs/env_name" },
-        "api_secret_env": { "$ref": "#/$defs/env_name" },
-        "user_agent_env": { "$ref": "#/$defs/env_name" },
-        "api_key_required": { "type": "boolean" },
-        "ttl_secs": { "$ref": "#/$defs/ttl_secs" },
+        "observables": {
+          "$ref": "#/$defs/observables"
+        },
+        "binding": {
+          "$ref": "#/$defs/env_name",
+          "description": "Cloudflare service binding to the ThreatSieve API Worker."
+        },
+        "api_key_env": {
+          "$ref": "#/$defs/env_name"
+        },
+        "include": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "reputation",
+              "network",
+              "cve",
+              "relationships"
+            ]
+          }
+        },
+        "ttl_secs": {
+          "$ref": "#/$defs/ttl_secs"
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
         "rate_limit": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["per_minute", "per_day"],
+          "required": [
+            "per_minute",
+            "per_day"
+          ],
           "properties": {
-            "per_minute": { "type": "integer", "minimum": 1 },
-            "per_day": { "type": "integer", "minimum": 1 }
+            "per_minute": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "per_day": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         }
-      },
-      "if": { "properties": { "api_key_required": { "const": true } } },
-      "then": { "required": ["api_key_env"] }
+      }
     }
   }
 }

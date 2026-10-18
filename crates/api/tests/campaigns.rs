@@ -80,6 +80,7 @@ async fn harness() -> (AppState, Arc<MemoryStore>) {
                 ttl_secs: 604_800,
                 raw_ref: None,
             }],
+            tenant_id: None,
         });
     }
     let mut state = AppState::new(store.clone(), Arc::new(move || now));

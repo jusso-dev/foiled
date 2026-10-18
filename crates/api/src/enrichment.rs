@@ -34,6 +34,20 @@ pub fn bundled_retention() -> &'static RetentionConfig {
     PARSED.get_or_init(|| serde_json::from_str(RETENTION).unwrap_or_default())
 }
 
+/// `configs/enrichment.yaml` as bundled at build time, or `None` when it
+/// does not parse or has problems. `None` switches the `foiled-enrich`
+/// consumer off rather than running it with unknown limits.
+pub fn bundled_enrich_config() -> Option<&'static foiled_core::enrich_pipeline::EnrichConfig> {
+    static PARSED: OnceLock<Option<foiled_core::enrich_pipeline::EnrichConfig>> = OnceLock::new();
+    PARSED
+        .get_or_init(|| {
+            serde_json::from_str::<foiled_core::enrich_pipeline::EnrichConfig>(ENRICHMENT)
+                .ok()
+                .filter(|c| c.problems().is_empty())
+        })
+        .as_ref()
+}
+
 /// `show_to_tenants` from the bundled `configs/enrichment.yaml`. Anything
 /// but an explicit `true` keeps third-party Facts hidden.
 pub fn show_third_party_to_tenants() -> bool {
@@ -75,7 +89,11 @@ impl CachedFacts {
 /// budget in `Limits::enrichment_lookup_statements` runs out, the oldest
 /// are left without context). One store call. A store failure is logged by
 /// the store and turned into `unavailable`, never into an error.
-pub async fn cached_facts(state: &AppState, observables: Vec<Observable>) -> CachedFacts {
+pub async fn cached_facts(
+    state: &AppState,
+    tenant_id: &str,
+    observables: Vec<Observable>,
+) -> CachedFacts {
     if observables.is_empty() {
         return CachedFacts::default();
     }
@@ -86,6 +104,7 @@ pub async fn cached_facts(state: &AppState, observables: Vec<Observable>) -> Cac
             observables,
             now_ms,
             state.limits.enrichment_lookup_statements,
+            Some(tenant_id.to_string()),
         )
         .await
     {
@@ -99,6 +118,7 @@ pub async fn cached_facts(state: &AppState, observables: Vec<Observable>) -> Cac
     };
     let policy = ReadPolicy {
         now_ms,
+        tenant_id: Some(tenant_id),
         show_third_party: show_third_party_to_tenants(),
     };
     CachedFacts {
@@ -121,5 +141,7 @@ mod tests {
             *bundled_retention()
         );
         assert!(!show_third_party_to_tenants(), "shipped value");
+        let c = bundled_enrich_config().expect("shipped config parses");
+        assert_eq!(c.queue, "foiled-enrich");
     }
 }

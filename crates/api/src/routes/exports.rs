@@ -580,7 +580,7 @@ async fn iocs_csv(
         .iter()
         .filter_map(|r| Observable::ip(&r.ip).ok())
         .collect();
-    let cached = crate::enrichment::cached_facts(&state, observables).await;
+    let cached = crate::enrichment::cached_facts(&state, &who.tenant_id, observables).await;
     let headers = cached.headers();
     let context: ExportContext = cached
         .facts

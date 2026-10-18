@@ -79,7 +79,7 @@ pub struct AttemptIocList {
 /// cache cannot be read the IOCs go out without context, flagged.
 pub(crate) async fn enrich(
     state: &AppState,
-    _tenant_id: &str,
+    tenant_id: &str,
     iocs: &mut [Ioc],
 ) -> crate::enrichment::CachedFacts {
     // Newest first, so a tight lookup budget drops the oldest.
@@ -89,7 +89,7 @@ pub(crate) async fn enrich(
         .into_iter()
         .flat_map(|i| address_observables(std::slice::from_ref(i)))
         .collect();
-    let cached = crate::enrichment::cached_facts(state, observables).await;
+    let cached = crate::enrichment::cached_facts(state, tenant_id, observables).await;
     apply_enrichment(iocs, &cached.facts);
     cached
 }

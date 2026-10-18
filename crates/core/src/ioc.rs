@@ -1563,6 +1563,33 @@ pub fn extract(
     }
 }
 
+/// The enrichable observables an event's IOCs name, without needing its
+/// attempt: addresses, domains (including DNS queries), URLs and payload
+/// and file hashes, by the same rules as [`extract`] (private and decoy
+/// addresses, local names and canaries are never included). Used to feed
+/// the `foiled-enrich` queue (#11) from the ingest consumer.
+pub fn event_observables(e: &CaptureEvent) -> Vec<Observable> {
+    let mut cands = Vec::new();
+    candidates(e, ExtractOptions::default(), &mut cands);
+    let mut out: Vec<Observable> = cands
+        .iter()
+        .filter_map(|c| {
+            let kind = match c.ty {
+                IocType::Ip | IocType::Ipv6 => ObservableKind::Ip,
+                IocType::Domain | IocType::DnsQuery => ObservableKind::Domain,
+                IocType::Url => ObservableKind::Url,
+                IocType::PayloadSha256 | IocType::FileSha256 => ObservableKind::Sha256,
+                _ => return None,
+            };
+            Observable::new(kind, &c.value).ok()
+        })
+        .filter(Observable::is_external_lookup_eligible)
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Fill `ioc_refs` on each attempt from an extraction over the same
 /// attempts.
 pub fn attach_refs(attempts: &mut [Attempt], extraction: &Extraction) {

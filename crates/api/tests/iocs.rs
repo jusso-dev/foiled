@@ -71,6 +71,7 @@ async fn harness() -> AppState {
             fetched_at,
             ttl_secs,
             facts,
+            tenant_id: None,
         };
     // As the foiled-enrich consumer leaves them in D1 (#11).
     store.add_cache_entry(row(

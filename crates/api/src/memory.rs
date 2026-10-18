@@ -7,12 +7,14 @@ use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, agent_scopes};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
+use foiled_core::enrich_pipeline::ProviderFailureRecord;
 use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
 
 use crate::store::{
-    AgentCerts, AgentQuery, AuditQuery, DecoyQuery, EnrolmentTokenRecord, IdentityRecord, IpIocRow,
-    JobRecord, LinkOverride, NewCert, Store, StoreError, StoreFuture, TokenRecord,
+    AgentCerts, AgentQuery, AuditQuery, BudgetOutcome, DecoyQuery, EnrolmentTokenRecord,
+    IdentityRecord, IpIocRow, JobRecord, LinkOverride, NewCert, Store, StoreError, StoreFuture,
+    TokenRecord,
 };
 
 #[derive(Default)]
@@ -33,6 +35,8 @@ struct Inner {
     fail_audit_action: Option<String>,
     cache: Vec<CacheEntry>,
     fail_enrichment: bool,
+    budget: HashMap<(String, &'static str, i64), u32>,
+    failures: Vec<ProviderFailureRecord>,
     agents: Vec<AgentRecord>,
     enrolment_tokens: Vec<EnrolmentTokenRecord>,
     /// CA reference for each bound certificate, by fingerprint.
@@ -106,14 +110,19 @@ impl MemoryStore {
         }
     }
 
-    /// An enrichment cache row, as the `foiled-enrich` consumer would leave
-    /// it in D1 (#11). Replaces the row for the same provider and
-    /// observable.
     /// Make enrichment cache reads fail, to test graceful degradation.
     pub fn fail_enrichment_reads(&self) {
         self.lock().fail_enrichment = true;
     }
 
+    /// Every enrichment cache row, for tests.
+    pub fn cache_entries(&self) -> Vec<CacheEntry> {
+        self.lock().cache.clone()
+    }
+
+    /// An enrichment cache row, as the `foiled-enrich` consumer would leave
+    /// it in D1 (#11). Replaces the row for the same provider and
+    /// observable.
     pub fn add_cache_entry(&self, entry: CacheEntry) {
         let mut g = self.lock();
         g.cache.retain(|e| e.key() != entry.key());
@@ -464,6 +473,7 @@ impl Store for MemoryStore {
         observables: Vec<Observable>,
         now_ms: i64,
         max_statements: usize,
+        tenant_id: Option<String>,
     ) -> StoreFuture<'_, Vec<CacheEntry>> {
         // The same plan and rows as the D1 store: the observables the
         // statement budget covers, matching rows that are still fresh.
@@ -481,9 +491,101 @@ impl Store for MemoryStore {
             .cache
             .iter()
             .filter(|e| wanted(e) && e.is_fresh(now_ms))
+            .filter(|e| e.tenant_id.is_none() || e.tenant_id == tenant_id)
             .cloned()
             .collect();
         ready(Ok(out))
+    }
+
+    fn upsert_enrich_cache(&self, entry: CacheEntry) -> StoreFuture<'_, ()> {
+        if self.lock().fail_enrichment {
+            return ready(Err(StoreError("enrichment cache unavailable".into())));
+        }
+        self.add_cache_entry(entry);
+        ready(Ok(()))
+    }
+
+    fn take_enrich_budget(
+        &self,
+        provider: &str,
+        now_ms: i64,
+        per_minute: u32,
+        per_day: u32,
+    ) -> StoreFuture<'_, BudgetOutcome> {
+        let (minute, day) = crate::d1_sql::budget_windows(now_ms);
+        let mut g = self.lock();
+        let m = g
+            .budget
+            .entry((provider.to_string(), "minute", minute))
+            .or_default();
+        if *m >= per_minute {
+            return ready(Ok(BudgetOutcome::MinuteSpent));
+        }
+        *m += 1;
+        let d = g
+            .budget
+            .entry((provider.to_string(), "day", day))
+            .or_default();
+        if *d >= per_day {
+            // Give the minute unit back, as the D1 store does.
+            if let Some(m) = g.budget.get_mut(&(provider.to_string(), "minute", minute)) {
+                *m -= 1;
+            }
+            return ready(Ok(BudgetOutcome::DaySpent));
+        }
+        *d += 1;
+        ready(Ok(BudgetOutcome::Taken))
+    }
+
+    fn enrich_failures(
+        &self,
+        observable: Observable,
+    ) -> StoreFuture<'_, Vec<ProviderFailureRecord>> {
+        let out = self
+            .lock()
+            .failures
+            .iter()
+            .filter(|f| f.observable == observable)
+            .cloned()
+            .collect();
+        ready(Ok(out))
+    }
+
+    fn record_enrich_failure(
+        &self,
+        provider: &str,
+        observable: Observable,
+        now_ms: i64,
+        _error: String,
+        retry_at: Option<i64>,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        match g
+            .failures
+            .iter_mut()
+            .find(|f| f.provider == provider && f.observable == observable)
+        {
+            Some(f) => {
+                f.failures += 1;
+                f.last_failed_at = now_ms;
+                f.retry_at = retry_at;
+            }
+            None => g.failures.push(ProviderFailureRecord {
+                provider: provider.to_string(),
+                observable,
+                failures: 1,
+                last_failed_at: now_ms,
+                retry_at,
+            }),
+        }
+        ready(Ok(()))
+    }
+
+    fn clear_enrich_failure(&self, provider: &str, observable: Observable) -> StoreFuture<'_, ()> {
+        self.lock()
+            .failures
+            .retain(|f| !(f.provider == provider && f.observable == observable));
+        ready(Ok(()))
     }
 
     fn events_between(
