@@ -12,7 +12,7 @@ One exploit attempt against a decoy: the record that groups related capture even
 A stable id computed over a normalised sequence of attacker steps or vulnerable-path hook hits, plus key arguments. Used as an IOC when there is no file hash to share, for example with memory-only implants (#34), and as a mapping tier signal (#12).
 
 **Campaign**
-A cluster of attempts across the decoy fleet that share infrastructure, payloads or behaviour, suggesting one operator or tool (#33).
+A cluster of attempts across the decoy fleet that share infrastructure, payloads, behaviour or targeting closely enough to look like one wave of activity. Worded "possible" until an analyst confirms; never attribution ([campaigns.md](campaigns.md), #33).
 
 **Canary**
 A planted value, such as a fake credential or token inside a decoy, that has no use except as a tripwire. If it is used outside the sandbox, that is a high-confidence signal that data was stolen. Canaries are never real credentials for anything that matters (#17, [canaries.md](canaries.md)).

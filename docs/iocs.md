@@ -48,7 +48,7 @@ The contract is [`schemas/ioc.schema.json`](../schemas/ioc.schema.json). The cod
 | `file_ioc_limited` | True when an attempt this was seen in reached post-exploitation without a captured file. See [memory-only implants](#memory-only-implants). |
 | `first_seen`, `last_seen` | Unix ms, over the sightings in the window. |
 | `sightings` | Capture events the value was seen in; attempts, for a behaviour fingerprint. |
-| `attempt_ids`, `campaign_ids` | The attempts (#25) and campaigns (#33) it was seen in. `campaign_ids` stays empty until campaigns exist. |
+| `attempt_ids`, `campaign_ids` | The attempts (#25) and campaigns ([campaigns.md](campaigns.md), #33) it was seen in. |
 | `decoy_ids`, `catalogue_ids` | Where it was seen. |
 | `event_ids` | Up to 32 capture event ids, oldest first. |
 | `extracted_from` | `channel:field` pairs the value was read from, for example `egress:data.host` or `hook:hook.cmd_lines`. |
@@ -297,7 +297,7 @@ IOCs are derived, not stored: they are recomputed from live capture events, so o
 ## For exports, campaigns and the radar
 
 - **Exports (#13)** consume `Ioc` as is: map `type` to STIX observables or MISP attribute types, emit `display` in human formats and `value` in machine formats, call `redact_for_export`, carry `file_ioc_limited` and the attempt notes, and use `confidence.wording`. `redacted: true` values must not be presented as byte-exact.
-- **Campaigns (#33)** cluster on shared `ioc_id`s (stable across tenants and windows), especially `behaviour_fingerprint`, `payload_sha256`, `url` and `domain`, and write `campaign_id` on attempts, which flows into `campaign_ids`.
+- **Campaigns (#33)** cluster on shared IOCs, especially `payload_sha256`, `file_sha256`, stage-2 `url`, callback `domain` and address, `behaviour_fingerprint` and `cmdline`, write `campaign_id` on attempts, and fill `campaign_ids` from those attempts ([campaigns.md](campaigns.md#features)).
 - **Radar (#35) and contribute-back (#37)** release only `origin: observed` IOCs with `confidence.publishable`, after `redact_for_export`, the delay and TLP rules, and the canary and secret checks in [contribute-back.md](contribute-back.md#what-a-released-ioc-contains).
 
 ## Limits

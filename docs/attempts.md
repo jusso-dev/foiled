@@ -17,7 +17,7 @@ The contract is [`schemas/attempt.schema.json`](../schemas/attempt.schema.json).
 | `event_ids`, `payload_refs` | The capture events and R2 objects that make up the attempt. |
 | `hook_hits` | Vulnerable-path hooks that fired (#32), with stage and CVE id. |
 | `ioc_refs` | Ids of the IOCs extracted from the attempt, in order of first appearance ([iocs.md](iocs.md), #34). Filled by the API read model; `attempt::build` alone leaves it empty. |
-| `campaign_id` | Filled by #33. |
+| `campaign_id` | The campaign the attempt was clustered into, or null ([campaigns.md](campaigns.md), #33). Filled by the API read model from the same window; `attempt::build` alone leaves it null. |
 | `labels` | Analyst labels. |
 | `noise` | Targeted versus mass score for the source (below). |
 
@@ -26,7 +26,7 @@ The contract is [`schemas/attempt.schema.json`](../schemas/attempt.schema.json).
 1. Sort the tenant's events by time, then event id.
 2. **Attacker-facing events** (`network`, `application`, `hook` channels) are keyed by decoy and source address. A new attempt starts when the same source has been quiet on the same decoy for more than the idle gap (default 30 minutes).
 3. **Guest-side events** (`egress`, `dns`, `filesystem`, `process`, `quarantine`) come from inside the decoy, so their `src` is the guest. They join the most recently active attempt on the same decoy within the idle gap. If there is none, they are reported as orphans rather than dropped.
-4. Attempts stay per decoy. Cross-decoy and cross-sensor grouping is the campaign layer (#33).
+4. Attempts stay per decoy. Cross-decoy and cross-sensor grouping is the campaign layer ([campaigns.md](campaigns.md), #33).
 
 Examples, both in the [golden test](../testdata/attempts/demo-fleet.input.json):
 
@@ -81,4 +81,5 @@ Attempts are a read model built on request from Postgres capture events over a b
 - [attempt-timeline.md](attempt-timeline.md): timeline and pcap extract for one attempt (#10).
 - #12 CVE tiers, #26 ATT&CK techniques, #27 confidence, #28 LLM, #29 actors: links per attempt.
 - [iocs.md](iocs.md): IOCs extracted from attempts (#34).
-- #32 hooks, #33 campaigns.
+- [campaigns.md](campaigns.md): attempts clustered across decoys and sensors (#33).
+- #32 hooks.

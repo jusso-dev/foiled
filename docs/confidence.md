@@ -18,7 +18,7 @@ The model is deterministic: the same evidence and config always give the same sc
 | `predisclosure_backmatch` | #12 tier 4 | Traffic seen before the advisory matched it later |
 | `enrichment` | #11 | CrowdSec reports the source exploiting this CVE |
 | `llm` | #28 | The model proposed this CVE |
-| `campaign_cluster` | #33 | Same payload hash as a confirmed campaign |
+| `campaign_cluster` | #33 | Two attempts share a payload hash, so they join one campaign ([campaigns.md](campaigns.md)) |
 | `noise_score` | #25 | Source noise score (a penalty, below) |
 | `analyst` | console, API | Recorded through overrides, not as points |
 
@@ -43,9 +43,9 @@ Default tier weights (normative, tunable in `configs/confidence.yaml`):
 | `predisclosure_backmatch` | 25 | 25 |
 | `enrichment` | 10 | 15 |
 | `llm` | 20 | 20 |
-| `campaign_cluster` | 15 | 20 |
+| `campaign_cluster` | 45 | 55 |
 
-The config checks itself: the LLM cap must stay below `high`, and the pre-disclosure cap below `publish_min`.
+The config checks itself: the LLM cap must stay below `high`, the pre-disclosure cap below `publish_min`, and the `campaign_cluster` cap below both, so clustering alone never publishes a campaign or reaches `high` (#33).
 
 ## Bands, wording and thresholds
 
@@ -59,7 +59,7 @@ The config checks itself: the LLM cap must stay below `high`, and the pre-disclo
 | --- | --- | --- |
 | CVE, technique | "we assess as" | "confirmed" |
 | Actor (#29) | "possible association" | "confirmed association" only when also high |
-| Campaign (#33) | "possible" | "confirmed" |
+| Campaign (#33, [campaigns.md](campaigns.md#confidence-and-wording)) | "possible" | "confirmed" |
 
 | Threshold | Default | Use |
 | --- | --- | --- |
@@ -83,7 +83,7 @@ These are tests (`crates/core/src/confidence.rs` and `crates/lint/tests/confiden
 
 ## What the API computes today
 
-`GET /v0/attempts/{id}/links` builds evidence from vulnerable-path hook hits (#32), the catalogue entry's CVEs and expected techniques as priors (#5; the CVE prior is only attached once the attempt got past probing or has other CVE evidence), the attempt's noise score (#25) and the bundled ATT&CK rules (#26). `POST` records an analyst override. Tier 1 and 2 CVE evidence (#12), enrichment (#11), LLM proposals (#28), actors (#29) and campaigns (#33) add evidence to the same lists as they land.
+`GET /v0/attempts/{id}/links` builds evidence from vulnerable-path hook hits (#32), the catalogue entry's CVEs and expected techniques as priors (#5; the CVE prior is only attached once the attempt got past probing or has other CVE evidence), the attempt's noise score (#25) and the bundled ATT&CK rules (#26). `POST` records an analyst override. Tier 1 and 2 CVE evidence (#12), enrichment (#11), LLM proposals (#28) and actors (#29) add evidence to the same lists as they land. Campaign membership links (#33) are served per campaign at `GET /v0/campaigns/{id}/evidence` ([campaigns.md](campaigns.md#confidence-and-wording)).
 
 ## Explainability
 
