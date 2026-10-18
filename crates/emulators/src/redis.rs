@@ -11,7 +11,8 @@
 //! length, and every other credential argument (`HELLO ... AUTH`,
 //! `MIGRATE ... AUTH`, `CONFIG SET requirepass`, `ACL SETUSER` rules, secret
 //! keywords in unknown commands) is masked in `args`, `error`, `config_set`
-//! and hook notes, with its hash and length in `redacted_args`. Replies to
+//! and hook notes, with its hash and length in `redacted_args`. Script
+//! bodies (`EVAL`, `SCRIPT LOAD`, `FUNCTION LOAD`) are kept the same way. Replies to
 //! the client are unchanged. The positions come from
 //! `foiled_core::redact::secret_arg_positions`, so events and IOCs agree.
 
@@ -1252,37 +1253,73 @@ fn arity(name: &str) -> (usize, Option<usize>) {
 
 const REDACTED: &str = "REDACTED";
 
-/// `args` with credential arguments masked, for anything that is logged.
-fn logged_args(args: &[Vec<u8>]) -> Vec<Vec<u8>> {
-    let tokens: Vec<String> = args
-        .iter()
-        .map(|a| String::from_utf8_lossy(a).into_owned())
+/// Positions of script bodies: `EVAL script ...`, `EVAL_RO script ...`,
+/// `SCRIPT LOAD script` and `FUNCTION LOAD [REPLACE] code`. Scripts are
+/// payloads, so like `SET` values they are kept as a hash and length only.
+fn script_positions(tokens: &[String]) -> Vec<usize> {
+    let up = |i: usize| tokens.get(i).map(|t| t.to_ascii_uppercase());
+    let n = tokens.len();
+    match (up(0).as_deref(), up(1).as_deref()) {
+        (Some("EVAL" | "EVAL_RO"), _) if n >= 2 => vec![1],
+        (Some("SCRIPT"), Some("LOAD")) if n >= 3 => vec![2],
+        (Some("FUNCTION"), Some("LOAD")) if n >= 3 => vec![n - 1],
+        _ => vec![],
+    }
+}
+
+/// Every argument kept out of logged data: credentials, then scripts.
+fn hidden_positions(tokens: &[String]) -> Vec<(usize, &'static str)> {
+    let mut out: Vec<(usize, &'static str)> = secret_arg_positions(tokens)
+        .into_iter()
+        .map(|i| (i, "secret"))
         .collect();
-    let hits = secret_arg_positions(&tokens);
+    for i in script_positions(tokens) {
+        if !out.iter().any(|(j, _)| *j == i) {
+            out.push((i, "script"));
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+fn masked_token(token: &str, kind: &str) -> String {
+    if kind == "script" {
+        REDACTED.to_string()
+    } else {
+        mask_secret_arg(token)
+    }
+}
+
+fn arg_tokens(args: &[Vec<u8>]) -> Vec<String> {
+    args.iter()
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect()
+}
+
+/// `args` with credentials and scripts masked, for anything that is logged.
+fn logged_args(args: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let tokens = arg_tokens(args);
+    let hidden = hidden_positions(&tokens);
     args.iter()
         .enumerate()
-        .map(|(i, a)| {
-            if hits.contains(&i) {
-                mask_secret_arg(&tokens[i]).into_bytes()
-            } else {
-                a.clone()
-            }
+        .map(|(i, a)| match hidden.iter().find(|(j, _)| *j == i) {
+            Some((_, kind)) => masked_token(&tokens[i], kind).into_bytes(),
+            None => a.clone(),
         })
         .collect()
 }
 
-/// Mask credential arguments in an outcome's logged data: `args` (offset by
-/// the subcommand when it is logged apart), `config_set` values and the
-/// quoted copies in the unclipped `error`.
+/// Mask credential arguments and scripts in an outcome's logged data:
+/// `args` (offset by the subcommand when it is logged apart), `config_set`
+/// values and the quoted copies in the unclipped `error`. Each one is kept
+/// as `{index, kind, sha256, len}` in `redacted_args`, `kind` being
+/// `secret` or `script`.
 /// Each masked value is recorded as `{index, sha256, len}` in
 /// `redacted_args`, the way AUTH keeps `password_sha256`.
 fn scrub_secrets(data: &mut Map<String, Value>, args: &[Vec<u8>]) {
-    let tokens: Vec<String> = args
-        .iter()
-        .map(|a| String::from_utf8_lossy(a).into_owned())
-        .collect();
-    let hits = secret_arg_positions(&tokens);
-    if hits.is_empty() {
+    let tokens = arg_tokens(args);
+    let hidden = hidden_positions(&tokens);
+    if hidden.is_empty() {
         return;
     }
     let offset = if data.contains_key("subcommand") {
@@ -1291,14 +1328,14 @@ fn scrub_secrets(data: &mut Map<String, Value>, args: &[Vec<u8>]) {
         1
     };
     if let Some(Value::Array(logged)) = data.get_mut("args") {
-        for &i in &hits {
+        for &(i, kind) in &hidden {
             if let Some(v) = i.checked_sub(offset).and_then(|j| logged.get_mut(j)) {
-                *v = json!(mask_secret_arg(&tokens[i]));
+                *v = json!(masked_token(&tokens[i], kind));
             }
         }
     }
     if let Some(Value::Object(set)) = data.get_mut("config_set") {
-        for &i in &hits {
+        for &(i, _) in &hidden {
             if i >= 3 {
                 let name = printable(&args[i - 1], 128).to_ascii_lowercase();
                 if let Some(v) = set.get_mut(&name) {
@@ -1309,8 +1346,8 @@ fn scrub_secrets(data: &mut Map<String, Value>, args: &[Vec<u8>]) {
     }
     if let Some(Value::String(err)) = data.get_mut("error") {
         let mut e = err.clone();
-        for &i in &hits {
-            let masked = mask_secret_arg(&tokens[i]);
+        for &(i, kind) in &hidden {
+            let masked = masked_token(&tokens[i], kind);
             // Errors quote arguments as `'{printable(arg, 128)}'`, whole,
             // because the error is clipped only after this.
             let form = printable(&args[i], 128);
@@ -1320,9 +1357,11 @@ fn scrub_secrets(data: &mut Map<String, Value>, args: &[Vec<u8>]) {
         }
         *err = e;
     }
-    let redacted: Vec<Value> = hits
+    let redacted: Vec<Value> = hidden
         .iter()
-        .map(|&i| json!({"index": i, "sha256": sha256_hex(&args[i]), "len": args[i].len()}))
+        .map(|&(i, kind)| {
+            json!({"index": i, "kind": kind, "sha256": sha256_hex(&args[i]), "len": args[i].len()})
+        })
         .collect();
     data.insert("redacted_args".into(), Value::Array(redacted));
 }
@@ -1841,8 +1880,8 @@ mod tests {
         assert_eq!(
             hidden(&o),
             json!([
-                {"index": 3, "sha256": sha256_hex(b"default"), "len": 7},
-                {"index": 4, "sha256": sha256_hex(pw.as_bytes()), "len": 7}
+                {"index": 3, "kind": "secret", "sha256": sha256_hex(b"default"), "len": 7},
+                {"index": 4, "kind": "secret", "sha256": sha256_hex(pw.as_bytes()), "len": 7}
             ])
         );
 
@@ -1916,6 +1955,28 @@ mod tests {
         let o = c.execute(&mut conn, &cmd(&["AUTH", "a", "b", pw]));
         assert_eq!(o.data["args"], json!(["REDACTED", "REDACTED", "REDACTED"]));
         hidden(&o);
+
+        // ACL password rules with or without a user name.
+        let o = c.execute(&mut conn, &cmd(&["ACL", "SETUSER", &format!(">{pw}")]));
+        assert_eq!(o.data["args"][1], json!(">REDACTED"));
+        hidden(&o);
+
+        // Script bodies are payloads: hash and length only.
+        let script = "return redis.call('config','set','dir','/tmp')";
+        let o = c.execute(&mut conn, &cmd(&["EVAL", script, "0"]));
+        let text = serde_json::to_string(&o.data).unwrap();
+        assert!(!text.contains("redis.call"), "{text}");
+        assert_eq!(o.data["args"], json!(["REDACTED", "0"]));
+        assert_eq!(
+            o.data["redacted_args"],
+            json!([{"index": 1, "kind": "script", "sha256": sha256_hex(script.as_bytes()), "len": script.len()}])
+        );
+        let o = c.execute(&mut conn, &cmd(&["FUNCTION", "LOAD", "REPLACE", script]));
+        assert!(
+            !serde_json::to_string(&o.data)
+                .unwrap()
+                .contains("redis.call")
+        );
 
         // Nothing to hide: no redacted_args.
         let o = c.execute(&mut conn, &cmd(&["CONFIG", "SET", "dir", "/tmp"]));

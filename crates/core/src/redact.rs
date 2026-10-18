@@ -16,8 +16,8 @@ pub const REDACTED: &str = "REDACTED";
 
 /// A name containing one of these (ignoring case) names a secret:
 /// `password`, `dbpwd`, `authkey`, `X-Amz-Signature`, `apiToken`,
-/// `sessid`. `auth` is the one exception: it does not count where it starts
-/// `author` (but does in `authorization`).
+/// `sessid`. `auth` is the one exception: it does not count in a name part
+/// that is exactly `author` or `authors` (but does in `authority`).
 const SECRET_KEY_PARTS: &[&str] = &[
     "secret",
     "token",
@@ -43,12 +43,26 @@ const SECRET_KEY_PARTS: &[&str] = &[
 const SECRET_KEY_WORDS: &[&str] = &["pass", "key", "sig", "sid"];
 
 /// Name parts (split on `-`, `_` and camel case) that name a secret only
-/// as a whole part: `db_pass`, `x-sig`, but not `passport` or `monkey`.
-const SECRET_KEY_COMPONENTS: &[&str] = &["pass", "sig", "sid"];
+/// as a whole part: `db_pass`, `x-sig`, `X-Auth-Pin`, `AuthorKey`, but not
+/// `passport`, `spinner` or `monkey`.
+const SECRET_KEY_COMPONENTS: &[&str] = &["pass", "sig", "sid", "pin", "key"];
 
-/// Values after a secret-named key that are settings, not secrets
-/// (`PasswordAuthentication=no`).
-const NOT_SECRET_VALUES: &[&str] = &["yes", "no", "true", "false", "on", "off", "none", "null"];
+/// Configuration keywords whose name mentions a secret but whose value is
+/// a switch (`PasswordAuthentication no` in `sshd_config`). Only these keep
+/// a boolean value; `password=no` is still hidden.
+const SETTING_KEYS: &[&str] = &[
+    "passwordauthentication",
+    "permitemptypasswords",
+    "kbdinteractiveauthentication",
+    "challengeresponseauthentication",
+    "pubkeyauthentication",
+    "hostbasedauthentication",
+    "gssapiauthentication",
+    "kerberosauthentication",
+];
+
+/// The switch values a [`SETTING_KEYS`] keyword may show.
+const SETTING_VALUES: &[&str] = &["yes", "no", "true", "false", "on", "off"];
 
 /// Longest parameter or header name considered.
 const MAX_KEY_CHARS: usize = 48;
@@ -92,36 +106,30 @@ fn components(name: &str) -> Vec<String> {
     comps
 }
 
-fn contains_part(lower: &str, part: &str) -> bool {
-    if part != "auth" {
-        return lower.contains(part);
-    }
-    lower.match_indices("auth").any(|(i, _)| {
-        let rest = &lower[i..];
-        !rest.starts_with("author") || rest.starts_with("authoriz")
-    })
-}
+/// Whole name parts where `auth` is not a secret.
+const NOT_AUTH_PARTS: &[&str] = &["author", "authors"];
 
 /// True when a parameter, field, header or flag name names a secret.
 pub fn secret_key(name: &str) -> bool {
-    let lower = name.trim_start_matches('-').to_ascii_lowercase();
+    let name = name.trim_start_matches('-');
+    let lower = name.to_ascii_lowercase();
     if lower.is_empty() {
         return false;
     }
+    let parts = components(name);
     SECRET_KEY_WORDS.contains(&lower.as_str())
-        || SECRET_KEY_PARTS.iter().any(|p| contains_part(&lower, p))
-        || components(&lower)
+        || SECRET_KEY_PARTS
+            .iter()
+            .any(|p| *p != "auth" && lower.contains(p))
+        // `auth` counts inside any part except exactly `author` or
+        // `authors`: `authorkey`, `authority` and `AuthorKey` are secrets,
+        // `author_name` and `authorName` are not.
+        || parts
+            .iter()
+            .any(|c| c.contains("auth") && !NOT_AUTH_PARTS.contains(&c.as_str()))
+        || parts
             .iter()
             .any(|c| SECRET_KEY_COMPONENTS.contains(&c.as_str()))
-}
-
-/// True when the last part of a name is itself a secret (`X-Api-Key`,
-/// `db-pass`, `token`), as opposed to a name that only mentions one
-/// (`auth-server`). Used to tell `auth-server:8080` from `token:12345`.
-fn secret_last_component(name: &str) -> bool {
-    components(name.trim_start_matches('-'))
-        .last()
-        .is_some_and(|c| secret_key(c))
 }
 
 /// Remove secrets and personal information from attacker text, keeping its
@@ -216,6 +224,12 @@ const WRAPPERS: &[&str] = &[
     "command", "setsid",
 ];
 
+/// Words that open a group or a clause before the program: `{ mysql ...; }`,
+/// `if mysql ...; then`.
+const GROUP_WORDS: &[&str] = &[
+    "{", "}", "!", "if", "then", "else", "elif", "do", "while", "until", "time",
+];
+
 /// Shells whose `-c` string is another command line.
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ash", "ksh", "busybox"];
 
@@ -250,14 +264,31 @@ enum Tok {
 
 /// Split a command line into words and command separators the way a POSIX
 /// shell does: quotes and backslashes keep spaces and separators inside a
-/// word. An unclosed quote runs to the end, so its content is one word.
+/// word. If a quote is never closed (`it's here; curl --token abc`), the
+/// line is split again with every quote from that one on treated as an
+/// ordinary character, so the rest is still checked word by word (fail
+/// closed). Two passes at most.
 fn lex(s: &str) -> Vec<Tok> {
+    match lex_from(s, usize::MAX) {
+        Ok(toks) => toks,
+        Err(open_at) => lex_from(s, open_at).unwrap_or_default(),
+    }
+}
+
+/// One lexing pass. Quotes at byte `literal_from` or later are ordinary
+/// characters. `Err` gives the position of a quote left open.
+fn lex_from(s: &str, literal_from: usize) -> Result<Vec<Tok>, usize> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
-    let mut quote: Option<char> = None;
+    let mut quote: Option<(char, usize)> = None;
     let mut it = s.char_indices().peekable();
+    let end_word = |out: &mut Vec<Tok>, start: &mut Option<usize>, i: usize| {
+        if let Some(st) = start.take() {
+            out.push(Tok::Word(Word { start: st, end: i }));
+        }
+    };
     while let Some((i, c)) = it.next() {
-        if let Some(q) = quote {
+        if let Some((q, _)) = quote {
             if c == q {
                 quote = None;
             } else if c == '\\' && q == '"' {
@@ -266,40 +297,37 @@ fn lex(s: &str) -> Vec<Tok> {
             continue;
         }
         match c {
-            '\'' | '"' => {
+            '\'' | '"' if i < literal_from => {
                 start.get_or_insert(i);
-                quote = Some(c);
+                quote = Some((c, i));
             }
             '\\' => {
                 start.get_or_insert(i);
                 it.next();
             }
-            ';' | '|' | '&' | '\n' => {
-                if let Some(st) = start.take() {
-                    out.push(Tok::Word(Word { start: st, end: i }));
-                }
+            // Command separators, and the edges of `( ... )`, `$( ... )` and
+            // backtick substitutions, whose insides are commands too.
+            ';' | '|' | '&' | '\n' | '(' | ')' | '`' => {
+                end_word(&mut out, &mut start, i);
                 if (c == '&' || c == '|') && it.peek().map(|x| x.1) == Some(c) {
                     it.next();
                 }
                 out.push(Tok::Sep);
             }
-            c if c.is_whitespace() => {
-                if let Some(st) = start.take() {
-                    out.push(Tok::Word(Word { start: st, end: i }));
-                }
+            '$' if it.peek().map(|x| x.1) == Some('(') => {
+                end_word(&mut out, &mut start, i);
             }
+            c if c.is_whitespace() => end_word(&mut out, &mut start, i),
             _ => {
                 start.get_or_insert(i);
             }
         }
     }
-    if let Some(st) = start {
-        out.push(Tok::Word(Word {
-            start: st,
-            end: s.len(),
-        }));
+    if let Some((_, at)) = quote {
+        return Err(at);
     }
-    out
+    end_word(&mut out, &mut start, s.len());
+    Ok(out)
 }
 
 /// A word without its shell quoting.
@@ -413,7 +441,7 @@ fn shell_segment(s: &str, words: &[Word], depth: u8, edits: &mut Vec<(usize, usi
     // The program: past assignments and wrappers with their options.
     let mut k = 0;
     while k < n {
-        if is_assignment(&uq[k]) {
+        if is_assignment(&uq[k]) || GROUP_WORDS.contains(&uq[k].as_str()) {
             k += 1;
             continue;
         }
@@ -535,9 +563,11 @@ fn key_char(c: char) -> bool {
 ///   the end of the line or the closing quote, or in a command line up to
 ///   the end of the shell word.
 ///
-/// Kept: setting words (`PasswordAuthentication=no`), and a port after a
-/// name that only mentions a secret (`auth-server:8080/x`; but
-/// `token:12345` is hidden).
+/// Kept: switch values of a few configuration keywords
+/// (`PasswordAuthentication=no`, [`SETTING_KEYS`]). There is no `host:port`
+/// exception: only the label before the colon is read, so a dotted host
+/// (`auth.example.invalid:8080`) never names a secret, and a secret-named
+/// label (`auth-server:8080`, `session-id:12345`) fails closed.
 fn redact_pairs(s: &str, kind: TextKind) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -629,23 +659,15 @@ fn redact_pairs(s: &str, kind: TextKind) -> String {
             }
         }
         let trimmed_value = value.trim_end();
-        let setting = NOT_SECRET_VALUES
-            .iter()
-            .any(|w| trimmed_value.eq_ignore_ascii_case(w));
-        // `host:port` or `host:port/path`.
-        let digits = value.bytes().take_while(u8::is_ascii_digit).count();
-        let port = header
-            && (1..=5).contains(&digits)
-            && value[digits..]
-                .chars()
-                .next()
-                .is_none_or(|n| n == '/' || n.is_whitespace())
-            && !secret_last_component(&key);
+        let setting = SETTING_KEYS.contains(&key.to_ascii_lowercase().as_str())
+            && SETTING_VALUES
+                .iter()
+                .any(|w| trimmed_value.eq_ignore_ascii_case(w));
         out.push_str(&spaces);
         if let Some(q) = value_quote {
             out.push(q);
         }
-        if value.is_empty() || setting || port {
+        if value.is_empty() || setting {
             out.push_str(&value);
         } else {
             out.push_str(REDACTED);
@@ -784,8 +806,10 @@ pub fn secret_arg_positions<S: AsRef<str>>(tokens: &[S]) -> Vec<usize> {
                 hits.extend(i + 1..n);
             }
         }
+        // From the user name on: a rule is never a user name, and a bare
+        // `ACL SETUSER >pw` has none.
         Some("ACL") if up(1).as_deref() == Some("SETUSER") => {
-            for i in 3..n {
+            for i in 2..n {
                 let t = tok(i);
                 if t.len() > 1 && t.starts_with(['>', '<', '#', '!']) {
                     hits.push(i);

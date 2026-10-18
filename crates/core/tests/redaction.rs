@@ -537,7 +537,81 @@ const CASES: &[(&str, &str, TextKind)] = &[
         "sed -i s/x/y/ PasswordAuthentication yes",
         Cmd,
     ),
-    ("curl auth-server:8080/x", "curl auth-server:8080/x", Cmd),
+    // No host:port exception: a secret-named label fails closed, a URL or
+    // dotted host never names a secret.
+    ("curl auth-server:8080/x", "curl auth-server:REDACTED", Cmd),
+    ("X-Auth-Pin: 1234", "X-Auth-Pin: REDACTED", Text),
+    ("session-id:12345", "session-id:REDACTED", Text),
+    ("api_key_id:12345", "api_key_id:REDACTED", Text),
+    (
+        "curl auth.example.invalid:8080/x",
+        "curl auth.example.invalid:8080/x",
+        Cmd,
+    ),
+    // `author` and `authors` only, as whole parts.
+    (
+        "/a?authorkey=k1&authority=k2&AuthorKey=k3",
+        "/a?authorkey=REDACTED&authority=REDACTED&AuthorKey=REDACTED",
+        Text,
+    ),
+    (
+        "/a?authors=bob&authorName=al&author_id=7",
+        "/a?authors=bob&authorName=al&author_id=7",
+        Text,
+    ),
+    // Switch values only for configuration keywords that take them.
+    (
+        "password=none&pass=no&pwd=off",
+        "password=REDACTED&pass=REDACTED&pwd=REDACTED",
+        Text,
+    ),
+    ("PermitEmptyPasswords=no", "PermitEmptyPasswords=no", Text),
+    (
+        "PasswordAuthentication=hunter2",
+        "PasswordAuthentication=REDACTED",
+        Text,
+    ),
+    // Unclosed quotes: the rest of the line is still checked.
+    (
+        "it's here; curl --token abc",
+        "it's here; curl --token REDACTED",
+        Cmd,
+    ),
+    (
+        "'unclosed --password hunter2",
+        "'unclosed --password REDACTED",
+        Cmd,
+    ),
+    (
+        "echo don't; curl -u admin:hunter2 x",
+        "echo don't; curl -u admin:REDACTED x",
+        Cmd,
+    ),
+    (
+        "echo \"oops; mysql -phunter2",
+        "echo \"oops; mysql -pREDACTED",
+        Cmd,
+    ),
+    ("it's --password hunter2", "it's --password REDACTED", Text),
+    ("don't token=abc", "don't token=REDACTED", Text),
+    // Subshells, substitutions and groups.
+    (
+        "(cd /tmp; mysql -phunter2)",
+        "(cd /tmp; mysql -pREDACTED)",
+        Cmd,
+    ),
+    (
+        "x=$(mysql -phunter2 -e 'select 1')",
+        "x=$(mysql -pREDACTED -e 'select 1')",
+        Cmd,
+    ),
+    ("{ mysql -phunter2; }", "{ mysql -pREDACTED; }", Cmd),
+    ("`mysql -phunter2`", "`mysql -pREDACTED`", Cmd),
+    (
+        "if mysql -phunter2; then echo ok; fi",
+        "if mysql -pREDACTED; then echo ok; fi",
+        Cmd,
+    ),
     (
         "curl http://auth-server:8080/x",
         "curl http://auth-server:8080/x",
@@ -568,8 +642,12 @@ const REDUCED: &[(&str, &str)] = &[
         "a setting word after a config keyword, not a secret",
     ),
     (
-        "curl auth-server:8080/x",
-        "a host and port: the name only mentions `auth`",
+        "/a?authors=bob&authorName=al&author_id=7",
+        "`author` and `authors` as whole name parts are not `auth`",
+    ),
+    (
+        "PermitEmptyPasswords=no",
+        "a switch value of an sshd configuration keyword, not a secret",
     ),
 ];
 
@@ -677,6 +755,8 @@ const COMMANDS: &[(&str, &str)] = &[
         "XYZZY PASSWORD REDACTED api_key=REDACTED",
     ),
     ("XYZZY x AUTH2 hunter2", "XYZZY x AUTH2 REDACTED"),
+    ("ACL SETUSER >hunter2", "ACL SETUSER >REDACTED"),
+    ("ACL SETUSER #abcd on", "ACL SETUSER #REDACTED on"),
     ("GET k", "GET k"),
 ];
 

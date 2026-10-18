@@ -513,22 +513,26 @@ fn parse_ip(raw: &str) -> Option<IpAddr> {
 /// 169.254.169.254), carrier-grade NAT, unique local (fd00::/8), multicast
 /// and unspecified. These are never IOCs, whether bare or inside a URL.
 fn internal_ip(ip: IpAddr) -> bool {
-    // IPv4 inside IPv6: IPv4-compatible (`::169.254.169.254`) and the NAT64
-    // prefix 64:ff9b::/96 reach the same IPv4 host.
+    // IPv4 inside IPv6: IPv4-compatible (`::169.254.169.254`), the NAT64
+    // prefix 64:ff9b::/96 and 6to4 (2002::/16) reach that IPv4 host.
     if let IpAddr::V6(v6) = ip {
         let seg = v6.segments();
         let compatible = seg[..6] == [0; 6] && (seg[6] != 0 || seg[7] > 1);
         let nat64 = seg[0] == 0x64 && seg[1] == 0xff9b && seg[2..6] == [0; 4];
-        if compatible || nat64 {
-            let v4 = std::net::Ipv4Addr::new(
-                (seg[6] >> 8) as u8,
-                seg[6] as u8,
-                (seg[7] >> 8) as u8,
-                seg[7] as u8,
-            );
-            if internal_ip(IpAddr::V4(v4)) {
-                return true;
-            }
+        let v4 = |hi: u16, lo: u16| {
+            IpAddr::V4(std::net::Ipv4Addr::new(
+                (hi >> 8) as u8,
+                hi as u8,
+                (lo >> 8) as u8,
+                lo as u8,
+            ))
+        };
+        if (compatible || nat64) && internal_ip(v4(seg[6], seg[7])) {
+            return true;
+        }
+        // 6to4, 2002:WWXX:YYZZ::/48, routes to the IPv4 address inside.
+        if seg[0] == 0x2002 && internal_ip(v4(seg[1], seg[2])) {
+            return true;
         }
     }
     Observable::ip(&ip.to_string()).is_ok_and(|o| !o.is_external_lookup_eligible())
@@ -2428,13 +2432,20 @@ mod tests {
         for ip in [
             "::169.254.169.254",
             "64:ff9b::a9fe:a9fe",
+            "2002:a9fe:a9fe::1",
+            "2002:a00:1::",
             "::ffff:10.0.0.1",
             "::1",
             "::",
         ] {
             assert!(internal_ip(ip.parse().unwrap()), "{ip}");
         }
-        for ip in ["::203.0.113.7", "2001:db8::1", "64:ff9b::cb00:7107"] {
+        for ip in [
+            "::203.0.113.7",
+            "2001:db8::1",
+            "64:ff9b::cb00:7107",
+            "2002:cb00:7107::1",
+        ] {
             assert!(!internal_ip(ip.parse().unwrap()), "{ip}");
         }
         assert!(internal_name("metadata.google.internal."));
