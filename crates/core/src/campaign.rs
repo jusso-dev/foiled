@@ -766,23 +766,30 @@ pub struct Registry {
     pub bridges: Vec<BridgeRecord>,
 }
 
-/// Which attempt and feature joined a recorded campaign into another (a
-/// strong or medium bridge that folded `merged_campaign_id` into
-/// `campaign_id`). Kept so the join stays explainable after the bridge has
-/// left the window.
+/// Which attempts and feature joined two groups into one campaign, for
+/// every merge the registry makes permanent (strong or medium features
+/// only). Kept so the join stays explainable, and auditable, after the
+/// bridge has left the window.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BridgeRecord {
-    /// The surviving (older) campaign.
+    /// The campaign the merge was recorded in (the surviving one).
     pub campaign_id: String,
-    /// The recorded campaign folded into it.
-    pub merged_campaign_id: String,
+    /// The recorded campaign folded into it, when the other side had one;
+    /// null when two groups merged before either was recorded.
+    pub merged_campaign_id: Option<String>,
     /// The bridging attempt, on the surviving side.
     pub attempt_id: String,
-    /// The attempt it shares the feature with, on the folded side.
+    /// The attempt it shares the feature with, on the other side.
     pub with_attempt_id: String,
     pub signal_id: String,
     pub feature: Feature,
+    /// Attempts on each side when they joined.
+    pub attempt_side: u32,
+    pub with_side: u32,
+    /// True when one side held fewer than [`BRIDGE_MIN_ATTEMPTS`]
+    /// attempts, below what the forged-bridge guard checks: audit these.
+    pub small_halves: bool,
     pub recorded_at: i64,
 }
 
@@ -884,17 +891,6 @@ impl Registry {
                 s.merged_into = Some(into.to_string());
             }
         }
-        // Provenance only for merges that were applied.
-        for b in &up.bridges {
-            let applied = self
-                .campaigns
-                .get(&b.merged_campaign_id)
-                .and_then(|c| c.merged_into.as_deref())
-                == Some(b.campaign_id.as_str());
-            if applied && !self.bridges.contains(b) {
-                self.bridges.push(b.clone());
-            }
-        }
         for m in &up.members {
             let rank = |id: &str| {
                 self.campaigns
@@ -913,6 +909,27 @@ impl Registry {
             if moves {
                 self.members
                     .insert(m.attempt_id.clone(), m.campaign_id.clone());
+            }
+        }
+        // Provenance only for merges that were applied: the folded
+        // campaign now points here, or both attempts are recorded here.
+        for b in &up.bridges {
+            let applied = match &b.merged_campaign_id {
+                Some(from) => {
+                    self.campaigns
+                        .get(from)
+                        .and_then(|c| c.merged_into.as_deref())
+                        == Some(b.campaign_id.as_str())
+                        || [&b.attempt_id, &b.with_attempt_id]
+                            .iter()
+                            .all(|a| self.members.get(*a) == Some(&b.campaign_id))
+                }
+                None => [&b.attempt_id, &b.with_attempt_id]
+                    .iter()
+                    .all(|a| self.members.get(*a) == Some(&b.campaign_id)),
+            };
+            if applied && !self.bridges.contains(b) {
+                self.bridges.push(b.clone());
             }
         }
         let mut counts: BTreeMap<&str, u32> = BTreeMap::new();
@@ -1578,6 +1595,20 @@ fn split_single_source_bridges(
     Some((d2, links))
 }
 
+/// One union in pass 1 that joined two groups rather than growing one:
+/// both sides held two or more attempts, or held attempts recorded in
+/// different campaigns. Every such merge the registry makes permanent gets
+/// a bridge record.
+struct MergeEvent<'a> {
+    key: usize,
+    p: usize,
+    c: usize,
+    /// Attempts on each side when they joined.
+    sides: (usize, usize),
+    /// Recorded campaigns on each side when they joined.
+    stored: (BTreeSet<&'a str>, BTreeSet<&'a str>),
+}
+
 /// Cluster a tenant's attempts into campaigns, keep ids from the registry,
 /// and apply analyst actions.
 pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clustering {
@@ -1724,6 +1755,10 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
     order.sort_by(|&a, &b| keys.order(a, b));
     let mut core: Vec<usize> = Vec::new();
     let mut raw_links: Vec<RawLink> = Vec::new();
+    // Recorded campaigns per pass-1 root, and the merges pass 1 made.
+    let mut root_stored: Vec<BTreeSet<&str>> =
+        stored.iter().map(|s| s.iter().copied().collect()).collect();
+    let mut merges: Vec<MergeEvent<'_>> = Vec::new();
     for weak_pass in [false, true] {
         if weak_pass {
             // Registry: attempts recorded in one campaign stay together.
@@ -1815,7 +1850,28 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
                         refused += 1;
                         continue;
                     }
-                    dsu.union(rp, rc);
+                    if !weak_pass {
+                        // A merge, not growth: two groups of two or more,
+                        // or two attempts recorded in different campaigns.
+                        let (sp, sc) = (&root_stored[rp], &root_stored[rc]);
+                        let distinct = !sp.is_empty() && !sc.is_empty() && sp.is_disjoint(sc);
+                        if (dsu.size[rp] >= 2 && dsu.size[rc] >= 2) || distinct {
+                            merges.push(MergeEvent {
+                                key: k,
+                                p,
+                                c,
+                                sides: (dsu.size[rp], dsu.size[rc]),
+                                stored: (sp.clone(), sc.clone()),
+                            });
+                        }
+                        let moved = std::mem::take(&mut root_stored[rp]);
+                        let other = std::mem::take(&mut root_stored[rc]);
+                        dsu.union(rp, rc);
+                        let r = dsu.find(rp);
+                        root_stored[r] = moved.union(&other).copied().collect();
+                    } else {
+                        dsu.union(rp, rc);
+                    }
                 }
                 edges[p].push((k, c));
                 edges[c].push((k, p));
@@ -1938,8 +1994,9 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
 
     // The registry records live clustering only, before analyst actions:
     // merges and splits are replayed from the actions on every read.
-    let registry_update =
-        registry_update(input, &attempts, &stored, &keys, &edges, &groups, &cores);
+    let registry_update = registry_update(
+        input, &attempts, &stored, &keys, &edges, &groups, &cores, &merges,
+    );
 
     apply_actions(
         input,
@@ -1998,6 +2055,7 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
 /// evidence strong enough to join on its own. A recorded campaign whose
 /// attempts now sit in another campaign's established core (a strong or
 /// medium bridge) is recorded as merged into it.
+#[allow(clippy::too_many_arguments)]
 fn registry_update(
     input: &Input<'_>,
     attempts: &[&Attempt],
@@ -2006,6 +2064,7 @@ fn registry_update(
     edges: &[Vec<(usize, usize)>],
     groups: &BTreeMap<String, Group>,
     cores: &BTreeMap<String, BTreeSet<usize>>,
+    merges: &[MergeEvent<'_>],
 ) -> RegistryUpdate {
     let mut up = RegistryUpdate::default();
     let mut absorbed: BTreeMap<&str, &str> = BTreeMap::new();
@@ -2088,34 +2147,59 @@ fn registry_update(
                 merged_into: Some(into.to_string()),
                 ..s.clone()
             });
-            // Provenance: the strong or medium joins between an attempt
-            // recorded in the folded campaign and one that is not.
-            let g = &groups[into];
-            let mut found: BTreeSet<BridgeRecord> = BTreeSet::new();
-            for &m in &g.members {
-                if stored[m] == Some(from) {
-                    continue;
-                }
-                for &(k, o) in &edges[m] {
-                    if stored[o] == Some(from)
-                        && g.members.contains(&o)
-                        && keys.info[k].strength != Strength::Weak
-                    {
-                        found.insert(BridgeRecord {
-                            campaign_id: into.to_string(),
-                            merged_campaign_id: from.to_string(),
-                            attempt_id: attempts[m].attempt_id.clone(),
-                            with_attempt_id: attempts[o].attempt_id.clone(),
-                            signal_id: keys.keys[k].signal_id(),
-                            feature: keys.keys[k].feature,
-                            recorded_at: input.now,
-                        });
-                    }
-                }
-            }
-            up.bridges
-                .extend(found.into_iter().take(MAX_BRIDGE_RECORDS));
         }
+    }
+    // Provenance for every merge this update makes permanent: a pass-1
+    // merge inside one campaign with an attempt not yet recorded there.
+    let mut per_campaign: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut seen: BTreeSet<(usize, usize, usize)> = BTreeSet::new();
+    let group_of: BTreeMap<usize, &String> = groups
+        .iter()
+        .flat_map(|(id, g)| g.members.iter().map(move |&m| (m, id)))
+        .collect();
+    for e in merges {
+        let (Some(&id), Some(&other_id)) = (group_of.get(&e.p), group_of.get(&e.c)) else {
+            continue;
+        };
+        if id != other_id {
+            continue;
+        }
+        let new = stored[e.p] != Some(id.as_str()) || stored[e.c] != Some(id.as_str());
+        if !new || !seen.insert((e.key, e.p, e.c)) {
+            continue;
+        }
+        let n = per_campaign.entry(id.as_str()).or_default();
+        if *n >= MAX_BRIDGE_RECORDS {
+            continue;
+        }
+        *n += 1;
+        // The side not carrying this campaign's id is the one merged in.
+        let other = |set: &BTreeSet<&str>| -> Option<String> {
+            if set.contains(id.as_str()) {
+                return None;
+            }
+            set.iter()
+                .map(|s| input.registry.resolve(s))
+                .find(|s| *s != id)
+                .map(str::to_string)
+        };
+        let (attempt, with, merged, sides) = match (other(&e.stored.0), other(&e.stored.1)) {
+            (None, Some(m)) => (e.p, e.c, Some(m), e.sides),
+            (Some(m), _) => (e.c, e.p, Some(m), (e.sides.1, e.sides.0)),
+            (None, None) => (e.p, e.c, None, e.sides),
+        };
+        up.bridges.push(BridgeRecord {
+            campaign_id: id.clone(),
+            merged_campaign_id: merged,
+            attempt_id: attempts[attempt].attempt_id.clone(),
+            with_attempt_id: attempts[with].attempt_id.clone(),
+            signal_id: keys.keys[e.key].signal_id(),
+            feature: keys.keys[e.key].feature,
+            attempt_side: u32::try_from(sides.0).unwrap_or(u32::MAX),
+            with_side: u32::try_from(sides.1).unwrap_or(u32::MAX),
+            small_halves: sides.0.min(sides.1) < BRIDGE_MIN_ATTEMPTS,
+            recorded_at: input.now,
+        });
     }
     up
 }
@@ -3884,8 +3968,60 @@ mod tests {
             .expect("the newer campaign folds into the older");
         assert!(!c2.registry_update.bridges.is_empty());
         let b = &c2.campaigns[0].bridges;
-        assert!(!b.is_empty() && b.iter().all(|x| x.merged_campaign_id == merged.campaign_id));
+        assert!(
+            b.iter()
+                .any(|x| x.merged_campaign_id.as_deref() == Some(merged.campaign_id.as_str())),
+            "{b:?}"
+        );
         assert!(b.iter().all(|x| x.feature == Feature::PayloadSha256));
+    }
+
+    #[test]
+    fn every_merge_the_registry_keeps_has_provenance() {
+        // Two independent forgers on a first read: one campaign, and the
+        // recorded merge names the bridging attempts.
+        let r = prepare(forged_fleet(&["192.0.2.66", "192.0.2.67"]));
+        let c = run(&r, &[]);
+        assert_eq!(c.campaigns.len(), 1);
+        let b = &c.registry_update.bridges;
+        assert!(!b.is_empty());
+        assert!(
+            b.iter()
+                .all(|x| x.merged_campaign_id.is_none() && !x.small_halves)
+        );
+        let forgers: BTreeSet<&str> = r
+            .attempts
+            .iter()
+            .filter(|a| a.src.starts_with("192.0.2."))
+            .map(|a| a.attempt_id.as_str())
+            .collect();
+        assert!(b.iter().any(|x| forgers.contains(x.attempt_id.as_str())
+            || forgers.contains(x.with_attempt_id.as_str())));
+        let mut reg = Registry::default();
+        reg.apply(&c.registry_update);
+        assert_eq!(reg.bridges.len(), b.len(), "kept once recorded");
+
+        // Halves below the guard size merge, flagged for audit.
+        let other = "cd".repeat(32);
+        let small = vec![
+            post("a1", T0, "d1", "203.0.113.1", HASH),
+            post("a2", T0 + 10, "d2", "203.0.113.2", HASH),
+            post("b1", T0 + 20, "d4", "198.51.100.1", &other),
+            post("b2", T0 + 30, "d5", "198.51.100.2", &other),
+            post("f1", T0 + 40, "dz", "192.0.2.66", HASH),
+            post("f2", T0 + 41, "dz", "192.0.2.66", &other),
+        ];
+        let r = prepare(small);
+        let c = run(&r, &[]);
+        assert_eq!(c.campaigns.len(), 1);
+        let b = &c.registry_update.bridges;
+        assert!(!b.is_empty() && b.iter().all(|x| x.small_halves), "{b:?}");
+        assert_eq!(c.campaigns[0].bridges, *b);
+
+        // Steady state writes no new provenance.
+        let mut r = r;
+        r.registry.apply(&c.registry_update);
+        assert!(run(&r, &[]).registry_update.is_empty());
     }
 
     #[test]

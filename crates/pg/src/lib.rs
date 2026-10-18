@@ -519,13 +519,16 @@ pub async fn campaign_records(
 ///
 /// - `created_at` is set on insert and never changed; first and last seen
 ///   only widen.
+/// - Registry writes for one tenant are serialised by a transaction-scoped
+///   advisory lock taken first, so two writers never interleave their row
+///   locks (and cannot deadlock on each other).
 /// - `merged_into` is write-once and only set to a campaign that is
 ///   strictly older by `(created_at, campaign_id)`. That order is total and
-///   immutable, so merges can never form a cycle. The rows involved are
-///   locked in id order (`FOR UPDATE`) before the check, and a trigger
-///   (migration 0007) refuses anything else.
+///   immutable, so merges can never form a cycle. A trigger (migration
+///   0007) refuses anything else.
 /// - A membership only moves to an older campaign.
-/// - Bridge provenance is written only for merges that were applied.
+/// - Bridge provenance is written only for merges that were applied: the
+///   folded campaign now points here, or both attempts are recorded here.
 pub async fn update_campaign_registry(
     client: &Client,
     tenant_id: &str,
@@ -535,8 +538,8 @@ pub async fn update_campaign_registry(
     if update.is_empty() {
         return Ok(());
     }
-    // Rows are written in key order so concurrent writers take row locks
-    // in the same order and cannot deadlock.
+    // Rows are written in key order too, for predictable lock order with
+    // writers outside this function.
     let mut update = update.clone();
     update
         .campaigns
@@ -569,9 +572,6 @@ pub async fn update_campaign_registry(
         .collect();
     let merge_from: Vec<&str> = merges.iter().map(|m| m.0).collect();
     let merge_into: Vec<&str> = merges.iter().map(|m| m.1).collect();
-    let mut locked: Vec<&str> = merge_from.iter().chain(&merge_into).copied().collect();
-    locked.sort_unstable();
-    locked.dedup();
     let attempts: Vec<&str> = update
         .members
         .iter()
@@ -589,14 +589,29 @@ pub async fn update_campaign_registry(
         .collect();
     let b = &update.bridges;
     let b_into: Vec<&str> = b.iter().map(|x| x.campaign_id.as_str()).collect();
-    let b_from: Vec<&str> = b.iter().map(|x| x.merged_campaign_id.as_str()).collect();
+    let b_from: Vec<Option<&str>> = b.iter().map(|x| x.merged_campaign_id.as_deref()).collect();
     let b_attempt: Vec<&str> = b.iter().map(|x| x.attempt_id.as_str()).collect();
     let b_with: Vec<&str> = b.iter().map(|x| x.with_attempt_id.as_str()).collect();
     let b_signal: Vec<&str> = b.iter().map(|x| x.signal_id.as_str()).collect();
     let b_feature: Vec<&str> = b.iter().map(|x| x.feature.as_str()).collect();
+    let b_sides: Vec<i32> = b
+        .iter()
+        .map(|x| i32::try_from(x.attempt_side).unwrap_or(i32::MAX))
+        .collect();
+    let b_with_sides: Vec<i32> = b
+        .iter()
+        .map(|x| i32::try_from(x.with_side).unwrap_or(i32::MAX))
+        .collect();
+    let b_small: Vec<bool> = b.iter().map(|x| x.small_halves).collect();
     let b_at: Vec<i64> = b.iter().map(|x| x.recorded_at).collect();
     client.batch_execute("BEGIN").await?;
     let step = async {
+        client
+            .execute(
+                "SELECT pg_advisory_xact_lock(hashtext('campaign_registry:' || $1::text))",
+                &[&tenant_id],
+            )
+            .await?;
         if !ids.is_empty() {
             client
                 .execute(
@@ -612,14 +627,6 @@ pub async fn update_campaign_registry(
                 .await?;
         }
         if !merges.is_empty() {
-            client
-                .query(
-                    "SELECT campaign_id FROM campaigns
-                     WHERE tenant_id = $1 AND campaign_id = ANY($2)
-                     ORDER BY campaign_id FOR UPDATE",
-                    &[&tenant_id, &locked],
-                )
-                .await?;
             client
                 .execute(
                     "UPDATE campaigns c SET merged_into = t.m, updated_at = $4
@@ -658,15 +665,24 @@ pub async fn update_campaign_registry(
         if !b.is_empty() {
             client
                 .execute(
-                    "INSERT INTO campaign_bridges (tenant_id, campaign_id, merged_campaign_id, attempt_id, with_attempt_id, signal_id, feature, recorded_at)
-                     SELECT $1, t.i, t.f, t.a, t.w, t.s, t.k, t.r
-                     FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::bigint[])
-                       AS t(i, f, a, w, s, k, r)
+                    "INSERT INTO campaign_bridges (tenant_id, campaign_id, merged_campaign_id, attempt_id, with_attempt_id, signal_id, feature, attempt_side, with_side, small_halves, recorded_at)
+                     SELECT $1, t.i, t.f, t.a, t.w, t.s, t.k, t.sa, t.sw, t.sm, t.r
+                     FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[],
+                                 $8::int[], $9::int[], $10::bool[], $11::bigint[])
+                       AS t(i, f, a, w, s, k, sa, sw, sm, r)
                      WHERE EXISTS (
                          SELECT 1 FROM campaigns c
                          WHERE c.tenant_id = $1 AND c.campaign_id = t.f AND c.merged_into = t.i)
+                       OR (
+                         EXISTS (SELECT 1 FROM campaign_members m
+                                 WHERE m.tenant_id = $1 AND m.attempt_id = t.a AND m.campaign_id = t.i)
+                         AND EXISTS (SELECT 1 FROM campaign_members m
+                                 WHERE m.tenant_id = $1 AND m.attempt_id = t.w AND m.campaign_id = t.i))
                      ON CONFLICT DO NOTHING",
-                    &[&tenant_id, &b_into, &b_from, &b_attempt, &b_with, &b_signal, &b_feature, &b_at],
+                    &[
+                        &tenant_id, &b_into, &b_from, &b_attempt, &b_with, &b_signal, &b_feature,
+                        &b_sides, &b_with_sides, &b_small, &b_at,
+                    ],
                 )
                 .await?;
         }
@@ -690,9 +706,10 @@ pub async fn campaign_bridges(
 ) -> Result<Vec<foiled_core::campaign::BridgeRecord>, Error> {
     let rows = client
         .query(
-            "SELECT campaign_id, merged_campaign_id, attempt_id, with_attempt_id, signal_id, feature, recorded_at
+            "SELECT campaign_id, merged_campaign_id, attempt_id, with_attempt_id, signal_id, feature,
+                    attempt_side, with_side, small_halves, recorded_at
              FROM campaign_bridges WHERE tenant_id = $1 AND campaign_id = $2
-             ORDER BY recorded_at, merged_campaign_id, attempt_id, with_attempt_id, signal_id",
+             ORDER BY recorded_at, attempt_id, with_attempt_id, signal_id",
             &[&tenant_id, &campaign_id],
         )
         .await?;
@@ -707,6 +724,9 @@ pub async fn campaign_bridges(
                 signal_id: r.get("signal_id"),
                 feature: serde_json::from_value(serde_json::Value::String(r.get("feature")))
                     .ok()?,
+                attempt_side: u32::try_from(r.get::<_, i32>("attempt_side")).unwrap_or(0),
+                with_side: u32::try_from(r.get::<_, i32>("with_side")).unwrap_or(0),
+                small_halves: r.get("small_halves"),
                 recorded_at: r.get("recorded_at"),
             })
         })

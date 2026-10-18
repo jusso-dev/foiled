@@ -871,17 +871,28 @@
         "with_attempt_id",
         "signal_id",
         "feature",
+        "attempt_side",
+        "with_side",
+        "small_halves",
         "recorded_at"
       ],
-      "description": "Which attempt and feature folded a recorded campaign into another (a strong or medium bridge).",
+      "description": "Which attempts and feature joined two groups into this campaign, for every merge the campaign registry makes permanent (strong or medium features only).",
       "properties": {
         "campaign_id": {
           "type": "string",
           "pattern": "^cmp_[a-f0-9]{24}$"
         },
         "merged_campaign_id": {
-          "type": "string",
-          "pattern": "^cmp_[a-f0-9]{24}$"
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^cmp_[a-f0-9]{24}$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The recorded campaign folded in, or null when two groups merged before either was recorded."
         },
         "attempt_id": {
           "type": "string",
@@ -897,6 +908,20 @@
         },
         "feature": {
           "$ref": "#/$defs/feature"
+        },
+        "attempt_side": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Attempts on the surviving side when they joined."
+        },
+        "with_side": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Attempts on the other side when they joined."
+        },
+        "small_halves": {
+          "type": "boolean",
+          "description": "One side was below the forged-bridge guard size when they joined; audit these."
         },
         "recorded_at": {
           "type": "integer"

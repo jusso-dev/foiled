@@ -1289,18 +1289,21 @@ paths:
                     items: { $ref: "../schemas/confidence-link.schema.json" }
                   bridges:
                     type: array
-                    description: Every recorded bridge that folded another campaign into this one, across all windows.
+                    description: Provenance of every merge the campaign registry made permanent for this campaign, across all windows.
                     items:
                       type: object
                       additionalProperties: false
-                      required: [campaign_id, merged_campaign_id, attempt_id, with_attempt_id, signal_id, feature, recorded_at]
+                      required: [campaign_id, merged_campaign_id, attempt_id, with_attempt_id, signal_id, feature, attempt_side, with_side, small_halves, recorded_at]
                       properties:
                         campaign_id: { type: string }
-                        merged_campaign_id: { type: string }
+                        merged_campaign_id: { type: [string, "null"], description: "Null when two groups merged before either was recorded." }
                         attempt_id: { type: string }
                         with_attempt_id: { type: string }
                         signal_id: { type: string }
                         feature: { type: string }
+                        attempt_side: { type: integer }
+                        with_side: { type: integer }
+                        small_halves: { type: boolean, description: "One side was below the forged-bridge guard size; audit these." }
                         recorded_at: { type: integer }
                   possible_links:
                     type: array

@@ -43,16 +43,23 @@ DROP TRIGGER IF EXISTS campaigns_registry_order ON campaigns;
 CREATE TRIGGER campaigns_registry_order BEFORE INSERT OR UPDATE ON campaigns
     FOR EACH ROW EXECUTE FUNCTION campaigns_registry_order();
 
--- Which attempt and feature folded a recorded campaign into another. Rows
--- are only written for merges that were applied, and are never edited.
+-- Provenance for every merge the registry makes permanent: which attempts
+-- and feature joined two groups into one campaign. merged_campaign_id is the
+-- recorded campaign folded in, or NULL when two groups merged before either
+-- was recorded. small_halves flags merges made while a side was below the
+-- forged-bridge guard size. Rows are only written for merges that were
+-- applied, and are never edited.
 CREATE TABLE IF NOT EXISTS campaign_bridges (
     tenant_id          text NOT NULL,
     campaign_id        text NOT NULL,
-    merged_campaign_id text NOT NULL,
+    merged_campaign_id text,
     attempt_id         text NOT NULL,
     with_attempt_id    text NOT NULL,
     signal_id          text NOT NULL,
     feature            text NOT NULL,
+    attempt_side       integer NOT NULL,
+    with_side          integer NOT NULL,
+    small_halves       boolean NOT NULL,
     recorded_at        bigint NOT NULL,
-    PRIMARY KEY (tenant_id, campaign_id, merged_campaign_id, attempt_id, with_attempt_id, signal_id)
+    PRIMARY KEY (tenant_id, campaign_id, attempt_id, with_attempt_id, signal_id)
 );
