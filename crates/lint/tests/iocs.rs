@@ -158,10 +158,24 @@ fn file_drop_attempts_match_golden() {
 }
 
 #[test]
+fn redis_emulator_output_matches_golden_without_secrets() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/iocs");
+    let (_, x) = load(&root, "redis-emulator");
+    check_golden(&root, "redis-emulator", &x.iocs);
+    let all = serde_json::to_string(&x.iocs).unwrap();
+    assert!(!all.contains("hunter2"));
+    assert!(
+        of(&x, IocType::RequestSubstring)
+            .iter()
+            .any(|i| i.value == "CONFIG SET requirepass REDACTED" && i.redacted)
+    );
+}
+
+#[test]
 fn golden_files_cover_every_ioc_type() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/iocs");
     let mut seen = std::collections::BTreeSet::new();
-    for name in ["memory-only", "file-drop"] {
+    for name in ["memory-only", "file-drop", "redis-emulator"] {
         let (_, x) = load(&root, name);
         seen.extend(x.iocs.iter().map(|i| i.ioc_type));
     }

@@ -1,0 +1,93 @@
+{
+  "ioc_id": "ioc_ce39b0f40a6cbcc95c0e98b7",
+  "type": "ip",
+  "value": "198.51.100.23",
+  "display": "198[.]51[.]100[.]23",
+  "roles": [
+    "source"
+  ],
+  "origin": "observed",
+  "redacted": false,
+  "file_ioc_limited": false,
+  "first_seen": 1792285500000,
+  "last_seen": 1792285510000,
+  "sightings": 11,
+  "attempt_ids": [
+    "att_442a3854fed6a383f4c80f95"
+  ],
+  "campaign_ids": [],
+  "decoy_ids": [
+    "dcy-redis-1"
+  ],
+  "catalogue_ids": [
+    "emulator/redis/7.0"
+  ],
+  "event_ids": [
+    "rds-01",
+    "rds-02",
+    "rds-03",
+    "rds-04",
+    "rds-05",
+    "rds-06",
+    "rds-07",
+    "rds-08",
+    "rds-09",
+    "rds-10",
+    "rds-11"
+  ],
+  "extracted_from": [
+    "application:src.ip",
+    "hook:src.ip"
+  ],
+  "enrichment": [
+    {
+      "provider": "local_asn",
+      "key": "asn.number",
+      "value": 64497,
+      "observed_at": 1792285700000,
+      "shareable": false
+    },
+    {
+      "provider": "local_asn",
+      "key": "asn.org",
+      "value": "Example Transit",
+      "observed_at": 1792285700000,
+      "shareable": false
+    },
+    {
+      "provider": "local_asn",
+      "key": "geo.country",
+      "value": "NZ",
+      "observed_at": 1792285700000,
+      "shareable": false
+    }
+  ],
+  "confidence": {
+    "score": 68,
+    "band": "medium",
+    "wording": "we assess as",
+    "publishable": true,
+    "evidence": [
+      {
+        "signal_id": "decoy:dcy-redis-1",
+        "source": "catalogue_prior",
+        "weight": 100,
+        "summary": "seen at decoy dcy-redis-1, which has no legitimate users"
+      },
+      {
+        "signal_id": "hook:att_442a3854fed6a383f4c80f95:redis.config-set-persistence",
+        "source": "vuln_path_hook",
+        "weight": 100,
+        "summary": "seen in attempt att_442a3854fed6a383f4c80f95, where vulnerable-path hook redis.config-set-persistence fired",
+        "ref": "rds-04"
+      },
+      {
+        "signal_id": "noise:ioc_ce39b0f40a6cbcc95c0e98b7",
+        "source": "noise_score",
+        "weight": 10,
+        "summary": "lowest source noise score across sightings is 10"
+      }
+    ],
+    "caps_applied": []
+  }
+}

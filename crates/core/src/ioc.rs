@@ -52,15 +52,14 @@ pub const FINGERPRINT_VERSION: u32 = 1;
 const FINGERPRINT_DOMAIN: &str = "foiled-behaviour-fingerprint/v1";
 const REDACTED: &str = "REDACTED";
 
-/// A parameter, field or header whose name contains one of these (ignoring
-/// case) has its value treated as a secret: `password`, `X-Api-Key`,
-/// `X-Amz-Signature`, `db_passwd`, `sessid`.
+/// A parameter, field or header name containing one of these (ignoring
+/// case) names a secret: `password`, `X-Amz-Signature`, `db_passwd`,
+/// `apiToken`, `sessid`.
 const SECRET_KEY_PARTS: &[&str] = &[
     "secret",
     "token",
     "password",
     "passwd",
-    "pwd",
     "api-key",
     "api_key",
     "apikey",
@@ -70,25 +69,53 @@ const SECRET_KEY_PARTS: &[&str] = &[
     "signature",
     "session",
     "sessid",
-    "auth",
     "credential",
     "cookie",
     "jwt",
 ];
 
-/// Names that are secrets only as a whole word (`pass=`, `key=`), because
-/// as substrings they would hit ordinary names (`passport`, `monkey`).
-const SECRET_KEY_WORDS: &[&str] = &["pass", "key", "sig", "sid"];
+/// Name components (split on `-`, `_` and camel case) that name a secret
+/// only as a whole component, because as substrings they would hit
+/// ordinary names: `auth` is a secret in `X-Auth-Token` and `basic_auth`,
+/// not in `author`; `pass` in `db_pass`, not in `passport`.
+const SECRET_KEY_COMPONENTS: &[&str] = &["auth", "authorization", "pass", "pwd", "sig", "sid"];
+
+/// Values after a secret-named key that are settings, not secrets
+/// (`PasswordAuthentication=no`).
+const NOT_SECRET_VALUES: &[&str] = &["yes", "no", "true", "false", "on", "off", "none", "null"];
 
 /// Longest parameter or header name considered.
 const MAX_KEY_CHARS: usize = 48;
 
 fn secret_key(name: &str) -> bool {
-    let k = name.trim_start_matches('-').to_ascii_lowercase();
-    SECRET_KEY_WORDS.contains(&k.as_str()) || SECRET_KEY_PARTS.iter().any(|p| k.contains(p))
+    let k = name.trim_start_matches('-');
+    let lower = k.to_ascii_lowercase();
+    if lower == "key" || SECRET_KEY_PARTS.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+    // Components: split on separators and lower-to-upper case changes.
+    let mut comps: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    for c in k.chars() {
+        if c == '-' || c == '_' {
+            comps.push(std::mem::take(&mut cur));
+            prev_lower = false;
+            continue;
+        }
+        if c.is_ascii_uppercase() && prev_lower {
+            comps.push(std::mem::take(&mut cur));
+        }
+        prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+        cur.push(c.to_ascii_lowercase());
+    }
+    comps.push(cur);
+    comps
+        .iter()
+        .any(|c| SECRET_KEY_COMPONENTS.contains(&c.as_str()))
 }
 
-/// Command-line flags whose next word is a secret.
+/// Flags whose next word is a secret, for any program.
 const SECRET_FLAGS: &[&str] = &[
     "--api-key",
     "--apikey",
@@ -96,12 +123,34 @@ const SECRET_FLAGS: &[&str] = &[
     "--password",
     "--secret",
     "--token",
+    "-pass",
+    "-passin",
+    "-passout",
     "bearer",
-    "basic",
 ];
 
-/// Protocol commands whose arguments are credentials.
-const SECRET_COMMANDS: &[&str] = &["AUTH", "LOGIN", "PASS"];
+/// Short flags that carry a password for particular programs, either
+/// attached (`-pPW`) or as the next word (`-p PW`): `(program, flag,
+/// attached, separate)`.
+const PROGRAM_SECRET_FLAGS: &[(&str, &str, bool, bool)] = &[
+    ("mysql", "-p", true, false),
+    ("mysqldump", "-p", true, false),
+    ("mysqladmin", "-p", true, false),
+    ("mariadb", "-p", true, false),
+    ("mariadb-dump", "-p", true, false),
+    ("sshpass", "-p", true, true),
+    ("redis-cli", "-a", false, true),
+    ("mosquitto_pub", "-P", false, true),
+    ("mosquitto_sub", "-P", false, true),
+    ("zip", "-P", false, true),
+    ("unzip", "-P", false, true),
+    ("7z", "-p", true, false),
+    ("7za", "-p", true, false),
+];
+
+/// Flags whose next word is `user:password` (or `user%password` for
+/// `smbclient -U`): the password part is redacted, the user kept.
+const USER_PASS_FLAGS: &[&str] = &["-u", "--user", "--proxy-user", "-U"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -332,16 +381,22 @@ pub fn ioc_id(ty: IocType, value: &str) -> String {
 // Redaction, defanging and refanging
 // ---------------------------------------------------------------------------
 
-/// Remove secrets and personal information from attacker text: URL
-/// credentials, secret-looking parameters and flags, bearer tokens and the
-/// local part of email addresses. Returns the new text and whether anything
-/// changed. Linear in the input.
+/// Remove secrets and personal information from attacker text, keeping its
+/// shape: URL passwords (`scheme://user:REDACTED@host`), values after
+/// secret-named keys, headers and flags (`password=REDACTED`,
+/// `X-Api-Key: REDACTED`, `--password REDACTED`), program password flags
+/// (`mysql -pREDACTED`, `sshpass -p REDACTED`, `curl -u user:REDACTED`),
+/// bearer tokens and the local part of email addresses. Returns the new
+/// text and whether anything changed. Linear in the input.
 pub fn redact(s: &str) -> (String, bool) {
     let out = redact_emails(&redact_pairs(&redact_flags(&redact_userinfo(s))));
     let changed = out != s;
     (out, changed)
 }
 
+/// `scheme://user:pw@host` becomes `scheme://user:REDACTED@host`; userinfo
+/// without a password (often a token, `https://TOKEN@host`) becomes
+/// `REDACTED@host`.
 fn redact_userinfo(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -354,6 +409,13 @@ fn redact_userinfo(s: &str) -> String {
         let authority = &tail[..end];
         match authority.rfind('@') {
             Some(at) => {
+                match authority[..at].split_once(':') {
+                    Some((user, _)) if !user.is_empty() => {
+                        out.push_str(user);
+                        out.push(':');
+                    }
+                    _ => {}
+                }
                 out.push_str(REDACTED);
                 out.push_str(&authority[at..]);
             }
@@ -373,10 +435,13 @@ fn key_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '-')
 }
 
-/// Redact the value after a secret-looking name in query strings
-/// (`password=x`), headers (`X-Api-Key: x`) and JSON (`"password":"x"`).
-/// The name is matched by [`secret_key`]. Look-back is bounded, so this is
-/// linear in the input.
+/// Redact the value after a secret-named key in query strings
+/// (`password=x`), config lines (`password = x`), JSON (`"Password" : "x"`)
+/// and headers (`X-Api-Key: k1 k2`, the whole value to the end of the line
+/// or quote). Names are matched by [`secret_key`]. A header needs a space
+/// after the colon, so `auth-server:8080` is a host and port, not a header.
+/// Setting words (`PasswordAuthentication=no`) are kept. Look-back is
+/// bounded, so this is linear in the input.
 fn redact_pairs(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -386,10 +451,11 @@ fn redact_pairs(s: &str) -> String {
             continue;
         }
         let before = &out[..out.len() - 1];
-        // JSON keys end with a quote before the colon.
-        let quoted = c == ':' && (before.ends_with('"') || before.ends_with('\''));
-        let name_end = before.len() - usize::from(quoted);
-        let key_len = before[..name_end]
+        let trimmed = before.trim_end_matches([' ', '\t']);
+        // JSON and quoted keys end with a quote before the separator.
+        let quoted = trimmed.ends_with('"') || trimmed.ends_with('\'');
+        let name_end = trimmed.len() - usize::from(quoted);
+        let key_len = trimmed[..name_end]
             .chars()
             .rev()
             .take(MAX_KEY_CHARS + 1)
@@ -398,22 +464,23 @@ fn redact_pairs(s: &str) -> String {
         if key_len == 0 || key_len > MAX_KEY_CHARS {
             continue;
         }
-        let key = &before[name_end - key_len..name_end];
-        let starts_word = before[..name_end - key_len]
+        let key = &trimmed[name_end - key_len..name_end];
+        let starts_word = trimmed[..name_end - key_len]
             .chars()
             .next_back()
             .is_none_or(|p| {
                 matches!(p, '?' | '&' | ';' | '\'' | '"' | '{' | ',' | '(' | '[')
                     || p.is_whitespace()
             });
-        if !starts_word || !secret_key(key) {
+        let header = c == ':' && !quoted;
+        if !starts_word
+            || !secret_key(key)
+            || (header && !chars.peek().is_some_and(|n| *n == ' ' || *n == '\t'))
+        {
             continue;
         }
-        // A header or JSON value may follow spaces and an opening quote.
-        if c == ':' {
-            while chars.peek().is_some_and(|n| *n == ' ' || *n == '\t') {
-                out.push(chars.next().unwrap_or(' '));
-            }
+        while chars.peek().is_some_and(|n| *n == ' ' || *n == '\t') {
+            out.push(chars.next().unwrap_or(' '));
         }
         let quote = match chars.peek() {
             Some(&q @ ('"' | '\'')) => {
@@ -423,46 +490,194 @@ fn redact_pairs(s: &str) -> String {
             }
             _ => None,
         };
-        let mut skipped = false;
+        let mut value = String::new();
         while let Some(&n) = chars.peek() {
             let end = match quote {
                 Some(q) => n == q,
+                None if header => matches!(n, '\n' | '\r' | '\'' | '"'),
                 None => value_end(n),
             };
             if end {
                 break;
             }
+            value.push(n);
             chars.next();
-            skipped = true;
         }
-        if skipped {
+        let setting = NOT_SECRET_VALUES
+            .iter()
+            .any(|w| value.trim().eq_ignore_ascii_case(w));
+        if value.is_empty() || setting {
+            out.push_str(&value);
+        } else {
+            // Keep trailing spaces of a header value outside the redaction.
+            let kept = value.len() - value.trim_end().len();
             out.push_str(REDACTED);
+            out.push_str(&value[value.len() - kept..]);
         }
     }
     out
 }
 
+/// What a flag says about the next word.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NextWord {
+    Keep,
+    Secret,
+    /// `user:password` or `user%password`: keep the user.
+    UserPass,
+}
+
+/// Wrappers that run the next word as the program.
+const WRAPPERS: &[&str] = &["sudo", "env", "nohup", "exec", "time", "command", "xargs"];
+
+fn command_break(word: &str) -> bool {
+    matches!(word, "|" | "||" | "&&" | ";" | "&")
+        || word.ends_with(';')
+        || word.ends_with('|')
+        || word.ends_with("&&")
+}
+
+/// Replace `inner` within `word` (which may carry quotes around it).
+fn rewrap(word: &str, inner: &str, with: &str) -> String {
+    match word.find(inner) {
+        Some(i) => format!("{}{with}{}", &word[..i], &word[i + inner.len()..]),
+        None => with.to_string(),
+    }
+}
+
+/// Redact the word after secret flags (`--password x`, `-passin x`,
+/// `Bearer x`), the password half of `-u user:pw`, and program-specific
+/// password flags (`mysql -pPW`, `sshpass -p PW`, `redis-cli -a PW`). The
+/// program is the first word of each command, after wrappers such as
+/// `sudo` and inside `sh -c '...'`.
 fn redact_flags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    let mut redact_next = false;
+    let mut next = NextWord::Keep;
+    let mut prog = String::new();
+    let mut at_start = true;
+    let mut after_dash_c = false;
     for piece in s.split_inclusive(char::is_whitespace) {
         let word = piece.trim_end();
         let tail = &piece[word.len()..];
-        if redact_next && !word.is_empty() {
-            out.push_str(REDACTED);
-            out.push_str(tail);
-            redact_next = false;
+        if word.is_empty() {
+            out.push_str(piece);
             continue;
         }
+        let bare = word.trim_matches(|c| matches!(c, '\'' | '"' | '`' | '(' | ')' | '$'));
+        match std::mem::replace(&mut next, NextWord::Keep) {
+            NextWord::Secret if !bare.is_empty() => {
+                out.push_str(&rewrap(word, bare, REDACTED));
+                out.push_str(tail);
+                continue;
+            }
+            NextWord::UserPass => {
+                if let Some(i) = bare.find([':', '%']) {
+                    let with = format!("{}{REDACTED}", &bare[..=i]);
+                    out.push_str(&rewrap(word, bare, &with));
+                    out.push_str(tail);
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        if at_start || (after_dash_c && word.starts_with(['\'', '"'])) {
+            let base = bare.rsplit('/').next().unwrap_or(bare);
+            prog = base.to_ascii_lowercase();
+            at_start = WRAPPERS.contains(&prog.as_str());
+        } else if prog == "env" && bare.contains('=') {
+            at_start = true;
+        }
+        after_dash_c = bare == "-c";
+        let lw = bare.to_ascii_lowercase();
+        if SECRET_FLAGS.contains(&lw.as_str()) {
+            next = NextWord::Secret;
+        } else if USER_PASS_FLAGS.contains(&bare) {
+            next = NextWord::UserPass;
+        } else if let Some(&(_, flag, attached, separate)) = PROGRAM_SECRET_FLAGS
+            .iter()
+            .find(|(p, f, _, _)| *p == prog && bare.starts_with(f))
+        {
+            if bare == flag && separate {
+                next = NextWord::Secret;
+            } else if attached && bare.len() > flag.len() {
+                out.push_str(&rewrap(word, bare, &format!("{flag}{REDACTED}")));
+                out.push_str(tail);
+                at_start |= command_break(word);
+                continue;
+            }
+        }
         out.push_str(piece);
-        let w = word
-            .trim_matches(|c| matches!(c, '\'' | '"'))
-            .to_ascii_lowercase();
-        if SECRET_FLAGS.contains(&w.as_str()) {
-            redact_next = true;
+        if command_break(word) {
+            at_start = true;
         }
     }
     out
+}
+
+/// Redact credential arguments of a protocol command by position. `tokens`
+/// is the command, then its subcommand when the capture logs it apart, then
+/// the arguments. Returns whether anything changed.
+fn redact_command(tokens: &mut [String]) -> bool {
+    let up = |t: &[String], i: usize| t.get(i).map(|x| x.to_ascii_uppercase());
+    let n = tokens.len();
+    let mut hits: Vec<usize> = Vec::new();
+    match up(tokens, 0).as_deref() {
+        // AUTH [user] password, LOGIN [user] password.
+        Some("AUTH" | "LOGIN") if n >= 2 => hits.push(n - 1),
+        Some("PASS") => hits.extend(1..n),
+        // HELLO protover AUTH user password.
+        Some("HELLO") => {
+            if let Some(i) = (1..n).find(|&i| up(tokens, i).as_deref() == Some("AUTH")) {
+                hits.push(i + 2);
+            }
+        }
+        // MIGRATE ... AUTH password | AUTH2 user password.
+        Some("MIGRATE") => {
+            for i in 1..n {
+                match up(tokens, i).as_deref() {
+                    Some("AUTH") => hits.push(i + 1),
+                    Some("AUTH2") => hits.push(i + 2),
+                    _ => {}
+                }
+            }
+        }
+        // CONFIG SET name value [name value ...].
+        Some("CONFIG") if up(tokens, 1).as_deref() == Some("SET") => {
+            let mut i = 2;
+            while i + 1 < n {
+                let name = tokens[i].to_ascii_lowercase();
+                if name == "requirepass"
+                    || name == "masterauth"
+                    || name.ends_with("pass")
+                    || secret_key(&name)
+                {
+                    hits.push(i + 1);
+                }
+                i += 2;
+            }
+        }
+        _ => {}
+    }
+    let mut changed = false;
+    // ACL SETUSER name rule...: `>pw`, `<pw`, `#hash` and `!hash` are
+    // passwords or their hashes.
+    if up(tokens, 0).as_deref() == Some("ACL") && up(tokens, 1).as_deref() == Some("SETUSER") {
+        for t in tokens.iter_mut().skip(3) {
+            if let Some(first @ ('>' | '<' | '#' | '!')) = t.chars().next()
+                && t.len() > 1
+            {
+                *t = format!("{first}{REDACTED}");
+                changed = true;
+            }
+        }
+    }
+    for i in hits {
+        if i < n && tokens[i] != REDACTED {
+            tokens[i] = REDACTED.to_string();
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Replace the local part of email addresses, written plainly or with the
@@ -638,19 +853,71 @@ fn names_canary(v: &str, e: &CaptureEvent) -> bool {
         || text(e, "canary_id").is_some_and(|id| v.contains(id))
 }
 
-/// Parse an address literal, including the single-number (`2852039166`)
-/// and hexadecimal (`0xa9fea9fe`) IPv4 forms URLs accept.
+/// One part of a loose IPv4 address, as `inet_aton` and WHATWG URL
+/// parsing read it: `0x` hexadecimal, a leading `0` octal, else decimal.
+fn ipv4_part(p: &str) -> Option<u64> {
+    if p.is_empty() || p.len() > 34 {
+        return None;
+    }
+    if let Some(hex) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
+        return if hex.is_empty() {
+            Some(0)
+        } else {
+            u64::from_str_radix(hex, 16).ok()
+        };
+    }
+    if p.len() > 1 && p.starts_with('0') {
+        return u64::from_str_radix(&p[1..], 8).ok();
+    }
+    if p.bytes().all(|b| b.is_ascii_digit()) {
+        p.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// IPv4 in every form a URL or resolver accepts: one to four parts, each
+/// decimal, octal or hexadecimal, the last part filling the remaining bytes
+/// (`127.1`, `169.254.43518`, `2852039166`, `0251.0376.0251.0376`,
+/// `0xa9.0xfe.0xa9.0xfe`).
+fn parse_ipv4_loose(s: &str) -> Option<std::net::Ipv4Addr> {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.is_empty() || parts.len() > 4 {
+        return None;
+    }
+    let nums: Vec<u64> = parts.iter().map(|p| ipv4_part(p)).collect::<Option<_>>()?;
+    let (last, head) = nums.split_last()?;
+    if head.iter().any(|n| *n > 255) {
+        return None;
+    }
+    let width = 8 * (5 - nums.len() as u32);
+    if width < 64 && *last >= 1u64 << width {
+        return None;
+    }
+    let mut n: u64 = 0;
+    for (i, h) in head.iter().enumerate() {
+        n |= h << (24 - 8 * i as u32);
+    }
+    n |= last;
+    u32::try_from(n).ok().map(std::net::Ipv4Addr::from)
+}
+
+/// A host name with the trailing root dots removed and lower case:
+/// `Metadata.Google.Internal.` and `metadata.google.internal` are one name.
+fn host_key(raw: &str) -> String {
+    raw.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// Parse an address literal in any form a URL or resolver accepts:
+/// IPv6 (bracketed or not), and loose IPv4 ([`parse_ipv4_loose`]), with
+/// trailing dots ignored.
 fn parse_ip(raw: &str) -> Option<IpAddr> {
     let raw = raw.trim().trim_start_matches('[').trim_end_matches(']');
+    let raw = raw.trim_end_matches('.');
     if let Ok(ip) = raw.parse::<IpAddr>() {
         return Some(ip.to_canonical());
     }
-    let n = match raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
-        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
-        None if raw.bytes().all(|b| b.is_ascii_digit()) => raw.parse::<u32>().ok()?,
-        None => return None,
-    };
-    Some(IpAddr::V4(std::net::Ipv4Addr::from(n)))
+    parse_ipv4_loose(raw).map(IpAddr::V4)
 }
 
 /// True for addresses that are the decoy's own or the platform's network:
@@ -665,6 +932,7 @@ fn internal_ip(ip: IpAddr) -> bool {
 /// covers `metadata.google.internal`), `.home.arpa`, `.lan`, `.localdomain`
 /// and reverse lookups.
 fn internal_name(d: &str) -> bool {
+    let d = host_key(d);
     d == "localhost"
         || [
             ".localhost",
@@ -678,10 +946,11 @@ fn internal_name(d: &str) -> bool {
         ]
         .iter()
         .any(|s| d.ends_with(s))
+        || !d.contains('.')
 }
 
 fn norm_ip(raw: &str) -> Option<(IocType, String)> {
-    let o = Observable::ip(raw).ok()?;
+    let o = Observable::ip(&parse_ip(raw)?.to_string()).ok()?;
     // The decoy's own network (guest, bridge, resolver) is never an IOC.
     if !o.is_external_lookup_eligible() {
         return None;
@@ -698,9 +967,9 @@ fn norm_domain(raw: &str) -> Option<String> {
     if parse_ip(raw).is_some() {
         return None;
     }
-    let o = Observable::domain(raw).ok()?;
+    let o = Observable::domain(&host_key(raw)).ok()?;
     // Single-label and local names are not attacker infrastructure.
-    (o.value.contains('.') && !internal_name(&o.value)).then_some(o.value)
+    (!internal_name(&o.value)).then_some(o.value)
 }
 
 /// Host part of a URL authority or a Host header, without port or
@@ -792,7 +1061,7 @@ impl Sink<'_> {
         // name is not attacker infrastructure.
         let internal = match parse_ip(&host) {
             Some(ip) => internal_ip(ip),
-            None => !host.contains('.') || internal_name(&host),
+            None => internal_name(&host),
         };
         if internal {
             return;
@@ -839,6 +1108,24 @@ impl Sink<'_> {
     }
 }
 
+/// The command, its subcommand when the capture logs it apart (the Redis
+/// emulator writes `data.subcommand` and leaves it out of `data.args`), and
+/// the arguments, one token each.
+fn command_tokens(e: &CaptureEvent, cmd: &str) -> Vec<String> {
+    let mut tokens = vec![cmd.to_string()];
+    tokens.extend(text(e, "subcommand").map(str::to_string));
+    match e.data.get("args") {
+        Some(Value::Array(a)) => tokens.extend(a.iter().filter_map(|x| match x {
+            Value::String(s) => Some(s.clone()),
+            Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        })),
+        Some(Value::String(a)) => tokens.extend(a.split_whitespace().map(str::to_string)),
+        _ => {}
+    }
+    tokens
+}
+
 fn candidates(e: &CaptureEvent, opts: ExtractOptions, out: &mut Vec<Candidate>) {
     let mut s = Sink { e, out };
     let ua = |s: &mut Sink| {
@@ -870,25 +1157,17 @@ fn candidates(e: &CaptureEvent, opts: ExtractOptions, out: &mut Vec<Candidate>) 
                     );
                 }
             } else if let Some(cmd) = text(e, "command") {
-                let args = words(e.data.get("args")).unwrap_or_default();
-                let secret = !args.is_empty()
-                    && SECRET_COMMANDS.contains(&cmd.to_ascii_uppercase().as_str());
-                let line = if args.is_empty() {
-                    cmd.to_string()
-                } else if secret {
-                    format!("{cmd} {REDACTED}")
-                } else {
-                    format!("{cmd} {args}")
-                };
+                let mut tokens = command_tokens(e, cmd);
+                let positional = redact_command(&mut tokens);
                 let before = s.out.len();
                 s.text(
                     IocType::RequestSubstring,
-                    &line,
+                    &tokens.join(" "),
                     MAX_VALUE_CHARS,
                     IocRole::Request,
                     "data.command",
                 );
-                if secret && s.out.len() > before {
+                if positional && s.out.len() > before {
                     s.out[before].redacted = true;
                 }
             }
@@ -1098,42 +1377,100 @@ fn step_word(w: &str, max: usize, e: &CaptureEvent) -> String {
     }
 }
 
-/// Path without query values, digit runs folded to `0`, long or token-like
-/// segments folded to `*` and the rest passed through [`step_word`], plus the sorted query parameter names:
-/// `/api/upload?path`.
+/// Path segments after which every segment is a credential, user name or
+/// one-time value (`/login/<user>`, `/reset/<token>`).
+const AUTH_SEGMENTS: &[&str] = &[
+    "2fa",
+    "account",
+    "accounts",
+    "activate",
+    "api-key",
+    "apikey",
+    "auth",
+    "authenticate",
+    "confirm",
+    "forgot",
+    "invite",
+    "key",
+    "keys",
+    "login",
+    "logon",
+    "magic",
+    "mfa",
+    "oauth",
+    "otp",
+    "password",
+    "passwd",
+    "profile",
+    "reset",
+    "secret",
+    "session",
+    "sessions",
+    "signin",
+    "sign-in",
+    "token",
+    "tokens",
+    "u",
+    "unlock",
+    "user",
+    "users",
+    "verify",
+];
+
+/// Shannon entropy of `s` in bits per character.
+fn entropy(s: &str) -> f64 {
+    let mut counts: BTreeMap<char, u32> = BTreeMap::new();
+    let mut n = 0u32;
+    for c in s.chars() {
+        *counts.entry(c).or_default() += 1;
+        n += 1;
+    }
+    let n = f64::from(n.max(1));
+    counts
+        .values()
+        .map(|&c| {
+            let p = f64::from(c) / n;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+/// One path segment or parameter name for a fingerprint step: `*` when it
+/// varies between runs of the same tool (holds a digit, other than a short
+/// version like `v2`, is long or looks random) and otherwise the word.
+fn shape_word(w: &str, e: &CaptureEvent) -> String {
+    let lower = w.to_ascii_lowercase();
+    let version = lower.len() <= 4
+        && lower.starts_with('v')
+        && lower.len() > 1
+        && lower[1..].bytes().all(|b| b.is_ascii_digit());
+    let numeric = w.chars().any(|c| c.is_ascii_digit()) && !version;
+    let random = w.chars().nth(11).is_some() && entropy(w) >= 3.5;
+    if numeric || random || w.chars().nth(32).is_some() {
+        FOLDED.to_string()
+    } else {
+        step_word(w, 32, e)
+    }
+}
+
+/// Path without query values, at most 16 segments through [`shape_word`],
+/// every segment after an [`AUTH_SEGMENTS`] one folded to `*`, plus the
+/// sorted query parameter names: `/api/upload?path`, `/login/*`.
 fn path_shape(p: &str, e: &CaptureEvent) -> String {
     let (path, query) = p.split_once('?').unwrap_or((p, ""));
     let path = path.split('#').next().unwrap_or("");
-    let fold_digits = |seg: &str| {
-        let mut out = String::new();
-        let mut in_digits = false;
-        for c in seg.chars() {
-            if c.is_ascii_digit() {
-                if !in_digits {
-                    out.push('0');
-                }
-                in_digits = true;
-            } else {
-                out.push(c);
-                in_digits = false;
-            }
-        }
-        out
-    };
+    let mut after_auth = false;
     let segments: Vec<String> = path
         .split('/')
         .take(16)
         .map(|seg| {
-            // Long mixed letter and digit segments are ids or tokens.
-            let token_like = seg.chars().nth(7).is_some()
-                && seg.chars().any(|c| c.is_ascii_digit())
-                && seg.chars().any(|c| c.is_ascii_alphabetic());
             if seg.is_empty() {
                 String::new()
-            } else if token_like || seg.chars().nth(32).is_some() {
+            } else if after_auth {
                 FOLDED.to_string()
             } else {
-                step_word(&fold_digits(seg), 32, e)
+                after_auth = AUTH_SEGMENTS.contains(&seg.to_ascii_lowercase().as_str());
+                shape_word(seg, e)
             }
         })
         .collect();
@@ -1146,7 +1483,7 @@ fn path_shape(p: &str, e: &CaptureEvent) -> String {
         .filter_map(|kv| kv.split('=').next())
         .filter(|k| !k.is_empty())
         .take(16)
-        .map(|k| step_word(k, 32, e))
+        .map(|k| shape_word(k, e))
         .collect();
     if !names.is_empty() {
         shaped.push('?');
@@ -1190,12 +1527,17 @@ fn steps_for(e: &CaptureEvent) -> Vec<String> {
                     path_shape(text(e, "path").unwrap_or("/"), e)
                 )]
             } else if let Some(c) = text(e, "command") {
+                // The subcommand as the emulator logged it, else the first
+                // argument of commands known to take one. Never other
+                // arguments: keys, passwords and payloads stay out.
                 let cmd = verb(c, e);
-                let sub = SUBCOMMAND_VERBS
-                    .contains(&cmd.as_str())
-                    .then(|| words(e.data.get("args")))
-                    .flatten()
-                    .and_then(|a| a.split_whitespace().next().map(|w| verb(w, e)));
+                let sub = text(e, "subcommand").map(|w| verb(w, e)).or_else(|| {
+                    SUBCOMMAND_VERBS
+                        .contains(&cmd.as_str())
+                        .then(|| words(e.data.get("args")))
+                        .flatten()
+                        .and_then(|a| a.split_whitespace().next().map(|w| verb(w, e)))
+                });
                 vec![match sub {
                     Some(sub) => format!("cmd {cmd} {sub}"),
                     None => format!("cmd {cmd}"),
@@ -1749,6 +2091,7 @@ mod tests {
     #[test]
     fn redaction_removes_secrets_and_email_local_parts() {
         let cases = [
+            // Query strings and config lines, any case, any position.
             (
                 "/login?user=bob&password=hunter2&x=1",
                 "/login?user=bob&password=REDACTED&x=1",
@@ -1765,29 +2108,109 @@ mod tests {
                 "/a?Api-Key=REDACTED&private_key=REDACTED&sessid=REDACTED",
             ),
             (
+                "/a?X-Auth-Token=x&basic_auth=y",
+                "/a?X-Auth-Token=REDACTED&basic_auth=REDACTED",
+            ),
+            (
                 "/b?X-Amz-Credential=AKIDEXAMPLE&X-Amz-Signature=abc123&X-Amz-Date=1",
                 "/b?X-Amz-Credential=REDACTED&X-Amz-Signature=REDACTED&X-Amz-Date=1",
             ),
+            ("db_password = hunter2", "db_password = REDACTED"),
+            // JSON, with or without spaces around the colon.
             (
                 r#"{"user":"bob","password":"hunter2","n":1}"#,
                 r#"{"user":"bob","password":"REDACTED","n":1}"#,
             ),
+            (r#"{"Password" : "x y"}"#, r#"{"Password" : "REDACTED"}"#),
             (r#"{"apiToken": 12345}"#, r#"{"apiToken": REDACTED}"#),
+            // Headers: the whole value.
             ("X-Api-Key: abc123", "X-Api-Key: REDACTED"),
+            ("X-Api-Key: k1 k2", "X-Api-Key: REDACTED"),
+            (
+                "curl -H 'X-Api-Key: k1 k2' http://a.example.invalid/",
+                "curl -H 'X-Api-Key: REDACTED' http://a.example.invalid/",
+            ),
             ("cookie: sid=abc", "cookie: REDACTED"),
+            ("Authorization: Bearer abc.def", "Authorization: REDACTED"),
+            (
+                "Authorization: Basic dXNlcjpwdw==",
+                "Authorization: REDACTED",
+            ),
+            // URL userinfo keeps the user.
             (
                 "curl http://u:p@203.0.113.9/x",
-                "curl http://REDACTED@203.0.113.9/x",
+                "curl http://u:REDACTED@203.0.113.9/x",
             ),
+            (
+                "mysql://root:hunter2@db.example.invalid/x",
+                "mysql://root:REDACTED@db.example.invalid/x",
+            ),
+            (
+                "redis://:hunter2@203.0.113.9:6379",
+                "redis://REDACTED@203.0.113.9:6379",
+            ),
+            (
+                "https://ghp_abc@git.example.invalid/x",
+                "https://REDACTED@git.example.invalid/x",
+            ),
+            // Command lines keep their shape.
             (
                 "mysql --password hunter2 -h db",
                 "mysql --password REDACTED -h db",
             ),
             ("app --password=hunter2", "app --password=REDACTED"),
             (
-                "Authorization: Bearer abc.def",
-                "Authorization: REDACTED REDACTED",
+                "mysql -uroot -phunter2 -h 203.0.113.9",
+                "mysql -uroot -pREDACTED -h 203.0.113.9",
             ),
+            (
+                "sudo mysqldump -phunter2 db",
+                "sudo mysqldump -pREDACTED db",
+            ),
+            (
+                "sshpass -p hunter2 ssh root@203.0.113.9",
+                "sshpass -p REDACTED ssh root@203.0.113.9",
+            ),
+            ("sshpass -phunter2 ssh x", "sshpass -pREDACTED ssh x"),
+            (
+                "sh -c 'sshpass -p hunter2 ssh x'",
+                "sh -c 'sshpass -p REDACTED ssh x'",
+            ),
+            (
+                "curl -u admin:hunter2 http://a.example.invalid/",
+                "curl -u admin:REDACTED http://a.example.invalid/",
+            ),
+            (
+                "curl --user 'admin:hunter2' x",
+                "curl --user 'admin:REDACTED' x",
+            ),
+            (
+                "smbclient //h/s -U admin%hunter2",
+                "smbclient //h/s -U admin%REDACTED",
+            ),
+            (
+                "redis-cli -h 203.0.113.9 -a hunter2 info",
+                "redis-cli -h 203.0.113.9 -a REDACTED info",
+            ),
+            (
+                "mosquitto_pub -u x -P hunter2 -t t",
+                "mosquitto_pub -u x -P REDACTED -t t",
+            ),
+            ("unzip -P hunter2 a.zip", "unzip -P REDACTED a.zip"),
+            ("7z x -phunter2 a.7z", "7z x -pREDACTED a.7z"),
+            (
+                "openssl enc -d -pass pass:hunter2",
+                "openssl enc -d -pass REDACTED",
+            ),
+            ("ls | mysql -phunter2", "ls | mysql -pREDACTED"),
+            // Not secrets: -p means something else for these programs.
+            ("mkdir -p /tmp/x", "mkdir -p /tmp/x"),
+            (
+                "ssh -p 2222 root@203.0.113.9",
+                "ssh -p 2222 root@203.0.113.9",
+            ),
+            ("mysql -p db", "mysql -p db"),
+            // Emails, plain and URL-encoded.
             (
                 "mail admin@example.invalid now",
                 "mail REDACTED@example.invalid now",
@@ -1796,6 +2219,14 @@ mod tests {
                 "/subscribe?to=admin%40example.invalid",
                 "/subscribe?to=REDACTED%40example.invalid",
             ),
+            // Over-redaction avoided.
+            ("/blog?author=bob", "/blog?author=bob"),
+            ("PasswordAuthentication=no", "PasswordAuthentication=no"),
+            (
+                "sed -i s/x/y/ PasswordAuthentication yes",
+                "sed -i s/x/y/ PasswordAuthentication yes",
+            ),
+            ("curl auth-server:8080/x", "curl auth-server:8080/x"),
             ("ssh root@203.0.113.9", "ssh root@203.0.113.9"),
             (
                 "http://stage2.example.invalid:8080/x",
@@ -2252,7 +2683,7 @@ mod tests {
             .find_map(|i| i.fingerprint.clone())
             .unwrap()
             .steps;
-        assert_eq!(steps[0], "http * /reset/*/*/x?token");
+        assert_eq!(steps[0], "http * /reset/*/*/*?token");
     }
 
     #[test]
@@ -2337,6 +2768,252 @@ mod tests {
         );
         assert!(!a.file_ioc_limited, "but the file was captured");
         assert!(a.notes.iter().any(|n| n.contains("not kept")));
+    }
+
+    #[test]
+    fn protocol_secret_arguments_are_redacted_by_position() {
+        let cases: [(&str, Option<&str>, Value, &str); 9] = [
+            (
+                "AUTH",
+                None,
+                json!(["default", "hunter2"]),
+                "AUTH default REDACTED",
+            ),
+            (
+                "HELLO",
+                None,
+                json!(["3", "AUTH", "default", "hunter2"]),
+                "HELLO 3 AUTH default REDACTED",
+            ),
+            (
+                "HELLO",
+                None,
+                json!(["3", "SETNAME", "x"]),
+                "HELLO 3 SETNAME x",
+            ),
+            (
+                "CONFIG",
+                Some("SET"),
+                json!(["requirepass", "hunter2"]),
+                "CONFIG SET requirepass REDACTED",
+            ),
+            (
+                "CONFIG",
+                Some("SET"),
+                json!(["masterauth", "hunter2", "dir", "/tmp"]),
+                "CONFIG SET masterauth REDACTED dir /tmp",
+            ),
+            (
+                "CONFIG",
+                None,
+                json!(["SET", "requirepass", "hunter2"]),
+                "CONFIG SET requirepass REDACTED",
+            ),
+            (
+                "MIGRATE",
+                None,
+                json!([
+                    "192.0.2.10",
+                    "6379",
+                    "k",
+                    "0",
+                    "5000",
+                    "AUTH2",
+                    "u",
+                    "hunter2"
+                ]),
+                "MIGRATE 192.0.2.10 6379 k 0 5000 AUTH2 u REDACTED",
+            ),
+            (
+                "ACL",
+                Some("SETUSER"),
+                json!(["bob", "on", ">hunter2", "#abcd"]),
+                "ACL SETUSER bob on >REDACTED #REDACTED",
+            ),
+            ("PASS", None, json!(["hunter2"]), "PASS REDACTED"),
+        ];
+        for (i, (cmd, sub, args, want)) in cases.into_iter().enumerate() {
+            let mut data = json!({"protocol": "redis", "command": cmd, "args": args});
+            if let Some(sub) = sub {
+                data["subcommand"] = json!(sub);
+            }
+            let events = parse(vec![ev(
+                &format!("e{i}"),
+                T0,
+                "application",
+                "203.0.113.7",
+                data,
+            )]);
+            let (_, x) = run(&events, ExtractOptions::default());
+            let got = x
+                .iocs
+                .iter()
+                .find(|i| i.ioc_type == IocType::RequestSubstring)
+                .unwrap();
+            assert_eq!(got.value, want);
+            assert_eq!(got.redacted, want.contains(REDACTED), "{want}");
+        }
+    }
+
+    #[test]
+    fn emulator_subcommands_shape_fingerprint_steps() {
+        // The Redis emulator logs the subcommand apart and drops it from args.
+        let events = parse(vec![
+            ev(
+                "e1",
+                T0,
+                "application",
+                "203.0.113.7",
+                json!({"protocol": "redis", "command": "CONFIG", "subcommand": "SET", "args": ["requirepass", "hunter2"]}),
+            ),
+            ev(
+                "e2",
+                T0 + 1,
+                "application",
+                "203.0.113.7",
+                json!({"protocol": "redis", "command": "MODULE", "subcommand": "LOAD", "args": ["/tmp/exp.so"]}),
+            ),
+            hook("e3", T0 + 2, "203.0.113.7", "trigger", json!({})),
+        ]);
+        let (_, x) = run(&events, ExtractOptions::default());
+        let steps = x
+            .iocs
+            .iter()
+            .find_map(|i| i.fingerprint.clone())
+            .unwrap()
+            .steps;
+        assert_eq!(steps[..2], ["cmd CONFIG SET", "cmd MODULE LOAD"]);
+    }
+
+    #[test]
+    fn varying_path_segments_do_not_change_fingerprints() {
+        let chain = |path: &str, id: &str| {
+            parse(vec![
+                ev(
+                    &format!("{id}1"),
+                    T0,
+                    "application",
+                    "203.0.113.7",
+                    json!({"method": "POST", "path": path}),
+                ),
+                hook(
+                    &format!("{id}2"),
+                    T0 + 1,
+                    "203.0.113.7",
+                    "trigger",
+                    json!({}),
+                ),
+            ])
+        };
+        let fp = |path: &str, id: &str| {
+            let (_, x) = run(&chain(path, id), ExtractOptions::default());
+            let f = x.iocs.iter().find_map(|i| i.fingerprint.clone()).unwrap();
+            (
+                values(&x, IocType::BehaviourFingerprint)[0].to_string(),
+                f.steps[0].clone(),
+            )
+        };
+        let (a, sa) = fp("/login/hunter0", "a");
+        let (b, _) = fp("/login/correcthorse", "b");
+        let (c, _) = fp("/login/x", "c");
+        assert_eq!(sa, "http POST /login/*");
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_eq!(fp("/u/alice/files", "d").1, "http POST /u/*/*");
+        assert_eq!(fp("/img/42.png", "e").1, "http POST /img/*");
+        assert_eq!(fp("/api/v2/upload", "f").1, "http POST /api/v2/upload");
+        assert_eq!(fp("/dl/aGVsbG93b3JsZEZvbw", "g").1, "http POST /dl/*");
+        assert_eq!(
+            fp("/cgi-bin/administrator.cgi", "h").1,
+            "http POST /cgi-bin/administrator.cgi"
+        );
+    }
+
+    #[test]
+    fn loose_ipv4_and_trailing_dots_are_parsed_like_urls() {
+        for (raw, want) in [
+            ("0251.0376.0251.0376", "169.254.169.254"),
+            ("0177.0.0.1", "127.0.0.1"),
+            ("0xa9.0xfe.0xa9.0xfe", "169.254.169.254"),
+            ("127.1", "127.0.0.1"),
+            ("169.254.43518", "169.254.169.254"),
+            ("2852039166", "169.254.169.254"),
+            ("0xa9fea9fe", "169.254.169.254"),
+            ("169.254.169.254.", "169.254.169.254"),
+            ("[fd00::1]", "fd00::1"),
+            ("203.0.113.7", "203.0.113.7"),
+        ] {
+            assert_eq!(
+                parse_ip(raw).map(|i| i.to_string()).as_deref(),
+                Some(want),
+                "{raw}"
+            );
+        }
+        for raw in [
+            "256.1.1.1",
+            "1.2.3.4.5",
+            "08.1.1.1",
+            "example.invalid",
+            "1.example",
+            "0x1g.1.1.1",
+            "4294967296",
+        ] {
+            assert!(parse_ip(raw).is_none(), "{raw}");
+        }
+        assert!(internal_name("metadata.google.internal."));
+        assert!(internal_name("LOCALHOST."));
+        assert!(!internal_name("stage2.example.invalid."));
+    }
+
+    #[test]
+    fn obfuscated_internal_hosts_are_never_iocs() {
+        let mut egress = ev(
+            "e2",
+            T0 + 10,
+            "egress",
+            "10.85.1.2",
+            json!({"host": "metadata.google.internal.", "method": "GET", "path": "/x"}),
+        );
+        egress["dst"] = json!({"ip": "203.0.113.99", "port": 80});
+        let events = parse(vec![
+            hook(
+                "e1",
+                T0,
+                "203.0.113.7",
+                "trigger",
+                json!({"cmd_lines": [
+                    "curl http://0251.0376.0251.0376/a http://0177.0.0.1/b http://0xa9.0xfe.0xa9.0xfe/c",
+                    "curl http://127.1/d http://169.254.43518/e http://169.254.169.254./f",
+                    "curl http://metadata.google.internal./g http://localhost./h",
+                    "curl http://stage2.example.invalid./ok"
+                ]}),
+            ),
+            egress,
+            ev(
+                "e3",
+                T0 + 20,
+                "dns",
+                "10.85.1.2",
+                json!({"query": "localhost."}),
+            ),
+            ev(
+                "e4",
+                T0 + 21,
+                "dns",
+                "10.85.1.2",
+                json!({"query": "169.254.169.254."}),
+            ),
+        ]);
+        let (_, x) = run(&events, ExtractOptions::default());
+        assert_eq!(
+            values(&x, IocType::Url),
+            vec!["http://stage2.example.invalid./ok"]
+        );
+        assert_eq!(values(&x, IocType::Domain), vec!["stage2.example.invalid"]);
+        assert!(values(&x, IocType::DnsQuery).is_empty());
+        let mut ips = values(&x, IocType::Ip);
+        ips.sort();
+        assert_eq!(ips, vec!["203.0.113.7", "203.0.113.99"]);
     }
 
     #[test]
