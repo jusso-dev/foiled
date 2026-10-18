@@ -1,0 +1,5 @@
+attempt att_20f0b9c9a0ac379237eff67e  192.0.2.44 -> dcy-redis-1 (emulator/redis/7.0)
+state probe  first seen 2026-10-18T01:04:03Z  last seen 2026-10-18T01:04:03Z  1 event(s)
+   1  +   0.000s  application info     CONFIG SET dir /var/spool/cron
+                   state -> probe (first_contact)
+pcap filter 'host 192.0.2.44' from 2026-10-18T01:03:58Z to 2026-10-18T01:04:08Z

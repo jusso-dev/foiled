@@ -1,0 +1,60 @@
+{
+  "attempt_id": "att_20f0b9c9a0ac379237eff67e",
+  "decoy_id": "dcy-redis-1",
+  "catalogue_id": "emulator/redis/7.0",
+  "src": "192.0.2.44",
+  "first_seen": 1792285443000,
+  "last_seen": 1792285443000,
+  "state": "probe",
+  "entries": [
+    {
+      "seq": 1,
+      "ts": 1792285443000,
+      "t_offset_ms": 0,
+      "channel": "application",
+      "severity": "info",
+      "summary": "CONFIG SET dir /var/spool/cron",
+      "state_change": {
+        "state": "probe",
+        "signal": "first_contact"
+      },
+      "event": {
+        "event_id": "r1",
+        "ts": 1792285443000,
+        "decoy_id": "dcy-redis-1",
+        "catalogue_id": "emulator/redis/7.0",
+        "decoy_kind": "emulation",
+        "channel": "application",
+        "severity": "info",
+        "src": {
+          "ip": "192.0.2.44"
+        },
+        "source": {
+          "kind": "host",
+          "id": "host-1"
+        },
+        "tenant_id": "t1",
+        "data": {
+          "args": [
+            "SET",
+            "dir",
+            "/var/spool/cron"
+          ],
+          "command": "CONFIG"
+        }
+      }
+    }
+  ],
+  "payload_refs": [],
+  "ioc_refs": [],
+  "pcap": {
+    "filter": "host 192.0.2.44",
+    "from_ms": 1792285438000,
+    "to_ms": 1792285448000,
+    "host_glob": "dcy-redis-1/ring.pcap*",
+    "r2_prefix": "t1/dcy-redis-1/_/network/",
+    "output_path": "attempts/att_20f0b9c9a0ac379237eff67e/attempt.pcap"
+  },
+  "notes": [],
+  "missing_event_ids": []
+}
