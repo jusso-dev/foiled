@@ -9,6 +9,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
 
@@ -46,11 +47,17 @@ pub trait CertIssuer: Send + Sync {
 pub struct FakeIssuer {
     issued: Mutex<u64>,
     revoked: Mutex<Vec<String>>,
+    failing: AtomicBool,
 }
 
 impl FakeIssuer {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// While set, every issue call fails, as an unreachable CA would.
+    pub fn set_failing(&self, failing: bool) {
+        self.failing.store(failing, Ordering::SeqCst);
     }
 
     /// Issuer references revoked so far, in order.
@@ -82,6 +89,11 @@ fn b64(bytes: &[u8]) -> String {
 
 impl CertIssuer for FakeIssuer {
     fn issue(&self, csr_pem: &str, validity_days: u32) -> IssuerFuture<'_, IssuedCert> {
+        if self.failing.load(Ordering::SeqCst) {
+            return Box::pin(std::future::ready(Err(IssuerError(
+                "fake CA is down".into(),
+            ))));
+        }
         let n = {
             let mut g = self.issued.lock().unwrap_or_else(|e| e.into_inner());
             *g += 1;

@@ -68,6 +68,7 @@ fn harness() -> Harness {
         cert_sha256: "aa".repeat(32),
         revoked: false,
         valid_until: None,
+        expires_at: None,
     });
     let clock = Arc::new(AtomicI64::new(NOW));
     let counter = Arc::new(AtomicU64::new(0));

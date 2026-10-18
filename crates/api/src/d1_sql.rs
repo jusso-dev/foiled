@@ -12,8 +12,8 @@ pub const MIGRATIONS: &[&str] = &[
 pub const TOKEN_BY_ID: &str = "SELECT id, tenant_id, role, scopes, secret_sha256, expires_at, revoked \
      FROM api_tokens WHERE id = ?1";
 
-pub const IDENTITY_BY_CERT: &str = "SELECT id, tenant_id, role, scopes, cert_sha256, revoked, valid_until \
-     FROM identities WHERE cert_sha256 = ?1";
+pub const IDENTITY_BY_CERT: &str = "SELECT id, tenant_id, role, scopes, cert_sha256, revoked, valid_until, \
+     expires_at FROM identities WHERE cert_sha256 = ?1";
 
 pub const INSERT_DECOY: &str = "INSERT INTO decoys (id, tenant_id, catalogue_id, decoy_kind, label, state, host_id, \
      generation, created_at, updated_at, expires_at, created_by) \
@@ -175,9 +175,17 @@ pub const REVOKE_AGENT: &str = "UPDATE agents SET status = 'revoked', revoked_at
 pub const REVOKE_IDENTITIES: &str =
     "UPDATE identities SET revoked = 1 WHERE tenant_id = ?1 AND id = ?2";
 
-/// `?1` tenant, `?2` identity id.
-pub const ISSUER_REFS: &str = "SELECT issuer_ref FROM identities \
-     WHERE tenant_id = ?1 AND id = ?2 AND issuer_ref IS NOT NULL ORDER BY created_at";
+/// Every certificate of an identity with its CA reference (NULL for
+/// certificates issued outside `/v0/enrol`). `?1` tenant, `?2` identity id.
+pub const AGENT_CERTS: &str = "SELECT cert_sha256, issuer_ref FROM identities \
+     WHERE tenant_id = ?1 AND id = ?2 ORDER BY created_at, cert_sha256";
+
+/// Reopen a token after the CA failed to issue. Only the claim made at
+/// `?2` is undone, and never for a revoked agent. `?1` id.
+pub const RELEASE_ENROLMENT_TOKEN: &str = "UPDATE enrolment_tokens SET used_at = NULL \
+     WHERE id = ?1 AND used_at = ?2 AND EXISTS (SELECT 1 FROM agents \
+     WHERE agents.id = enrolment_tokens.agent_id AND agents.tenant_id = enrolment_tokens.tenant_id \
+     AND agents.status != 'revoked')";
 
 /// `?1` tenant, `?2` id, `?3` now, `?4` ip, `?5` asn, `?6` 1 if the network jumped.
 pub const RECORD_AGENT_SEEN: &str = "UPDATE agents SET last_seen_at = ?3, last_ip = ?4, last_asn = ?5, \
@@ -517,16 +525,22 @@ mod tests {
     }
 
     #[test]
-    fn identities_migration_keeps_existing_rows() {
+    fn identities_migration_keeps_existing_rows_and_registers_them() {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(MIGRATIONS[0]).unwrap();
         c.execute_batch(MIGRATIONS[1]).unwrap();
-        c.execute(
-            "INSERT INTO identities (id, tenant_id, role, scopes, cert_sha256, created_at, revoked) \
-             VALUES ('h1', 't1', 'host', 'host:lease', 'ab', 1, 1)",
-            [],
-        )
-        .unwrap();
+        for (id, role, scopes, fp, revoked) in [
+            ("h1", "host", "host:lease", "ab", 1),
+            ("h2", "host", "host:lease host:report host:ingest", "cd", 0),
+            ("s9", "sensor", "sensor:ingest sensor:heartbeat", "ef", 0),
+        ] {
+            c.execute(
+                "INSERT INTO identities (id, tenant_id, role, scopes, cert_sha256, created_at, revoked) \
+                 VALUES (?1, 't1', ?2, ?3, ?4, 1, ?5)",
+                params![id, role, scopes, fp, revoked],
+            )
+            .unwrap();
+        }
         for m in &MIGRATIONS[2..] {
             c.execute_batch(m).unwrap();
         }
@@ -536,7 +550,47 @@ mod tests {
             })
             .unwrap();
         assert_eq!((id.as_str(), revoked, valid), ("h1", 1, None));
+        let scopes: String = c
+            .query_row(IDENTITY_BY_CERT, params!["ef"], |r| r.get(3))
+            .unwrap();
+        assert_eq!(scopes, "sensor:ingest", "retired scope name stripped");
+        assert!(foiled_core::auth::parse_scopes(&scopes).is_ok());
+
+        // Pre-existing identities are in the registry with the right status.
+        let status = |role: &str, id: &str| -> String {
+            c.query_row(&agent_by_id(), params!["t1", role, id], |r| r.get(4))
+                .unwrap()
+        };
+        assert_eq!(status("host", "h1"), "revoked");
+        assert_eq!(status("host", "h2"), "active");
+        assert_eq!(status("sensor", "s9"), "active");
+
+        // A migrated host can be revoked through the registry statements.
+        let hit: Option<String> = c
+            .query_row(
+                REVOKE_AGENT,
+                params!["t1", "host", "h2", 50, "operator_manual", "old host"],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(hit.as_deref(), Some("h2"));
+        c.execute(REVOKE_IDENTITIES, params!["t1", "h2"]).unwrap();
+        let (revoked, issuer): (i64, Option<String>) = c
+            .query_row(AGENT_CERTS_REVOKED, params!["cd"], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            (revoked, issuer),
+            (1, None),
+            "no CA reference: revoke by hand"
+        );
+        assert_eq!(status("host", "h2"), "revoked");
     }
+
+    const AGENT_CERTS_REVOKED: &str =
+        "SELECT revoked, issuer_ref FROM identities WHERE cert_sha256 = ?1";
 
     fn insert_agent(c: &Connection, id: &str, tenant: &str, role: &str, created: i64) {
         c.execute(
@@ -688,13 +742,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 0);
-        let mut st = c.prepare(ISSUER_REFS).unwrap();
-        let refs: Vec<String> = st
-            .query_map(params!["t1", "s1"], |r| r.get(0))
+        let mut st = c.prepare(AGENT_CERTS).unwrap();
+        let refs: Vec<Option<String>> = st
+            .query_map(params!["t1", "s1"], |r| r.get(1))
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(refs, vec!["ref-aa", "ref-bb"]);
+        assert_eq!(
+            refs,
+            vec![Some("ref-aa".to_string()), Some("ref-bb".to_string())]
+        );
         assert!(
             !bind(&c, "cc", "s1", 70, 70),
             "a revoked agent binds nothing"
@@ -763,5 +820,73 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert_eq!(ids, vec!["j2"]);
+    }
+
+    #[test]
+    fn concurrent_redemptions_of_one_token_have_one_winner() {
+        // Two connections to one database file racing on the same token.
+        let path = std::env::temp_dir().join(format!(
+            "foiled-d1-token-race-{}-{:?}.sqlite",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = Connection::open(&path).unwrap();
+            for m in MIGRATIONS {
+                c.execute_batch(m).unwrap();
+            }
+            insert_agent(&c, "s1", "t1", "sensor", 1);
+            insert_token(&c, "e1", "s1", 10_000);
+        }
+        for round in 0..20 {
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let wins: Vec<bool> = (0..2)
+                .map(|_| {
+                    let (b, p) = (barrier.clone(), path.clone());
+                    std::thread::spawn(move || {
+                        let c = Connection::open(p).unwrap();
+                        c.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+                        b.wait();
+                        consume(&c, "e1", 100 + round)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect();
+            assert_eq!(wins.iter().filter(|w| **w).count(), 1, "round {round}");
+            // Reopen for the next round, as a CA failure would.
+            let c = Connection::open(&path).unwrap();
+            c.execute(RELEASE_ENROLMENT_TOKEN, params!["e1", 100 + round])
+                .unwrap();
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn released_tokens_reopen_only_for_the_same_claim_and_live_agents() {
+        let c = db();
+        insert_agent(&c, "s1", "t1", "sensor", 1);
+        insert_token(&c, "e1", "s1", 10_000);
+        assert!(consume(&c, "e1", 5));
+        c.execute(RELEASE_ENROLMENT_TOKEN, params!["e1", 6])
+            .unwrap();
+        assert!(
+            !consume(&c, "e1", 7),
+            "another claim's release does nothing"
+        );
+        c.execute(RELEASE_ENROLMENT_TOKEN, params!["e1", 5])
+            .unwrap();
+        assert!(consume(&c, "e1", 8), "released after a CA failure");
+        c.query_row(
+            REVOKE_AGENT,
+            params!["t1", "sensor", "s1", 9, "operator_manual", "x"],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap();
+        c.execute(RELEASE_ENROLMENT_TOKEN, params!["e1", 8])
+            .unwrap();
+        assert!(!consume(&c, "e1", 10), "never reopened for a revoked agent");
     }
 }

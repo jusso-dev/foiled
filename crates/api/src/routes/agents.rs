@@ -370,30 +370,38 @@ async fn action(
     // Revoke here first: from this point the Worker refuses every one of
     // the agent's certificates, whatever happens at the CA.
     let now = (state.clock)();
-    let refs = state
+    let certs = state
         .store
         .revoke_agent(&who.tenant_id, reg.channel.role, id, body.reason, now)
         .await?
         .ok_or_else(|| ApiError::not_found(reg.channel.noun))?;
     let (mut ca_revoked, mut ca_failed) = (0, 0);
     let mut errors = Vec::new();
-    for r in &refs {
-        match &state.cert_issuer {
-            Some(issuer) => match issuer.revoke(r).await {
+    // Certificates issued outside `/v0/enrol` (hosts registered before
+    // migration 0003) have no CA reference: list them for the dashboard.
+    let mut manual = Vec::new();
+    for (fp, r) in &certs {
+        match (&state.cert_issuer, r) {
+            (Some(issuer), Some(r)) => match issuer.revoke(r).await {
                 Ok(()) => ca_revoked += 1,
                 Err(e) => {
                     ca_failed += 1;
                     errors.push(e.to_string());
+                    manual.push(fp.clone());
                 }
             },
-            None => ca_failed += 1,
+            _ => {
+                ca_failed += 1;
+                manual.push(fp.clone());
+            }
         }
     }
     rec.detail = serde_json::json!({
-        "certificates": refs.len(),
+        "certificates": certs.len(),
         "ca_revoked": ca_revoked,
         "ca_failed": ca_failed,
         "ca_errors": errors,
+        "revoke_in_dashboard": manual,
     });
     state.store.append_audit(rec).await?;
     let agent = state
@@ -420,24 +428,39 @@ fn issuer(state: &AppState) -> Result<std::sync::Arc<dyn CertIssuer>, ApiError> 
 }
 
 /// Sign the CSR and bind the certificate. Shared by enrolment and renewal.
+/// A token claimed by this request, released again if the CA fails.
+struct Claim<'a> {
+    token_id: &'a str,
+    claimed_at: i64,
+}
+
 async fn issue_and_bind(
     state: &AppState,
     issuer: &dyn CertIssuer,
     who: &Principal,
     csr_pem: &str,
     retire_at: i64,
+    claim: Option<Claim<'_>>,
 ) -> Result<EnrolResponse, ApiError> {
     let now = (state.clock)();
-    let issued = issuer
-        .issue(csr_pem, state.limits.cert_validity_days)
-        .await
-        .map_err(|_| {
-            ApiError::new(
+    let issued = match issuer.issue(csr_pem, state.limits.cert_validity_days).await {
+        Ok(i) => i,
+        Err(_) => {
+            // Nothing was issued, so the token was not really used: reopen
+            // it for a retry rather than make the admin re-enrol.
+            if let Some(c) = claim {
+                state
+                    .store
+                    .release_enrolment_token(c.token_id, c.claimed_at)
+                    .await?;
+            }
+            return Err(ApiError::new(
                 StatusCode::BAD_GATEWAY,
                 "issuer_failed",
-                "the certificate authority did not issue a certificate",
-            )
-        })?;
+                "the certificate authority did not issue a certificate; retry later",
+            ));
+        }
+    };
     // Fingerprint the DER ourselves: it is what `certFingerprintSHA256`
     // will be when the certificate is presented.
     let fp = cert_fingerprint(&issued.certificate_pem).ok_or_else(|| {
@@ -548,7 +571,18 @@ async fn enrol(
     }
     // A re-enrolment means the old key is lost or suspect: retire old
     // certificates now rather than after a grace period.
-    let res = issue_and_bind(&state, issuer.as_ref(), &who, &req.csr_pem, now).await?;
+    let res = issue_and_bind(
+        &state,
+        issuer.as_ref(),
+        &who,
+        &req.csr_pem,
+        now,
+        Some(Claim {
+            token_id,
+            claimed_at: now,
+        }),
+    )
+    .await?;
     let mut a = audit_record(&state, &who, &action, Some(&who.id), Outcome::Accepted);
     a.detail = serde_json::json!({
         "cert_sha256": res.cert_sha256,
@@ -570,6 +604,7 @@ async fn renew(
 ) -> Result<(StatusCode, Json<EnrolResponse>), ApiError> {
     let f = reg.channel;
     let who = hosts::as_self(&auth, f, f.report, &id)?.clone();
+    hosts::note_seen(&state, &who, &meta, false).await?;
     let issuer = issuer(&state)?;
     let agent = state
         .store
@@ -597,6 +632,7 @@ async fn renew(
         &who,
         &req.csr_pem,
         now + RENEWAL_GRACE_MS,
+        None,
     )
     .await?;
     let action = format!("{}.renew", f.noun);

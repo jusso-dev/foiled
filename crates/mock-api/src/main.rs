@@ -142,6 +142,7 @@ async fn main() {
             cert_sha256: LAB_CERT.into(),
             revoked: false,
             valid_until: None,
+            expires_at: None,
         });
         println!("lab host: {host_id} (requests without a bearer token act as this host)");
     }

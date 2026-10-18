@@ -93,11 +93,14 @@ impl Agent {
     ///
     /// - Unreachable, 5xx or 429 (back-pressure): stop, keep everything,
     ///   try again next tick.
-    /// - 401 or 403 (certificate revoked, retired or unknown): stop and keep
-    ///   everything. The data is fine; the identity is not.
-    /// - Any other refusal: the batch holds an event ingest will never take.
-    ///   Resend one at a time and drop only the refused events, counting
-    ///   them in `dropped_events`, so one bad event cannot wedge the buffer.
+    /// - 401, or a 403 about the caller (certificate revoked, retired or
+    ///   unknown, scope missing): stop and keep everything. The data is
+    ///   fine; the identity is not.
+    /// - Any other refusal, including a 403 `not_assigned` for a decoy that
+    ///   is no longer this agent's: the batch holds an event ingest will
+    ///   never take. Resend one at a time and drop only the refused events,
+    ///   logged and counted in `dropped_events`, so one stale event cannot
+    ///   stall the buffer.
     ///
     /// Delivery is at least once. Ingest is idempotent on `event_id`, so a
     /// resend after a crash or a split batch creates no duplicates.
@@ -121,7 +124,12 @@ impl Agent {
                                 self.buffer.commit(i).map_err(unavailable)?;
                                 return Err(e);
                             }
-                            Err(ClientError::Refused(..)) => {
+                            Err(e @ ClientError::Refused(..)) => {
+                                eprintln!(
+                                    "foiled-hostd: dropping event {} refused by ingest: {}",
+                                    event.event_id,
+                                    e.code().unwrap_or_else(|| e.to_string())
+                                );
                                 self.buffer.note_dropped(1);
                                 refused += 1;
                             }

@@ -6,13 +6,13 @@ use std::sync::Mutex;
 use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, agent_scopes};
 use foiled_core::capture::CaptureEvent;
-use foiled_core::enrichment::{Observable, ObservedFacts};
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
+use foiled_core::enrichment::{Observable, ObservedFacts};
 use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
 
 use crate::store::{
-    AgentQuery, AuditQuery, DecoyQuery, EnrolmentTokenRecord, IdentityRecord, IpIocRow, JobRecord,
-    LinkOverride, NewCert, Store, StoreError, StoreFuture, TokenRecord,
+    AgentCerts, AgentQuery, AuditQuery, DecoyQuery, EnrolmentTokenRecord, IdentityRecord, IpIocRow,
+    JobRecord, LinkOverride, NewCert, Store, StoreError, StoreFuture, TokenRecord,
 };
 
 #[derive(Default)]
@@ -444,8 +444,12 @@ impl Store for MemoryStore {
             .filter(|e| e.tenant_id.as_deref() == Some(tenant_id) && e.ts >= since && e.ts < until)
             .cloned()
             .collect();
+        // One row per (tenant, sending identity, event_id), as in Postgres:
+        // one sensor cannot pre-claim another sensor's event ids.
+        let source = |e: &CaptureEvent| e.source.as_ref().map(|s| (s.kind, s.id.clone()));
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|e| seen.insert((source(e), e.event_id.clone())));
         out.sort_by(|a, b| (a.ts, &a.event_id).cmp(&(b.ts, &b.event_id)));
-        out.dedup_by(|a, b| a.event_id == b.event_id);
         out.truncate(limit);
         ready(Ok(out))
     }
@@ -567,6 +571,24 @@ impl Store for MemoryStore {
         ready(Ok(ok))
     }
 
+    fn release_enrolment_token(&self, id: &str, claimed_at: i64) -> StoreFuture<'_, ()> {
+        let mut guard = self.lock();
+        let g = &mut *guard;
+        if let Some(t) = g
+            .enrolment_tokens
+            .iter_mut()
+            .find(|t| t.id == id && t.used_at == Some(claimed_at))
+        {
+            let live = g.agents.iter().any(|a| {
+                a.tenant_id == t.tenant_id && a.id == t.agent_id && a.status != AgentStatus::Revoked
+            });
+            if live {
+                t.used_at = None;
+            }
+        }
+        ready(Ok(()))
+    }
+
     fn bind_certificate(
         &self,
         tenant_id: &str,
@@ -606,6 +628,7 @@ impl Store for MemoryStore {
             cert_sha256: cert.cert_sha256,
             revoked: false,
             valid_until: None,
+            expires_at: Some(cert.expires_at),
         });
         ready(Ok(true))
     }
@@ -617,7 +640,7 @@ impl Store for MemoryStore {
         agent_id: &str,
         reason: Reason,
         now: i64,
-    ) -> StoreFuture<'_, Option<Vec<String>>> {
+    ) -> StoreFuture<'_, Option<AgentCerts>> {
         let mut guard = self.lock();
         let g = &mut *guard;
         let Some(agent) = g
@@ -643,8 +666,11 @@ impl Store for MemoryStore {
             }
         }
         let refs = fps
-            .iter()
-            .filter_map(|fp| g.issuer_refs.get(fp).cloned())
+            .into_iter()
+            .map(|fp| {
+                let r = g.issuer_refs.get(&fp).cloned();
+                (fp, r)
+            })
             .collect();
         ready(Ok(Some(refs)))
     }

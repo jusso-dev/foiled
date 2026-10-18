@@ -170,8 +170,10 @@ fn check(res: &EnrolResponse, agent_id: &str, role: Role) -> Result<(), EnrolErr
 }
 
 /// Redeem the token in `token_file`, install the identity and delete the
-/// token file. The token file is deleted whatever the outcome once the
-/// control plane has answered, because a refused token is spent or wrong.
+/// token file. The file is deleted only after success or a definitive 401
+/// (the token is spent, expired, revoked or wrong). On a network error,
+/// 429 or 5xx (the CA may be down; the control plane reopens the token)
+/// and on a 400 (fix the request and retry) it is kept for a retry.
 pub async fn enrol(
     api_base: &str,
     token_file: &Path,
@@ -186,7 +188,7 @@ pub async fn enrol(
         csr_pem,
     };
     let res = client::enrol(api_base, &req).await;
-    if !matches!(res, Err(ClientError::Unavailable(_))) {
+    if matches!(res, Ok(_) | Err(ClientError::Refused(401, _))) {
         let _ = std::fs::remove_file(token_file);
     }
     let res = res.map_err(EnrolError::Client)?;

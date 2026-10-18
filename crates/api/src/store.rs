@@ -16,8 +16,8 @@ use std::pin::Pin;
 use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::CaptureEvent;
-use foiled_core::enrichment::{Observable, ObservedFacts};
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
+use foiled_core::enrichment::{Observable, ObservedFacts};
 use foiled_core::enrolment::{AgentRecord, SeenFrom};
 use serde::{Deserialize, Serialize};
 
@@ -59,6 +59,9 @@ pub struct IdentityRecord {
     /// After a renewal or re-enrolment, the old certificate stops working
     /// at this time (Unix ms). `None` while it is the current one.
     pub valid_until: Option<i64>,
+    /// The certificate's own expiry (Unix ms), when known. Checked as well
+    /// as Cloudflare's `certVerified`.
+    pub expires_at: Option<i64>,
 }
 
 /// A one-time enrolment token (#31). Only the SHA-256 of the secret is
@@ -85,6 +88,9 @@ pub struct NewCert {
     pub issued_at: i64,
     pub expires_at: i64,
 }
+
+/// An identity's certificates: fingerprint and CA reference, if any.
+pub type AgentCerts = Vec<(String, Option<String>)>;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentQuery {
@@ -309,6 +315,11 @@ pub trait Store: Send + Sync {
     /// one call that consumed it, so a token can never be redeemed twice.
     fn consume_enrolment_token(&self, id: &str, now: i64) -> StoreFuture<'_, bool>;
 
+    /// Undo [`Store::consume_enrolment_token`] after the CA failed to
+    /// issue, so the token can be retried. Only reopens a token still
+    /// marked used at `claimed_at` whose agent is not revoked.
+    fn release_enrolment_token(&self, id: &str, claimed_at: i64) -> StoreFuture<'_, ()>;
+
     /// Bind a certificate to a pending or active agent and mark it active.
     /// The agent's other live certificates stop working at `retire_at`.
     /// Returns false, binding nothing, if the agent is missing or revoked.
@@ -323,8 +334,9 @@ pub trait Store: Send + Sync {
     ) -> StoreFuture<'_, bool>;
 
     /// Revoke an agent, every certificate it holds and any unused token.
-    /// Returns the CA references of its certificates, or `None` if there is
-    /// no such agent.
+    /// Returns each certificate's fingerprint and CA reference (`None` for
+    /// certificates issued outside `/v0/enrol`), or `None` if there is no
+    /// such agent.
     fn revoke_agent(
         &self,
         tenant_id: &str,
@@ -332,7 +344,7 @@ pub trait Store: Send + Sync {
         agent_id: &str,
         reason: Reason,
         now: i64,
-    ) -> StoreFuture<'_, Option<Vec<String>>>;
+    ) -> StoreFuture<'_, Option<AgentCerts>>;
 
     /// Record where an agent was last seen from.
     fn record_agent_seen(

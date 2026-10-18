@@ -105,6 +105,8 @@ async fn harness(cfg: McpConfig) -> Harness {
         scopes: vec![Scope::HostLease],
         cert_sha256: "aa".repeat(32),
         revoked: false,
+        valid_until: None,
+        expires_at: None,
     });
     let raw: Value = serde_json::from_str(
         &std::fs::read_to_string(root().join("testdata/attempts/demo-fleet.input.json")).unwrap(),

@@ -267,3 +267,134 @@ async fn enrol_place_buffer_replay_renew_and_revoke() {
     assert_eq!(agent.buffer.len().unwrap(), 1);
     assert!(agent.run_jobs(NOW).await.is_err());
 }
+
+#[tokio::test]
+async fn the_token_file_survives_a_ca_outage_but_not_a_refusal() {
+    let (_store, issuer, state) = state();
+    let presented: Presented = Arc::default();
+    let (base, _server) = serve(state, presented).await;
+    let dir = tempfile::tempdir().unwrap();
+    let files = IdentityFiles::new(
+        dir.path().join("s.crt"),
+        dir.path().join("s.key"),
+        dir.path(),
+    );
+    let reg = operator(&base, "/v0/sensors", serde_json::json!({})).await;
+    let id = reg["agent"]["id"].as_str().unwrap().to_string();
+    let token_file = dir.path().join("token");
+    std::fs::write(&token_file, reg["enrolment"]["token"].as_str().unwrap()).unwrap();
+
+    // CA down: 502, the token is reopened and the file is kept.
+    issuer.set_failing(true);
+    let err = enrol::enrol(&base, &token_file, &files, &id, Role::Sensor)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, enrol::EnrolError::Client(ClientError::Unavailable(_))),
+        "{err}"
+    );
+    assert!(token_file.exists(), "kept for a retry");
+    assert!(!files.key.exists(), "nothing installed");
+
+    // CA back: the same file enrols, then is deleted.
+    issuer.set_failing(false);
+    enrol::enrol(&base, &token_file, &files, &id, Role::Sensor)
+        .await
+        .unwrap();
+    assert!(!token_file.exists());
+
+    // A spent token is a definitive 401: the file goes.
+    std::fs::write(&token_file, reg["enrolment"]["token"].as_str().unwrap()).unwrap();
+    let err = enrol::enrol(&base, &token_file, &files, &id, Role::Sensor)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, enrol::EnrolError::Client(ClientError::Refused(401, _))),
+        "{err}"
+    );
+    assert!(!token_file.exists());
+}
+
+#[tokio::test]
+async fn an_event_for_a_moved_decoy_is_dropped_without_stalling_the_buffer() {
+    let (store, _issuer, state) = state();
+    let presented: Presented = Arc::default();
+    let (base, _server) = serve(state, presented.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut ids = Vec::new();
+    for name in ["a", "b"] {
+        let reg = operator(&base, "/v0/sensors", serde_json::json!({})).await;
+        let id = reg["agent"]["id"].as_str().unwrap().to_string();
+        let token_file = dir.path().join(format!("token-{name}"));
+        std::fs::write(&token_file, reg["enrolment"]["token"].as_str().unwrap()).unwrap();
+        let files = IdentityFiles::new(
+            dir.path().join(format!("{name}.crt")),
+            dir.path().join(format!("{name}.key")),
+            &dir.path().join(name),
+        );
+        enrol::enrol(&base, &token_file, &files, &id, Role::Sensor)
+            .await
+            .unwrap();
+        ids.push((id, files));
+    }
+    let place = |sensor: &str| {
+        let (base, sensor) = (base.clone(), sensor.to_string());
+        async move {
+            let b = operator(
+                &base,
+                "/v0/decoys",
+                serde_json::json!({"catalogue_id": "emulator/redis/7.0", "allow_draft": true, "sensor_id": sensor}),
+            )
+            .await;
+            b["decoy"]["id"].as_str().unwrap().to_string()
+        }
+    };
+    let mine = place(&ids[0].0).await;
+    // A decoy in the same tenant that belongs to the other sensor: ingest
+    // answers 403 `not_assigned`, which is about the event, not the caller.
+    let theirs = place(&ids[1].0).await;
+    present(&presented, &ids[0].1);
+
+    let mut keys = TrustedKeys::default();
+    keys.add_hex(
+        "k1",
+        &JobSigner::from_seed_hex("k1", SEED)
+            .unwrap()
+            .public_key_hex(),
+    )
+    .unwrap();
+    let a = ids[0].0.clone();
+    let mut agent = Agent {
+        host_id: a.clone(),
+        gate: JobGate {
+            host_id: a.clone(),
+            keys,
+            allowlist: HashSet::new(),
+            replays: ReplayStore::open(dir.path().join("replays.json")).unwrap(),
+        },
+        runtime: Arc::new(FakeRuntime::default()),
+        cp: ControlPlane::new(&base, &a, None)
+            .unwrap()
+            .with_role(Role::Sensor),
+        buffer: OfflineBuffer::open(dir.path().join("buffer"), 1 << 20).unwrap(),
+        publicly_exposed: true,
+        kvm_present: false,
+        state_dir: dir.path().to_path_buf(),
+        decoys: Default::default(),
+    };
+    agent.capture(&event(&mine, "m1")).unwrap();
+    agent.capture(&event(&theirs, "stale")).unwrap();
+    agent.capture(&event(&mine, "m2")).unwrap();
+    assert_eq!(agent.flush().await.unwrap(), 2);
+    assert!(
+        agent.buffer.is_empty().unwrap(),
+        "nothing stuck behind the stale event"
+    );
+    assert_eq!(agent.buffer.dropped(), 1);
+    let ids: Vec<String> = store
+        .queued_events()
+        .into_iter()
+        .map(|e| e.event_id)
+        .collect();
+    assert_eq!(ids, vec!["m1", "m2"]);
+}

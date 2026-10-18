@@ -132,7 +132,12 @@ impl FromRequestParts<AppState> for Auth {
                 .ok_or_else(ApiError::unauthorised)?;
             // A retired certificate (after renewal or re-enrolment) stops at
             // `valid_until`; a revoked one stops at once.
-            if rec.revoked || rec.valid_until.is_some_and(|v| v <= now) {
+            // The stored certificate expiry is checked too, as defence in
+            // depth beyond Cloudflare's `certVerified`.
+            if rec.revoked
+                || rec.valid_until.is_some_and(|v| v <= now)
+                || rec.expires_at.is_some_and(|e| e <= now)
+            {
                 return Err(ApiError::unauthorised());
             }
             return Ok(Auth(Principal::new(

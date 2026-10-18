@@ -808,3 +808,173 @@ async fn hosts_enrol_through_the_same_flow_with_the_host_role() {
     let (_, sensors) = operator(&h, "admin1", "GET", "/v0/sensors", Value::Null).await;
     assert_eq!(sensors["items"], json!([]), "registries are separate");
 }
+
+#[tokio::test]
+async fn a_ca_failure_releases_the_token_for_a_retry() {
+    let h = harness();
+    let (_, token) = register(&h, "admin1", json!({})).await;
+    h.issuer.set_failing(true);
+    let (s, b) = enrol_raw(&h, &token, &csr()).await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY);
+    assert_eq!(b["error"]["code"], "issuer_failed");
+    h.issuer.set_failing(false);
+    let (s, b) = enrol_raw(&h, &token, &csr()).await;
+    assert_eq!(
+        s,
+        StatusCode::CREATED,
+        "same token works once the CA is back: {b}"
+    );
+    let (s, _) = enrol_raw(&h, &token, &csr()).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "and is then spent");
+}
+
+#[tokio::test]
+async fn unsupported_keys_are_refused_before_the_token_is_spent() {
+    let h = harness();
+    let (_, token) = register(&h, "admin1", json!({})).await;
+    for bad in [
+        include_str!("../../../testdata/agent/csr/rsa1024.pem"),
+        include_str!("../../../testdata/agent/csr/p521.pem"),
+        include_str!("../../../testdata/agent/csr/ed.pem"),
+    ] {
+        let (s, b) = enrol_raw(&h, &token, bad).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
+        assert!(
+            b["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unsupported key")
+        );
+    }
+    let rsa = include_str!("../../../testdata/agent/csr/rsa2048.pem");
+    assert_eq!(enrol_raw(&h, &token, rsa).await.0, StatusCode::CREATED);
+}
+
+#[test]
+fn concurrent_redemptions_of_one_token_have_exactly_one_winner() {
+    // Two OS threads, each with its own runtime, released together.
+    for _ in 0..20 {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let h = Arc::new(harness());
+        let (_, token) = rt.block_on(register(&h, "admin1", json!({})));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let statuses: Vec<StatusCode> = (0..2)
+            .map(|_| {
+                let (h, token, barrier) = (h.clone(), token.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .unwrap();
+                    barrier.wait();
+                    rt.block_on(enrol_raw(&h, &token, &csr())).0
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .collect();
+        let wins = statuses
+            .iter()
+            .filter(|s| **s == StatusCode::CREATED)
+            .count();
+        assert_eq!(wins, 1, "{statuses:?}");
+        assert_eq!(h.store.identities().len(), 1, "one certificate bound");
+    }
+}
+
+#[tokio::test]
+async fn an_expired_certificate_is_refused_even_if_cloudflare_verified_it() {
+    let h = harness();
+    let (a, fp) = enrolled(&h, "admin1", json!({})).await;
+    let lease = format!("/v0/sensors/{a}/jobs:lease");
+    h.clock.fetch_add(89 * 86_400_000, Ordering::SeqCst);
+    assert_eq!(cert(&h, &fp, &lease, json!({})).await.0, StatusCode::OK);
+    h.clock.fetch_add(86_400_000, Ordering::SeqCst);
+    assert_eq!(
+        cert(&h, &fp, &lease, json!({})).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn a_network_jump_is_caught_on_ingest_and_lease_too() {
+    let h = harness();
+    let (a, fp) = enrolled(&h, "admin1", json!({})).await;
+    let (_, d) = place_redis(&h, "admin1", &a).await;
+    let decoy = d["decoy"]["id"].as_str().unwrap().to_string();
+    let lease = format!("/v0/sensors/{a}/jobs:lease");
+    assert_eq!(cert(&h, &fp, &lease, json!({})).await.0, StatusCode::OK);
+    assert!(actions(&h, "sensor.network_changed").is_empty());
+    let (s, _) = as_cert(
+        &h,
+        &fp,
+        "203.0.113.50",
+        64511,
+        "/v0/ingest/events",
+        json!({"events": [event(&decoy, "e1")]}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    assert_eq!(actions(&h, "sensor.network_changed").len(), 1, "on ingest");
+    assert_eq!(
+        as_cert(&h, &fp, "192.0.2.10", 64496, &lease, json!({}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(actions(&h, "sensor.network_changed").len(), 2, "on lease");
+    // Back-to-back calls from the same place do not write again.
+    assert_eq!(
+        as_cert(&h, &fp, "192.0.2.10", 64496, &lease, json!({}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(actions(&h, "sensor.network_changed").len(), 2);
+}
+
+#[tokio::test]
+async fn revoking_reports_certificates_the_ca_cannot_revoke() {
+    // A host enrolled before migration 0003 has a certificate with no CA
+    // reference; the registry still revokes it and says so.
+    let h = harness();
+    let (a, _) = enrolled(&h, "admin1", json!({})).await;
+    h.store.add_identity(foiled_api::store::IdentityRecord {
+        id: a.clone(),
+        tenant_id: "t1".into(),
+        role: Role::Sensor,
+        scopes: foiled_core::auth::agent_scopes(Role::Sensor),
+        cert_sha256: "ab".repeat(32),
+        revoked: false,
+        valid_until: None,
+        expires_at: None,
+    });
+    let (s, b) = operator(
+        &h,
+        "admin1",
+        "POST",
+        &format!("/v0/sensors/{a}:revoke"),
+        json!({"reason": {"code": "operator_manual", "text": "Retiring."}}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        (b["ca_revoked"].as_u64(), b["ca_failed"].as_u64()),
+        (Some(1), Some(1))
+    );
+    let rec = &actions(&h, "sensor.revoke")[0];
+    assert_eq!(rec.detail["revoke_in_dashboard"], json!(["ab".repeat(32)]));
+    assert_eq!(
+        cert(
+            &h,
+            &"ab".repeat(32),
+            &format!("/v0/sensors/{a}/jobs:lease"),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+}

@@ -22,7 +22,7 @@ use foiled_core::enrolment::{SeenFrom, network_changed};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::auth::{Auth, Meta};
+use crate::auth::{Auth, ClientMeta, Meta};
 use crate::error::{ApiError, JsonBody};
 use crate::routes::audit_record;
 use crate::store::JobRecord;
@@ -67,11 +67,11 @@ pub fn router() -> Router<AppState> {
         r = r
             .route(
                 &format!("/v0/{prefix}/{{{param}}}/jobs:lease"),
-                post(move |s, a, p, q| lease(f, s, a, p, q)),
+                post(move |s, a, m, p, q| lease(f, s, a, m, p, q)),
             )
             .route(
                 &format!("/v0/{prefix}/{{{param}}}/jobs/{{job_action}}"),
-                post(move |s, a, p, b| ack(f, s, a, p, b)),
+                post(move |s, a, m, p, b| ack(f, s, a, m, p, b)),
             )
             .route(
                 &format!("/v0/{prefix}/{{{param}}}/heartbeat"),
@@ -124,10 +124,12 @@ async fn lease(
     f: Family,
     State(state): State<AppState>,
     auth: Auth,
+    Meta(meta): Meta,
     Path(host_id): Path<String>,
     Query(q): Query<LeaseQuery>,
 ) -> Result<Json<Leased>, ApiError> {
     let who = as_self(&auth, f, f.lease, &host_id)?.clone();
+    note_seen(&state, &who, &meta, false).await?;
     let signer = state.job_signer.clone().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -180,10 +182,12 @@ async fn ack(
     f: Family,
     State(state): State<AppState>,
     auth: Auth,
+    Meta(meta): Meta,
     Path((host_id, job_action)): Path<(String, String)>,
     JsonBody(result): JsonBody<JobResult>,
 ) -> Result<StatusCode, ApiError> {
     let who = as_self(&auth, f, f.report, &host_id)?.clone();
+    note_seen(&state, &who, &meta, false).await?;
     let job_id = job_action
         .strip_suffix(":ack")
         .ok_or_else(|| ApiError::not_found("action"))?;
@@ -292,32 +296,61 @@ async fn heartbeat(
         .store
         .record_heartbeat(&who.tenant_id, &who.id, value, skew, now)
         .await?;
-    // Enrolled agents: remember where they report from, and flag a move to
-    // another network (a copied certificate in use elsewhere looks like this).
-    if let Some(agent) = state
+    note_seen(&state, &who, &meta, true).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// How stale `last_seen_at` may get before a request without a network
+/// change refreshes it. Keeps the common path to one registry read.
+const SEEN_REFRESH_MS: i64 = 5 * 60 * 1000;
+
+/// Remember where an enrolled host or sensor calls from, and flag a move to
+/// another network: a copied certificate in use elsewhere looks like this.
+/// Called from every authenticated agent route (lease, ack, heartbeat,
+/// ingest, uploads, renewal). Writes only when the network changed, when
+/// `always` (heartbeats), or when the last sighting is stale.
+pub(crate) async fn note_seen(
+    state: &AppState,
+    who: &Principal,
+    meta: &ClientMeta,
+    always: bool,
+) -> Result<(), ApiError> {
+    if !matches!(who.role, Role::Host | Role::Sensor) {
+        return Ok(());
+    }
+    let Some(agent) = state
         .store
         .get_agent(&who.tenant_id, who.role, &who.id)
         .await?
-    {
-        let prev = SeenFrom {
-            ip: agent.last_ip.clone(),
-            asn: agent.last_asn,
-        };
-        let seen = SeenFrom {
-            ip: meta.ip.clone(),
-            asn: meta.asn,
-        };
-        let changed = network_changed(&prev, &seen);
-        state
-            .store
-            .record_agent_seen(&who.tenant_id, &who.id, seen.clone(), changed, now)
-            .await?;
-        if changed {
-            let action = format!("{}.network_changed", f.noun);
-            let mut rec = audit_record(&state, &who, &action, Some(&who.id), Outcome::Accepted);
-            rec.detail = serde_json::json!({"from": prev, "to": seen});
-            state.store.append_audit(rec).await?;
-        }
+    else {
+        return Ok(());
+    };
+    let now = (state.clock)();
+    let prev = SeenFrom {
+        ip: agent.last_ip.clone(),
+        asn: agent.last_asn,
+    };
+    // Without request metadata (tests, local mock) keep what we knew.
+    let seen = SeenFrom {
+        ip: meta.ip.clone().or(prev.ip.clone()),
+        asn: meta.asn.or(prev.asn),
+    };
+    let changed = network_changed(&prev, &seen);
+    let stale = agent
+        .last_seen_at
+        .is_none_or(|t| now - t >= SEEN_REFRESH_MS);
+    if !(changed || always || stale || seen != prev) {
+        return Ok(());
     }
-    Ok(StatusCode::NO_CONTENT)
+    state
+        .store
+        .record_agent_seen(&who.tenant_id, &who.id, seen.clone(), changed, now)
+        .await?;
+    if changed {
+        let action = format!("{}.network_changed", who.role.as_str());
+        let mut rec = audit_record(state, who, &action, Some(&who.id), Outcome::Accepted);
+        rec.detail = serde_json::json!({"from": prev, "to": seen});
+        state.store.append_audit(rec).await?;
+    }
+    Ok(())
 }

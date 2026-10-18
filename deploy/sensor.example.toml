@@ -31,10 +31,11 @@ poll_secs = 5
 # The control plane's job signing public key(s).
 [[trusted_keys]]
 id = "k1"
-public_key = "<hex Ed25519 public key>"
+public_key = "<hex Ed25519 public key of the control plane's job signing key>"
 
 # Offline release signing key(s). Builds must verify against one of these
 # before `foiled-hostd verify-update` stages them.
+# Must differ from every trusted_keys entry.
 [[release_keys]]
 id = "rel-2026"
-public_key = "<hex Ed25519 public key>"
+public_key = "<hex Ed25519 public key of the offline release key>"

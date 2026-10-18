@@ -41,7 +41,7 @@ A role can never hold another family's scopes; `Principal::new` drops them even 
 
 1. A tenant admin registers a sensor (`POST /v0/sensors`, `sensors:write`). The control plane creates a `pending` record and a one-time enrolment token `foe_<id>.<secret>` (default lifetime 1 hour, 5 minutes to 24 hours). Only the SHA-256 of the secret is stored. The token is shown once and never audited.
 2. The sensor generates its key pair and sends `{token, csr_pem}` to `POST /v0/enrol` on the ingest hostname. This is the only path the mTLS WAF rule lets through without a certificate.
-3. The Worker rate limits by source IP, finds the token, compares the secret in constant time, checks it is unused and unexpired, shape-checks the CSR (one request, under 8 KiB, no private key in the body), then marks the token used in one compare-and-set statement. Only one request can ever redeem a token.
+3. The Worker rate limits by source IP, finds the token, compares the secret in constant time, checks it is unused and unexpired, checks the CSR (one request, under 8 KiB, no private key in the body, and a key the CA will sign: ECDSA P-256 or P-384, or RSA 2048 to 4096 bits), then marks the token used in one compare-and-set statement. Only one request can ever redeem a token. If the CA then fails to issue, the claim is released and the token can be retried; it is never reopened for a revoked agent.
 4. The Worker sends the CSR to the Cloudflare client certificate API (`POST /zones/{zone}/client_certificates`) with an API token that can only edit SSL and certificates on that zone, fingerprints the returned certificate itself, and binds it to the token's identity in one D1 transaction that refuses to bind if the identity was revoked meanwhile.
 5. The response gives the certificate, the identity and its scopes. The sensor checks the identity matches its config, installs the key and certificate owner-only, and deletes the token file.
 
@@ -50,7 +50,7 @@ The identity (id, role, tenant, scopes) comes only from the token record. Nothin
 ### 3. mTLS is checked in two separate layers
 
 1. **WAF custom rule on the ingest hostname**: block when the client certificate is not verified or is revoked, except for `POST /v0/enrol`. This stops unauthenticated traffic and revoked certificates at the edge.
-2. **The Worker** copies `cf.tlsClientAuth` (presented, verified, SHA-256 fingerprint) into a request extension and checks it again: verified, fingerprint known in D1, not revoked, and not past `valid_until`. Then the route checks the scope, that the role matches the path family (`/v0/hosts` or `/v0/sensors`), and that the path id is the caller's own id.
+2. **The Worker** copies `cf.tlsClientAuth` (presented, verified, SHA-256 fingerprint) into a request extension and checks it again: verified, fingerprint known in D1 with only scope names the code knows, not revoked, and not past `valid_until` or the stored certificate expiry. Then the route checks the scope, that the role matches the path family (`/v0/hosts` or `/v0/sensors`), and that the path id is the caller's own id.
 
 Either layer alone would be enough against a random client. Both together mean a mistake in one (a WAF rule edited away, a missed revocation at the CA) does not open ingest.
 
@@ -69,11 +69,11 @@ One binary for hosts and sensors. A sensor uses the same signed job protocol (AD
 
 ### 6. Signed builds
 
-Each release publishes a manifest (`schemas/release-manifest.schema.json`) listing every artefact by target triple with its size and SHA-256, signed with an Ed25519 release key that is kept offline and is separate from the job signing key. The agent pins release public keys in its config and, before staging an update, verifies in order: signature by a pinned key over the exact manifest bytes; `kind` (`foiled.release.v1`) and product; a strictly newer `MAJOR.MINOR.PATCH` version; artefact size and digest. The manifest `kind` gives domain separation, so a signed job body can never pass as a manifest. In v0.2 the agent verifies and stages (`foiled-hostd verify-update`); swapping the binary is left to the service manager.
+Each release publishes a manifest (`schemas/release-manifest.schema.json`) listing every artefact by target triple with its size and SHA-256, signed with an Ed25519 release key that is kept offline and is separate from the job signing key. The agent pins release public keys in its config and, before staging an update, verifies in order: signature by a pinned key over the exact manifest bytes; `kind` (`foiled.release.v1`) and product; a `MAJOR.MINOR.PATCH` version strictly newer than both the running version and the highest version it has ever staged (kept under `state_dir`), so an attacker cannot walk it back to an older signed build; artefact size and digest. Release keys and job keys must be different keys; the agent refuses a config that pins one key as both. The manifest `kind` gives domain separation, so a signed job body can never pass as a manifest. In v0.2 the agent verifies and stages (`foiled-hostd verify-update`); swapping the binary is left to the service manager.
 
 ### 7. Offline buffer and replay
 
-The host agent's segment buffer (ADR 0008) serves sensors too, with a 256 MiB default cap on sensors (1 GiB on hosts). Over the cap, whole oldest segments are dropped and counted. Delivery on the wire is at least once; the store keeps one row per `(tenant_id, event_id)`, so storage is exactly once per event. A 429 or 5xx stops the drain until the next tick. A 401 or 403 stops it and keeps every event (the identity is the problem, not the data). Any other refusal splits the batch and drops only the refused events, counted in `dropped_events`. Ingest is rate limited per identity (default 120 batches a minute).
+The host agent's segment buffer (ADR 0008) serves sensors too, with a 256 MiB default cap on sensors (1 GiB on hosts). Over the cap, whole oldest segments are dropped and counted. Delivery on the wire is at least once; the store keeps one row per `(tenant_id, source_kind, source_id, event_id)`, with the source stamped from the certificate, so storage is exactly once per event and one sensor cannot pre-claim another sensor's event ids. A 429 or 5xx stops the drain until the next tick. A 401, or a 403 about the caller (missing scope, wrong id), stops it and keeps every event (the identity is the problem, not the data). Any other refusal, including a 403 `not_assigned` for a decoy that is no longer this sensor's, splits the batch and drops only the refused events, logged and counted in `dropped_events`. Ingest is rate limited per identity (default 120 batches a minute).
 
 ### 8. Tenancy rules
 
@@ -86,16 +86,18 @@ The host agent's segment buffer (ADR 0008) serves sensors too, with a 256 MiB de
 
 ### 9. Network change flag
 
-On every heartbeat from an enrolled agent the Worker records the source IP (`CF-Connecting-IP`) and ASN (`cf.asn`). A change of ASN, or without ASNs a move out of the same IPv4 /16 or IPv6 /32, sets `network_changed_at` and writes a `sensor.network_changed` audit record. A copied certificate used from another network shows up this way.
+On every authenticated request from an enrolled agent (lease, acknowledgement, heartbeat, ingest, upload, renewal) the Worker compares the source IP (`CF-Connecting-IP`) and ASN (`cf.asn`) with the last values seen; it writes only when they change, when the last sighting is over five minutes old, or on a heartbeat. A change of ASN, or without ASNs a move out of the same IPv4 /16 or IPv6 /32, sets `network_changed_at` and writes a `sensor.network_changed` audit record. A copied certificate used from another network shows up this way.
 
 ## Consequences
 
 - A stolen sensor certificate can ingest only as that sensor, for its own decoys, in its own tenant, until revoked. It cannot reach operator routes, mint tokens, read data or act as another sensor or a host. This is tested in `crates/api/tests/sensors.rs` against the tabletop in [modes.md](../deploy/modes.md).
 - The Worker holds one more secret: a Cloudflare API token limited to SSL and certificates on the ingest zone. Losing it lets an attacker mint client certificates, but a certificate is useless until its fingerprint is bound to an identity in D1, which only `/v0/enrol` with a valid token does.
-- A token spent on a failed CA call cannot be retried; the admin re-enrols. This keeps tokens strictly single use.
+- A token is claimed before the CA call and released again if the CA fails, so a CA outage does not cost an enrolment; a successful bind spends it for good. CSRs with keys the CA will not sign are refused before the claim.
 - Enrolment and renewal depend on the Cloudflare API being up. Ingest does not.
 - The real Cloudflare issuer (`worker_glue::CloudflareIssuer`) is compiled and linted for `wasm32` but cannot be exercised in CI without an account; tests and the local mock use `FakeIssuer`. The operator steps in the guide are the acceptance check for that path.
-- Within one tenant, `event_id` is first writer wins. Two sensors of the same tenant could collide on an id only by guessing the other's ids; we accept that inside a tenant and never across tenants.
+- Event deduplication is keyed on the sending identity as well as the tenant and `event_id` (Postgres migration `0004`), so replays from one sensor are dropped but no sensor can suppress another's events.
+- Identities that existed before migration `0003` get registry rows in the migration and can be listed, renewed and revoked through the API; their certificates have no CA reference and are revoked at the CA by hand (the revoke response lists them).
+- The Worker checks the stored certificate expiry as well as `certVerified`, and a stored scope name the code no longer knows makes the credential a clean 401 rather than a server error.
 
 ## Alternatives considered
 

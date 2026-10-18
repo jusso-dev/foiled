@@ -17,12 +17,33 @@ pub enum ClientError {
     Refused(u16, String),
 }
 
+/// Error codes on a 403 that refuse one piece of data rather than the
+/// caller: the rest of the buffer is still deliverable.
+const PER_ITEM_403: &[&str] = &["not_assigned"];
+
 impl ClientError {
-    /// The control plane does not accept this identity (revoked, retired or
-    /// unknown certificate). Retrying the same data will not help, but the
-    /// data is not at fault either, so it must not be dropped.
+    /// The `error.code` of a refusal body, when there is one.
+    pub fn code(&self) -> Option<String> {
+        let ClientError::Refused(_, body) = self else {
+            return None;
+        };
+        let v: serde_json::Value = serde_json::from_str(body).ok()?;
+        v["error"]["code"].as_str().map(str::to_string)
+    }
+
+    /// The control plane does not accept this identity: a 401 (revoked,
+    /// retired, expired or unknown certificate) or a 403 about the caller
+    /// (missing scope, wrong id). Retrying the same data will not help,
+    /// but the data is not at fault, so it must not be dropped. A 403 about
+    /// one item, such as `not_assigned` for a decoy that moved, is not.
     pub fn is_identity_problem(&self) -> bool {
-        matches!(self, ClientError::Refused(401 | 403, _))
+        match self {
+            ClientError::Refused(401, _) => true,
+            ClientError::Refused(403, _) => self
+                .code()
+                .is_none_or(|c| !PER_ITEM_403.contains(&c.as_str())),
+            _ => false,
+        }
     }
 }
 
@@ -183,5 +204,33 @@ pub async fn enrol(base: &str, req: &EnrolRequest) -> Result<EnrolResponse, Clie
     } else {
         let text = res.text().await.unwrap_or_default();
         Err(ClientError::Refused(status.as_u16(), text))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refused(status: u16, code: &str) -> ClientError {
+        ClientError::Refused(
+            status,
+            format!(r#"{{"error":{{"code":"{code}","message":"x"}}}}"#),
+        )
+    }
+
+    #[test]
+    fn identity_failures_are_told_apart_from_per_event_refusals() {
+        assert!(refused(401, "unauthorised").is_identity_problem());
+        assert!(refused(403, "forbidden").is_identity_problem());
+        assert!(refused(403, "wrong_sensor").is_identity_problem());
+        assert!(ClientError::Refused(403, "<html>".into()).is_identity_problem());
+        assert!(!refused(403, "not_assigned").is_identity_problem());
+        assert!(!refused(404, "not_found").is_identity_problem());
+        assert!(!refused(422, "invalid_events").is_identity_problem());
+        assert!(!ClientError::Unavailable("down".into()).is_identity_problem());
+        assert_eq!(
+            refused(403, "not_assigned").code().as_deref(),
+            Some("not_assigned")
+        );
     }
 }

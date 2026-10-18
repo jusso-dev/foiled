@@ -311,7 +311,8 @@ paths:
         Worker refuses them from this request on), closes any unused
         enrolment token, then revokes each certificate at the
         Cloudflare-managed CA so the WAF rule's `cert_revoked` check blocks it
-        at the edge. `ca_failed` counts certificates the CA did not revoke;
+        at the edge. `ca_failed` counts certificates the CA did not revoke
+        (their fingerprints are in the audit record's `revoke_in_dashboard`);
         finish those in the dashboard. A `reason` is required and audited as
         `host.revoke`. A revoked host cannot be re-enrolled: register a
         new one.
@@ -604,7 +605,9 @@ paths:
         Called once by a new sensor or host, before it has a certificate, on
         the ingest hostname (the only path the mTLS WAF rule exempts). The
         agent generates its key pair locally and sends only a CSR; a body
-        holding a private key is refused. The token decides the identity
+        holding a private key, or a key the CA will not sign (only ECDSA
+        P-256 or P-384, or RSA 2048 to 4096 bits), is refused with 400
+        before the token is touched. The token decides the identity
         (id, role, tenant, scopes); the CSR subject is ignored. The CSR is
         signed by the Cloudflare-managed client CA and the certificate's
         SHA-256 fingerprint is bound to the identity in D1. Tokens are single
@@ -630,7 +633,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorised" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "502":
-          description: The certificate authority did not issue a certificate. The token is spent; re-enrol.
+          description: The certificate authority did not issue a certificate. The token claim is released; retry later with the same token.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -721,7 +724,8 @@ paths:
         Worker refuses them from this request on), closes any unused
         enrolment token, then revokes each certificate at the
         Cloudflare-managed CA so the WAF rule's `cert_revoked` check blocks it
-        at the edge. `ca_failed` counts certificates the CA did not revoke;
+        at the edge. `ca_failed` counts certificates the CA did not revoke
+        (their fingerprints are in the audit record's `revoke_in_dashboard`);
         finish those in the dashboard. A `reason` is required and audited as
         `sensor.revoke`. A revoked sensor cannot be re-enrolled: register a
         new one.

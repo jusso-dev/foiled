@@ -28,8 +28,8 @@ use crate::d1_sql as sql;
 use crate::issuer::{CertIssuer, IssuedCert, IssuerError, IssuerFuture};
 use crate::routes::ingest::UploadConfig;
 use crate::store::{
-    AgentQuery, AuditQuery, DecoyQuery, EnrolmentTokenRecord, IdentityRecord, IpIocRow, JobRecord,
-    LinkOverride, NewCert, Store, StoreError, StoreFuture, TokenRecord,
+    AgentCerts, AgentQuery, AuditQuery, DecoyQuery, EnrolmentTokenRecord, IdentityRecord, IpIocRow,
+    JobRecord, LinkOverride, NewCert, Store, StoreError, StoreFuture, TokenRecord,
 };
 use crate::{AppState, router};
 
@@ -312,6 +312,7 @@ struct IdentityRow {
     cert_sha256: String,
     revoked: f64,
     valid_until: Option<f64>,
+    expires_at: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -385,8 +386,9 @@ struct TokenRowE {
 }
 
 #[derive(Deserialize)]
-struct IssuerRefRow {
-    issuer_ref: String,
+struct AgentCertRow {
+    cert_sha256: String,
+    issuer_ref: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -489,6 +491,19 @@ struct CursorRow {
     id: String,
 }
 
+/// Scopes from a stored row. A name the code no longer knows (for example
+/// one retired by a migration) makes the credential unusable: the caller
+/// gets a clean 401, the operator a log line, and nobody a 5xx.
+fn stored_scopes(kind: &str, id: &str, raw: &str) -> Option<Vec<foiled_core::auth::Scope>> {
+    match parse_scopes(raw) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            worker::console_error!("{kind} {id} refused: {e}");
+            None
+        }
+    }
+}
+
 fn role(s: &str) -> Result<Role, StoreError> {
     Role::parse(s).ok_or_else(|| StoreError(format!("bad role {s}")))
 }
@@ -561,18 +576,19 @@ impl Store for CfStore {
                 .first(None)
                 .await
                 .map_err(err)?;
-            row.map(|r| {
-                Ok(TokenRecord {
-                    id: r.id,
-                    tenant_id: r.tenant_id,
-                    role: role(&r.role)?,
-                    scopes: parse_scopes(&r.scopes).map_err(StoreError)?,
-                    secret_sha256: r.secret_sha256,
-                    expires_at: r.expires_at.map(|v| v as i64),
-                    revoked: r.revoked != 0.0,
-                })
-            })
-            .transpose()
+            let Some(r) = row else { return Ok(None) };
+            let Some(scopes) = stored_scopes("token", &r.id, &r.scopes) else {
+                return Ok(None);
+            };
+            Ok(Some(TokenRecord {
+                id: r.id,
+                tenant_id: r.tenant_id,
+                role: role(&r.role)?,
+                scopes,
+                secret_sha256: r.secret_sha256,
+                expires_at: r.expires_at.map(|v| v as i64),
+                revoked: r.revoked != 0.0,
+            }))
         })
     }
 
@@ -587,18 +603,20 @@ impl Store for CfStore {
                 .first(None)
                 .await
                 .map_err(err)?;
-            row.map(|r| {
-                Ok(IdentityRecord {
-                    id: r.id,
-                    tenant_id: r.tenant_id,
-                    role: role(&r.role)?,
-                    scopes: parse_scopes(&r.scopes).map_err(StoreError)?,
-                    cert_sha256: r.cert_sha256,
-                    revoked: r.revoked != 0.0,
-                    valid_until: r.valid_until.map(|v| v as i64),
-                })
-            })
-            .transpose()
+            let Some(r) = row else { return Ok(None) };
+            let Some(scopes) = stored_scopes("identity", &r.id, &r.scopes) else {
+                return Ok(None);
+            };
+            Ok(Some(IdentityRecord {
+                id: r.id,
+                tenant_id: r.tenant_id,
+                role: role(&r.role)?,
+                scopes,
+                cert_sha256: r.cert_sha256,
+                revoked: r.revoked != 0.0,
+                valid_until: r.valid_until.map(|v| v as i64),
+                expires_at: r.expires_at.map(|v| v as i64),
+            }))
         })
     }
 
@@ -1192,6 +1210,20 @@ impl Store for CfStore {
         })
     }
 
+    fn release_enrolment_token(&self, id: &str, claimed_at: i64) -> StoreFuture<'_, ()> {
+        let args = [s(id), n(claimed_at)];
+        wrap(async move {
+            self.db
+                .prepare(sql::RELEASE_ENROLMENT_TOKEN)
+                .bind(&args)
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
+            Ok(())
+        })
+    }
+
     fn bind_certificate(
         &self,
         tenant_id: &str,
@@ -1262,7 +1294,7 @@ impl Store for CfStore {
         agent_id: &str,
         reason: Reason,
         now: i64,
-    ) -> StoreFuture<'_, Option<Vec<String>>> {
+    ) -> StoreFuture<'_, Option<AgentCerts>> {
         let (t, a) = (tenant_id.to_string(), agent_id.to_string());
         wrap(async move {
             let code = serde_json::to_value(reason.code)
@@ -1293,7 +1325,7 @@ impl Store for CfStore {
                 .map_err(err)?;
             let refs = self
                 .db
-                .prepare(sql::ISSUER_REFS)
+                .prepare(sql::AGENT_CERTS)
                 .bind(&[s(&t), s(&a)])
                 .map_err(err)?;
             let results = self
@@ -1310,13 +1342,18 @@ impl Store for CfStore {
             if !found {
                 return Ok(None);
             }
-            let refs = results
+            let certs = results
                 .get(3)
-                .map(|r| r.results::<IssuerRefRow>())
+                .map(|r| r.results::<AgentCertRow>())
                 .transpose()
                 .map_err(err)?
                 .unwrap_or_default();
-            Ok(Some(refs.into_iter().map(|r| r.issuer_ref).collect()))
+            Ok(Some(
+                certs
+                    .into_iter()
+                    .map(|r| (r.cert_sha256, r.issuer_ref))
+                    .collect(),
+            ))
         })
     }
 

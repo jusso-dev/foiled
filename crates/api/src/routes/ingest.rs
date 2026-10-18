@@ -20,7 +20,7 @@ use foiled_core::sigv4::{self, Credentials, PresignRequest};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::auth::Auth;
+use crate::auth::{Auth, Meta};
 use crate::error::{ApiError, JsonBody};
 use crate::routes::check_rate;
 
@@ -91,10 +91,12 @@ pub struct Accepted {
 async fn ingest_events(
     State(state): State<AppState>,
     auth: Auth,
+    Meta(meta): Meta,
     JsonBody(batch): JsonBody<EventBatch>,
 ) -> Result<(StatusCode, Json<Accepted>), ApiError> {
     let who = require_any(&auth, [Scope::HostIngest, Scope::SensorIngest])?.clone();
     let source = source_of(&who)?;
+    crate::routes::hosts::note_seen(&state, &who, &meta, false).await?;
     // Per-identity flood control: a stolen certificate cannot exhaust the
     // ingest Queue for everyone else (#31 tabletop, step 8).
     check_rate(
@@ -197,9 +199,11 @@ fn base64(bytes: &[u8]) -> String {
 async fn mint_upload(
     State(state): State<AppState>,
     auth: Auth,
+    Meta(meta): Meta,
     JsonBody(req): JsonBody<UploadRequest>,
 ) -> Result<(StatusCode, Json<UploadGrant>), ApiError> {
     let who = require_any(&auth, [Scope::HostUpload, Scope::SensorUpload])?.clone();
+    crate::routes::hosts::note_seen(&state, &who, &meta, false).await?;
     let cfg = state.uploads.clone().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,

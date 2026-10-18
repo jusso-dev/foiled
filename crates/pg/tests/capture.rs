@@ -56,6 +56,38 @@ async fn events_insert_once_and_read_back_in_order() {
 
 #[tokio::test]
 #[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn one_source_cannot_pre_claim_another_sources_event_id() {
+    let c = connect().await;
+    let tenant = format!("cap-src-{}", std::process::id());
+    let http = fixture("http-upload.json");
+    let from = |kind, id: &str| {
+        let mut e = http.clone();
+        e.stamp(
+            Source {
+                kind,
+                id: id.into(),
+            },
+            &tenant,
+        );
+        e
+    };
+    // A rogue sensor sends first with the same event_id.
+    let n = insert_events(&c, &[from(SourceKind::Sensor, "sensor-rogue")], 1)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let n = insert_events(&c, &[from(SourceKind::Host, "host-1")], 2)
+        .await
+        .unwrap();
+    assert_eq!(n, 1, "the real event is still stored");
+    let n = insert_events(&c, &[from(SourceKind::Host, "host-1")], 3)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "a replay from the same source is still a no-op");
+}
+
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
 async fn unstamped_events_are_refused_and_rows_are_append_only() {
     let c = connect().await;
     let raw = fixture("emulator-redis.json");

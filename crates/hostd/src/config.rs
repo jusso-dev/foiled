@@ -89,6 +89,9 @@ pub enum ConfigError {
     InsecureApiBase,
     MissingClientCertificate,
     BadRole,
+    /// A key is pinned both as a job key and as a release key. Each signs
+    /// one kind of thing; sharing one would let either stand in for the other.
+    SharedSigningKey,
 }
 
 impl std::fmt::Display for ConfigError {
@@ -108,6 +111,10 @@ impl std::fmt::Display for ConfigError {
                 write!(f, "client_cert and client_key are required for https://")
             }
             ConfigError::BadRole => write!(f, "role must be \"host\" or \"sensor\""),
+            ConfigError::SharedSigningKey => write!(
+                f,
+                "release_keys and trusted_keys must not share a public key"
+            ),
         }
     }
 }
@@ -136,6 +143,14 @@ impl HostConfig {
         }
         if self.trusted_keys.is_empty() {
             return Err(ConfigError::NoTrustedKeys);
+        }
+        let norm = |k: &TrustedKey| k.public_key.trim().to_ascii_lowercase();
+        if self
+            .release_keys
+            .iter()
+            .any(|r| self.trusted_keys.iter().any(|t| norm(t) == norm(r)))
+        {
+            return Err(ConfigError::SharedSigningKey);
         }
         if self.api_base.starts_with("https://") {
             if self.client_cert.is_none() || self.client_key.is_none() {
@@ -219,6 +234,22 @@ public_key = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
             HostConfig::parse(&format!("role = \"human\"\n{BASE}")),
             Err(ConfigError::BadRole)
         );
+    }
+
+    #[test]
+    fn job_and_release_keys_must_differ() {
+        let shared = format!(
+            "{BASE}\n[[release_keys]]\nid = \"rel\"\npublic_key = \"D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A\"\n"
+        );
+        assert_eq!(
+            HostConfig::parse(&shared),
+            Err(ConfigError::SharedSigningKey)
+        );
+        let distinct = format!(
+            "{BASE}\n[[release_keys]]\nid = \"rel\"\npublic_key = \"{}\"\n",
+            "3d".repeat(32)
+        );
+        assert!(HostConfig::parse(&distinct).is_ok());
     }
 
     #[test]

@@ -196,6 +196,9 @@ pub enum CsrProblem {
     ContainsPrivateKey,
     NotOneRequest,
     NotDer,
+    /// A key type or size the Cloudflare-managed CA does not sign. Caught
+    /// here so a doomed request never spends an enrolment token.
+    UnsupportedKey(String),
 }
 
 impl std::fmt::Display for CsrProblem {
@@ -210,12 +213,83 @@ impl std::fmt::Display for CsrProblem {
                 write!(f, "csr_pem must hold exactly one CERTIFICATE REQUEST block")
             }
             CsrProblem::NotDer => write!(f, "csr_pem is not a DER certificate request"),
+            CsrProblem::UnsupportedKey(k) => write!(
+                f,
+                "unsupported key ({k}); use ECDSA P-256 or P-384, or RSA 2048 to 4096 bits"
+            ),
         }
     }
 }
 
-/// Shape checks only: the CA parses and verifies the request itself. The
-/// CSR's subject is ignored; identity comes from the enrolment token.
+/// One DER element: tag and contents. Short and long form lengths up to
+/// four bytes; anything else is refused.
+fn der_next(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let (&tag, rest) = input.split_first()?;
+    let (&first, rest) = rest.split_first()?;
+    let (len, rest) = if first < 0x80 {
+        (usize::from(first), rest)
+    } else {
+        let n = usize::from(first & 0x7f);
+        if n == 0 || n > 4 || rest.len() < n {
+            return None;
+        }
+        let len = rest[..n]
+            .iter()
+            .fold(0usize, |a, &b| (a << 8) | usize::from(b));
+        (len, &rest[n..])
+    };
+    if rest.len() < len {
+        return None;
+    }
+    Some((tag, &rest[..len], &rest[len..]))
+}
+
+fn der_expect(input: &[u8], tag: u8) -> Option<(&[u8], &[u8])> {
+    let (t, body, rest) = der_next(input)?;
+    (t == tag).then_some((body, rest))
+}
+
+const OID_EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+const OID_P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+const OID_P384: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
+const OID_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+
+/// The CSR's public key, described for the policy check: `Ok("p256")`,
+/// `Ok("p384")`, `Ok("rsa<bits>")` or `Err(what it was)`.
+fn csr_key(der: &[u8]) -> Option<Result<String, String>> {
+    let (req, _) = der_expect(der, 0x30)?;
+    let (info, _) = der_expect(req, 0x30)?;
+    let (_version, rest) = der_expect(info, 0x02)?;
+    let (_subject, rest) = der_expect(rest, 0x30)?;
+    let (spki, _) = der_expect(rest, 0x30)?;
+    let (alg, rest) = der_expect(spki, 0x30)?;
+    let (key_bits, _) = der_expect(rest, 0x03)?;
+    let (oid, params) = der_expect(alg, 0x06)?;
+    if oid == OID_EC_PUBLIC_KEY {
+        let (curve, _) = der_expect(params, 0x06)?;
+        return Some(match curve {
+            c if c == OID_P256 && key_bits.len() == 66 => Ok("p256".into()),
+            c if c == OID_P384 && key_bits.len() == 98 => Ok("p384".into()),
+            _ => Err("an EC curve other than P-256 or P-384".into()),
+        });
+    }
+    if oid == OID_RSA {
+        // BIT STRING: one unused-bits byte, then RSAPublicKey { n, e }.
+        let (rsa, _) = der_expect(key_bits.get(1..)?, 0x30)?;
+        let (n, _) = der_expect(rsa, 0x02)?;
+        let n = match n.iter().position(|&b| b != 0) {
+            Some(i) => &n[i..],
+            None => return Some(Err("an empty RSA modulus".into())),
+        };
+        let bits = n.len() * 8 - n[0].leading_zeros() as usize;
+        return Some(Ok(format!("rsa{bits}")));
+    }
+    Some(Err(format!("key algorithm OID {}", hex::encode(oid))))
+}
+
+/// Shape and key checks. The CA parses and verifies the request itself;
+/// this only refuses what it would refuse anyway, before a token is spent.
+/// The CSR's subject is ignored; identity comes from the enrolment token.
 pub fn csr_problem(pem: &str) -> Option<CsrProblem> {
     if pem.len() > MAX_CSR_BYTES {
         return Some(CsrProblem::TooLarge);
@@ -230,12 +304,16 @@ pub fn csr_problem(pem: &str) -> Option<CsrProblem> {
     if blocks.len() != 1 || pem.matches("-----BEGIN ").count() != 1 {
         return Some(CsrProblem::NotOneRequest);
     }
-    // A DER SEQUENCE with a long-form length: every real CSR starts 0x30 0x82.
-    let der = &blocks[0];
-    if der.len() < 64 || der[0] != 0x30 {
-        return Some(CsrProblem::NotDer);
+    match csr_key(&blocks[0]) {
+        None => Some(CsrProblem::NotDer),
+        Some(Err(what)) => Some(CsrProblem::UnsupportedKey(what)),
+        Some(Ok(k)) => match k.strip_prefix("rsa").map(str::parse::<usize>) {
+            Some(Ok(bits)) if !(2048..=4096).contains(&bits) => {
+                Some(CsrProblem::UnsupportedKey(format!("RSA {bits} bits")))
+            }
+            _ => None,
+        },
     }
-    None
 }
 
 /// Lowercase hex SHA-256 over the DER of the first certificate in `pem`.
@@ -283,14 +361,13 @@ pub fn network_changed(prev: &SeenFrom, now: &SeenFrom) -> bool {
 mod tests {
     use super::*;
 
-    /// A syntactically valid CSR body: a DER SEQUENCE of 70 bytes.
+    /// A real ECDSA P-256 CSR from the enrolment fixture.
     fn csr_pem() -> String {
-        let mut der = vec![0x30, 0x82, 0x00, 0x42];
-        der.extend(std::iter::repeat_n(0x01, 66));
-        format!(
-            "-----BEGIN CERTIFICATE REQUEST-----\n{}\n-----END CERTIFICATE REQUEST-----\n",
-            encode(&der)
-        )
+        let v: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../testdata/agent/enrol/requests/sensor.json"
+        ))
+        .unwrap();
+        v["csr_pem"].as_str().unwrap().to_string()
     }
 
     fn encode(bytes: &[u8]) -> String {
@@ -363,8 +440,31 @@ mod tests {
         );
         let short = "-----BEGIN CERTIFICATE REQUEST-----\nMAA=\n-----END CERTIFICATE REQUEST-----";
         assert_eq!(csr_problem(short), Some(CsrProblem::NotDer));
+        // Truncated DER: the length runs past the end.
+        let cut = "-----BEGIN CERTIFICATE REQUEST-----\nMIIB\n-----END CERTIFICATE REQUEST-----";
+        assert_eq!(csr_problem(cut), Some(CsrProblem::NotDer));
         let broken = "-----BEGIN CERTIFICATE REQUEST-----\n!!!!\n-----END CERTIFICATE REQUEST-----";
         assert_eq!(csr_problem(broken), Some(CsrProblem::NotDer));
+    }
+
+    #[test]
+    fn only_key_types_the_ca_signs_pass() {
+        for ok in [
+            include_str!("../../../testdata/agent/csr/rsa2048.pem"),
+            include_str!("../../../testdata/agent/csr/p384.pem"),
+        ] {
+            assert_eq!(csr_problem(ok), None);
+        }
+        for bad in [
+            include_str!("../../../testdata/agent/csr/rsa1024.pem"),
+            include_str!("../../../testdata/agent/csr/p521.pem"),
+            include_str!("../../../testdata/agent/csr/ed.pem"),
+        ] {
+            assert!(
+                matches!(csr_problem(bad), Some(CsrProblem::UnsupportedKey(_))),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

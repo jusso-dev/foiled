@@ -20,6 +20,13 @@ DROP TABLE identities;
 ALTER TABLE identities_v2 RENAME TO identities;
 CREATE INDEX IF NOT EXISTS identities_by_id ON identities (tenant_id, id);
 
+-- `sensor:heartbeat` was folded into `sensor:report`. Strip the old name so
+-- no stored row carries a scope the code no longer knows.
+UPDATE identities SET scopes = TRIM(REPLACE(scopes, 'sensor:heartbeat', ''))
+    WHERE scopes LIKE '%sensor:heartbeat%';
+UPDATE api_tokens SET scopes = TRIM(REPLACE(scopes, 'sensor:heartbeat', ''))
+    WHERE scopes LIKE '%sensor:heartbeat%';
+
 -- Registered sensors and hosts. Identity comes from the certificate; this
 -- table holds lifecycle and what the console shows.
 CREATE TABLE IF NOT EXISTS agents (
@@ -58,3 +65,14 @@ CREATE TABLE IF NOT EXISTS enrolment_tokens (
     used_at       INTEGER
 );
 CREATE INDEX IF NOT EXISTS enrolment_tokens_agent ON enrolment_tokens (tenant_id, agent_id);
+
+-- Identities created before this migration (hand-registered hosts) get a
+-- registry row, so they can be listed, revoked and renewed through the API.
+-- Their certificates have no CA reference: revoke those at the CA by hand.
+INSERT OR IGNORE INTO agents (id, tenant_id, role, status, sandbox_allowed, created_at,
+                              created_by, enrolled_at, cert_sha256)
+    SELECT id, tenant_id, role,
+           CASE WHEN MAX(revoked) = 1 THEN 'revoked' ELSE 'active' END,
+           CASE WHEN role = 'host' THEN 1 ELSE 0 END,
+           MIN(created_at), 'migration-0003', MIN(created_at), MAX(cert_sha256)
+    FROM identities GROUP BY tenant_id, id, role;

@@ -12,7 +12,7 @@ What is real and what is not:
 | Two-layer mTLS check in the Worker, role and tenant binding | Built and tested. The WAF rule is an operator step below. |
 | Cloudflare client certificate issue and revoke (`CloudflareIssuer`) | Built and checked for `wasm32`, **not exercised in CI**: it needs a Cloudflare account. Tests and the local mock use a fake CA (`FakeIssuer`). |
 | Sensor-side key generation, enrolment, renewal, offline buffer, signed build verification | Built and tested (`crates/hostd`). Swapping the running binary after verification is left to the service manager. |
-| Network change flag | Built: audit record and `network_changed_at`. Routing it to alerts (#15) is follow-up work. |
+| Network change flag | Built: checked on every agent request, audit record and `network_changed_at`. Routing it to alerts (#15) is follow-up work. |
 
 ## What runs on an edge sensor
 
@@ -39,7 +39,7 @@ Host and sensor certificates map to identities that can only hold their own fami
 
 Do these once per deployment, after [workers.md](workers.md). Use placeholders in anything you commit.
 
-1. **Apply the D1 migrations**, including `migrations/d1/0003_enrolment.sql` (sensor and host registry, enrolment tokens, one row per certificate).
+1. **Apply the migrations**: D1 `migrations/d1/0003_enrolment.sql` (sensor and host registry, enrolment tokens, one row per certificate; existing hosts get registry rows and the retired `sensor:heartbeat` scope name is stripped) and Postgres `migrations/postgres/0004_capture_events_source_key.sql` (deduplicate events per sending identity).
 2. **Turn on mTLS for the ingest hostname** (SSL/TLS, Client Certificates, add the hostname). Certificates come from the Cloudflare-managed CA; no bring-your-own CA is needed.
 3. **Layer 1, the WAF custom rule** on the zone, action **Block**:
 
@@ -61,8 +61,8 @@ The Worker never relies on the WAF alone. For every request it copies `cf.tlsCli
 | Check | Where | Fails with |
 | --- | --- | --- |
 | Certificate presented and `certVerified == "SUCCESS"` | `crates/api/src/auth.rs` | 401 |
-| Fingerprint is a known identity in D1 | `identity_by_cert` | 401 |
-| Identity not revoked, certificate not past `valid_until` (retired by renewal or re-enrolment) | `auth.rs` | 401 |
+| Fingerprint is a known identity in D1, with only scope names the code knows | `identity_by_cert` | 401 |
+| Identity not revoked, certificate not past `valid_until` (retired by renewal or re-enrolment) or its stored expiry | `auth.rs` | 401 |
 | Scope held, and the role matches the path family (`/v0/hosts` or `/v0/sensors`) | `routes/hosts.rs`, `routes/agents.rs` | 403 |
 | Path id is the caller's own id | same | 403 `wrong_sensor` / `wrong_host` |
 | Decoy placed on the caller, in the caller's tenant | `routes/ingest.rs` | 404 or 403 `not_assigned` |
@@ -89,10 +89,10 @@ So the two layers are separate: the WAF is the coarse gate at Cloudflare's edge,
    ```
 
    The agent generates a P-256 key, sends only a CSR with the token to `POST /v0/enrol`, checks that the certificate it gets back was issued for the sensor id and role in its config and matches its fingerprint, installs key and certificate owner-only, writes `identity.json` (identity, fingerprint, issue and expiry times) under `state_dir`, and deletes the token file.
-5. **Control plane side** of step 4: rate limit by source IP; find the token; constant-time compare of the secret; refuse if used or expired (401, audited as `sensor.enrol` denied); refuse a malformed CSR or one that contains a private key (400, token not spent); mark the token used in one compare-and-set; have the Cloudflare-managed CA sign the CSR; fingerprint the returned certificate; bind it to the sensor in one transaction that binds nothing if the sensor was revoked meanwhile; audit `sensor.enrol` with the fingerprint, source IP and ASN.
+5. **Control plane side** of step 4: rate limit by source IP; find the token; constant-time compare of the secret; refuse if used or expired (401, audited as `sensor.enrol` denied); refuse a malformed CSR, one that contains a private key, or one for a key the CA will not sign (ECDSA P-256 or P-384, or RSA 2048 to 4096 bits) (400, token not spent); mark the token used in one compare-and-set; have the Cloudflare-managed CA sign the CSR; fingerprint the returned certificate; bind it to the sensor in one transaction that binds nothing if the sensor was revoked meanwhile; audit `sensor.enrol` with the fingerprint, source IP and ASN.
 6. **Start the agent** (`foiled-hostd /etc/foiled/sensor.toml`). It heartbeats, leases jobs placed on it, and sends evidence.
 
-If the CA call fails after the token was spent (502 `issuer_failed`), the token cannot be retried. Re-enrol (below) to get a new one.
+If the CA fails to issue (502 `issuer_failed`), the claim on the token is released and the same token can be retried until it expires. `foiled-hostd enrol` keeps the token file on a network error, 429, 5xx or 400 and deletes it only after success or a definitive 401 (spent, expired, revoked or wrong).
 
 ## Placing decoys
 
@@ -120,7 +120,7 @@ Use revocation, not re-enrolment, if the old key may be in someone else's hands.
 
 1. Admin: `POST /v0/sensors/{id}:revoke` with a `reason` (scope `sensors:write`).
 2. In one D1 transaction the sensor becomes `revoked` with the reason and time, every certificate it holds is marked revoked, and any unused enrolment token is closed. From this point the Worker answers 401 to that sensor.
-3. The Worker then revokes each certificate at the Cloudflare-managed CA (`DELETE /zones/{zone}/client_certificates/{id}`), so the WAF rule's `cert_revoked` clause blocks it at the edge. The response counts `ca_revoked` and `ca_failed`, and the audit record (`sensor.revoke`) lists any CA errors.
+3. The Worker then revokes each certificate at the Cloudflare-managed CA (`DELETE /zones/{zone}/client_certificates/{id}`), so the WAF rule's `cert_revoked` clause blocks it at the edge. The response counts `ca_revoked` and `ca_failed`, and the audit record (`sensor.revoke`) lists any CA errors and, under `revoke_in_dashboard`, the fingerprint of every certificate the CA did not revoke. Hosts registered before migration `0003` have certificates without a CA reference; they always land in that list.
 4. If `ca_failed` is not zero, finish in the dashboard: SSL/TLS, Client Certificates, select each certificate with the sensor's fingerprint, **Revoke**. Until then the WAF lets the certificate through, but the Worker still refuses it.
 5. Destroy or reassign the sensor's decoys. Jobs placed on a revoked sensor are never leased again.
 6. Revocation is final. Cloudflare-managed certificates can be restored in the dashboard, but the D1 identity stays revoked, so a restored certificate still gets 401. Replace the sensor by registering a new one.
@@ -184,11 +184,11 @@ sequenceDiagram
 | Over the cap | Oldest whole segments are deleted | Counted in `dropped_events` in every heartbeat. |
 | Drain | Oldest first, batches of up to 100 | Each poll tick (default 5 s). |
 | 5xx, 429 or network error | Stop, keep everything, retry next tick | This is the back-pressure path. |
-| 401 or 403 | Stop, keep everything | The certificate is revoked, retired or unknown; the data is not at fault. |
-| Other 4xx (invalid event, not this sensor's decoy) | Resend the batch one event at a time, drop only the refused ones | Counted in `dropped_events`, so one bad event cannot wedge the buffer. |
+| 401, or 403 about the caller (`forbidden`, `wrong_sensor`) | Stop, keep everything | The certificate is revoked, retired, expired or unknown, or lacks a scope; the data is not at fault. |
+| Other 4xx, including 403 `not_assigned` (decoy moved to another sensor) and 404 | Resend the batch one event at a time, drop only the refused ones | Logged and counted in `dropped_events`, so one stale event cannot stall the buffer. |
 | Ingest rate limit | 120 batches a minute per identity | Returns 429. |
 
-**Semantics.** Delivery on the wire is at least once: an event is removed from the buffer only after the control plane accepted it, so a crash between send and commit resends it. The store keeps one row per `(tenant_id, event_id)` (`ON CONFLICT DO NOTHING` in Postgres), so each event is stored exactly once. Within one tenant an `event_id` is first writer wins; across tenants ids never collide.
+**Semantics.** Delivery on the wire is at least once: an event is removed from the buffer only after the control plane accepted it, so a crash between send and commit resends it. The store keeps one row per `(tenant_id, source_kind, source_id, event_id)` (`ON CONFLICT DO NOTHING` in Postgres), with the source stamped from the certificate, so each event is stored exactly once and no sensor can pre-claim another sensor's event ids, in its own tenant or any other.
 
 ### Buffer test plan
 
@@ -208,8 +208,8 @@ Manual check on a real sensor: stop outbound HTTPS with a firewall rule, let tra
 Requirements:
 
 1. Every release publishes `manifest.json`: a signed manifest `{body, sig, key_id}` where `body` is the JSON text of a [release manifest](../../schemas/release-manifest.schema.json) (`kind: "foiled.release.v1"`, product, `MAJOR.MINOR.PATCH` version, release time, and per target triple the file name, size and SHA-256), and `sig` is a hex Ed25519 signature over the exact bytes of `body`.
-2. The release key is kept offline. It is never a Worker secret and is never the job signing key. Its public half is pinned in each sensor's `release_keys`; pin the next key before rotating.
-3. The agent verifies, in order: signature by a pinned release key; `kind` and `product`; version strictly newer than the running one (no downgrade, no replay of the same version); size, then SHA-256, of the downloaded file for its own target. Nothing in the manifest is read before the signature verifies.
+2. The release key is kept offline. It is never a Worker secret and is never the job signing key: the agent refuses a config where a `release_keys` entry matches a `trusted_keys` entry. Its public half is pinned in each sensor's `release_keys`; pin the next key before rotating.
+3. The agent verifies, in order: signature by a pinned release key; `kind` and `product`; version strictly newer than both the running one and the highest version ever staged on this machine (`<state_dir>/updates/floor`; no downgrade, no replay, no walk back to an older signed build); size, then SHA-256, of the downloaded file for its own target. Nothing in the manifest is read before the signature verifies.
 4. Only then is the file staged under `<state_dir>/updates/<version>/foiled-hostd`. Swapping it in and restarting is the service manager's job, so a bad build can be rolled back.
 
 ```sh

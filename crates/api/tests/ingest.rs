@@ -73,6 +73,7 @@ async fn harness() -> H {
             cert_sha256: cert(n),
             revoked: false,
             valid_until: None,
+            expires_at: None,
         });
     }
     let mut state = AppState::new(store.clone(), Arc::new(|| NOW));
