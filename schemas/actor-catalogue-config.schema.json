@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/actor-catalogue-config.schema.json",
+  "title": "Foiled actor catalogue config",
+  "description": "configs/actor-catalogue.yaml (#29): importing actors, intrusion sets, campaigns and reports from ThreatSieve. foiled-core checks the rest (stale_after_hours greater than refresh_after_hours). See docs/actor-attribution.md#threatsieve.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "threatsieve"],
+  "properties": {
+    "version": { "const": 1 },
+    "threatsieve": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "binding", "api_key_env", "blob_prefix", "calls_per_run", "refresh_after_hours", "stale_after_hours", "max_sync_hours", "max_actors", "max_campaigns", "max_reports", "include_restricted"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "binding": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
+        "api_key_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
+        "blob_prefix": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_/-]*/$" },
+        "calls_per_run": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        "refresh_after_hours": { "type": "integer", "minimum": 1 },
+        "stale_after_hours": { "type": "integer", "minimum": 2 },
+        "max_sync_hours": { "type": "integer", "minimum": 1 },
+        "max_actors": { "type": "integer", "minimum": 1, "maximum": 5000 },
+        "max_campaigns": { "type": "integer", "minimum": 1, "maximum": 5000 },
+        "max_reports": { "type": "integer", "minimum": 1, "maximum": 5000 },
+        "include_restricted": { "type": "boolean" }
+      }
+    }
+  }
+}

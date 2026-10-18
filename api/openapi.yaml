@@ -2989,6 +2989,9 @@ components:
         attack_version: { type: string }
         example: { type: boolean }
         notes: { type: string }
+        weight_pct: { type: integer, description: "Percent of full strength the profile's evidence counts at: 100, or 50 for an import with one publisher." }
+        restricted: { type: boolean, description: "A source does not allow redistribution or commercial use: matched and shown, never exported." }
+        imported_from: { type: string, description: "The hub an imported profile came from (threatsieve)." }
     WriteUpFields:
       type: object
       additionalProperties: false

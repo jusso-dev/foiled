@@ -5,6 +5,7 @@
 //! system access (ADR 0009).
 
 pub mod actor;
+pub mod actor_sync;
 pub mod agent;
 pub mod alerting;
 pub mod attack;

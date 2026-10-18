@@ -1,0 +1,41 @@
+# Actor reference catalogue (#29). Design: docs/actor-attribution.md#threatsieve.
+# Validated by schemas/actor-catalogue-config.schema.json (foiled-lint) and
+# bundled into the API Worker at build time.
+#
+# The catalogue always holds the pinned ATT&CK groups
+# (data/attack/groups.json) and the curated reports in catalogue/actors/.
+# With ThreatSieve enabled, the hourly cron also imports actors, intrusion
+# sets, campaigns and reports from it over the THREATSIEVE service binding
+# (opt-in, added to the operator's private wrangler config; see
+# docs/deploy/workers.md) and serves them while the snapshot is fresh.
+# Without the binding or the key, or with a stale snapshot, the catalogue is
+# the bundled data alone.
+
+version: 1
+
+threatsieve:
+  enabled: false
+  binding: THREATSIEVE
+  api_key_env: THREATSIEVE_API_KEY
+  # Sync state and versioned snapshots in the private evidence bucket.
+  blob_prefix: actors/threatsieve/
+  # Calls to ThreatSieve per hourly run (at most 2000). A full sync at the
+  # caps below is about 1,500 calls, so four runs. Workers Paid allows
+  # 10,000 subrequests per invocation; the Free plan allows 50 external
+  # subrequests and 10 ms of CPU, too little for this sync.
+  calls_per_run: 500
+  # Start a new sync once the snapshot is a day old.
+  refresh_after_hours: 24
+  # Stop serving imports older than a week.
+  stale_after_hours: 168
+  # Start again only if a sync makes no progress for this long. A sync
+  # that is moving on, however slowly, is never restarted.
+  max_sync_hours: 48
+  max_actors: 1000
+  max_campaigns: 500
+  max_reports: 1000
+  # Serve entries with a source that does not allow redistribution or
+  # commercial use. They are never exported either way. Leave off unless
+  # your counsel has confirmed those terms allow showing them to tenants.
+  # The catalogue is global, so this applies to every tenant at once.
+  include_restricted: false

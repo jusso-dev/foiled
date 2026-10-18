@@ -107,6 +107,20 @@ pub fn wording_problems(text: &str, confirmed: bool) -> Vec<String> {
     out
 }
 
+/// Served in place of a source title that claims attribution.
+pub const WITHHELD_TITLE: &str = "Report (title withheld: attribution wording)";
+
+/// A source title as Foiled serves it (`/v0/actors`, link sources). The
+/// file keeps the document's real title as data; one that claims
+/// attribution is replaced wherever it would reach a tenant.
+pub fn served_title(title: &str) -> &str {
+    if wording_problems(title, false).is_empty() {
+        title
+    } else {
+        WITHHELD_TITLE
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sources and the curated report format
 // ---------------------------------------------------------------------------
@@ -254,7 +268,36 @@ pub struct ActorReport {
     pub geo: Geo,
     #[serde(default)]
     pub notes: String,
+    /// Set on entries imported from an intel hub (`crate::actor_sync`),
+    /// never on curated files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported: Option<Imported>,
 }
+
+/// Where an imported entry came from, and what that means for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Imported {
+    /// The hub, for example `threatsieve`.
+    pub from: String,
+    /// The hub's entity id.
+    pub entity_id: String,
+    /// An ATT&CK group or campaign id (`G0000`, `C0000`) when the hub's
+    /// source is MITRE. A group the pinned sidecar already holds is left to
+    /// the sidecar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attack_id: Option<String>,
+    /// Some contributing source does not allow redistribution or
+    /// commercial use: the profile may be matched and shown, never
+    /// exported.
+    pub restricted: bool,
+    /// Distinct publishers behind the entry. With one, the entry counts at
+    /// [`SINGLE_PUBLISHER_WEIGHT_PCT`] and never as a named group.
+    pub publishers: u32,
+}
+
+/// Evidence weight, in percent, for an imported entry with one publisher.
+pub const SINGLE_PUBLISHER_WEIGHT_PCT: u8 = 50;
 
 impl ActorReport {
     /// Checks a schema cannot express. `known` is the set of technique ids
@@ -357,7 +400,7 @@ impl ActorReport {
 
     fn source_problems(&self, s: &Source) -> Vec<String> {
         let mut out = Vec::new();
-        if s.kind == SourceKind::AttackGroup {
+        if s.kind == SourceKind::AttackGroup && self.imported.is_none() {
             out.push("ATT&CK groups come from data/attack/groups.json, not curated files".into());
         }
         if s.publisher.trim().is_empty() || s.title.trim().is_empty() {
@@ -387,7 +430,9 @@ impl ActorReport {
         }
         match &s.sha256 {
             Some(h) if !is_sha256(h) => out.push("sha256 must be 64 lowercase hex".into()),
-            None if !self.example => {
+            // Imported entries are pinned where the hub gives a digest; the
+            // hub's own retrieval record stands in otherwise.
+            None if !self.example && self.imported.is_none() => {
                 out.push("sha256 of the retrieved document is required (the pin)".into());
             }
             _ => {}
@@ -399,7 +444,7 @@ impl ActorReport {
             if !s.publisher.contains("(fictional)") {
                 out.push("example publishers say (fictional)".into());
             }
-        } else if reserved_domain(&host) {
+        } else if reserved_domain(&host) && self.imported.is_none() {
             out.push("real entries cannot cite reserved example domains".into());
         }
         out
@@ -414,19 +459,42 @@ impl ActorReport {
         let mut techniques = self.techniques;
         techniques.sort();
         techniques.dedup();
+        let (actor_id, label) = match self.imported.as_ref().and_then(|i| i.attack_id.as_ref()) {
+            Some(a) => (
+                format!("attack:{a}"),
+                format!("ATT&CK {a} ({})", self.label.text.trim()),
+            ),
+            None => (
+                format!("report:{}", self.id),
+                format!("{} ({publisher})", self.label.text.trim()),
+            ),
+        };
         ActorProfile {
-            actor_id: format!("report:{}", self.id),
-            label: format!("{} ({publisher})", self.label.text.trim()),
+            actor_id,
+            label,
             label_kind: self.label.kind,
             aliases: self.aliases,
             techniques,
             indicators: self.indicators,
             targeting: self.targeting,
             geo: self.geo,
-            sources: self.sources,
+            sources: self
+                .sources
+                .into_iter()
+                .map(|mut s| {
+                    s.title = served_title(&s.title).to_string();
+                    s
+                })
+                .collect(),
             attack_version: None,
             example: self.example,
             notes: self.notes,
+            weight_pct: match &self.imported {
+                Some(i) if i.publishers < 2 => SINGLE_PUBLISHER_WEIGHT_PCT,
+                _ => 100,
+            },
+            restricted: self.imported.as_ref().is_some_and(|i| i.restricted),
+            imported_from: self.imported.map(|i| i.from),
         }
     }
 }
@@ -554,6 +622,9 @@ impl AttackGroups {
                 attack_version: Some(self.attack_version.clone()),
                 example: false,
                 notes: String::new(),
+                weight_pct: 100,
+                restricted: false,
+                imported_from: None,
             })
             .collect()
     }
@@ -583,17 +654,31 @@ pub struct ActorProfile {
     pub example: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub notes: String,
+    /// Percent of full strength every piece of evidence counts at: 100, or
+    /// [`SINGLE_PUBLISHER_WEIGHT_PCT`] for an import with one publisher.
+    #[serde(default = "full_weight")]
+    pub weight_pct: u8,
+    /// Matched and shown, never exported: a contributing source does not
+    /// allow redistribution or commercial use.
+    #[serde(default)]
+    pub restricted: bool,
+    /// The hub an imported profile came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_from: Option<String>,
 }
 
-/// Where actor profiles come from. Today the API reads the bundled ATT&CK
-/// groups sidecar and `catalogue/actors/`; another source (for example a
-/// threat intel platform holding actor, intrusion-set and report
-/// catalogues) implements this and goes through the same checks in
+fn full_weight() -> u8 {
+    100
+}
+
+/// Where actor profiles come from: the bundled ATT&CK groups sidecar and
+/// `catalogue/actors/`, plus, when fresh, entries imported from ThreatSieve
+/// (`crate::actor_sync`). Every source goes through the same checks in
 /// [`ActorCatalogue::from_source`].
 pub trait CatalogueSource {
     /// The ATT&CK groups sidecar, if this source carries one.
     fn attack_groups(&self) -> Option<AttackGroups>;
-    /// Curated report profiles.
+    /// Curated and imported report profiles.
     fn reports(&self) -> Vec<ActorReport>;
 }
 
@@ -648,7 +733,14 @@ impl ActorCatalogue {
             }
         }
         let mut ids = BTreeSet::new();
+        // The pinned sidecar wins over an imported copy of the same group.
+        let mut actor_ids: BTreeSet<String> = profiles.iter().map(|p| p.actor_id.clone()).collect();
         for r in reports {
+            if let Some(a) = r.imported.as_ref().and_then(|i| i.attack_id.as_ref())
+                && !actor_ids.insert(format!("attack:{a}"))
+            {
+                continue;
+            }
             let mut p = r.problems(&known);
             if !ids.insert(r.id.clone()) {
                 p.push("duplicate id".into());
@@ -1321,6 +1413,10 @@ pub struct ActorLink {
     /// back in the review queue.
     #[serde(default)]
     pub new_since_confirmation: Vec<String>,
+    /// From a source that does not allow redistribution or commercial use:
+    /// shown in the console, never exported.
+    #[serde(default)]
+    pub restricted: bool,
     pub matched: Matched,
     /// Overlaps that were seen and deliberately not counted.
     pub not_counted: Vec<String>,
@@ -1750,6 +1846,24 @@ fn evaluate(
         );
     }
 
+    // An import with one publisher counts at reduced strength, whatever
+    // it says.
+    if p.weight_pct < 100 {
+        for e in evidence.iter_mut() {
+            e.weight = (u16::from(e.weight) * u16::from(p.weight_pct) / 100) as u8;
+        }
+        not_counted.push(format!(
+            "imported with a single publisher: every signal counts at {}% of its strength",
+            p.weight_pct
+        ));
+    }
+    if p.restricted {
+        not_counted.push(
+            "a source behind this profile does not allow redistribution or commercial use: \
+             shown here, never exported"
+                .into(),
+        );
+    }
     let link = score(
         cfg,
         LinkKind::AttemptActor,
@@ -1802,6 +1916,7 @@ fn evaluate(
             || !new_since_confirmation.is_empty(),
         confirmed_attempt_ids,
         new_since_confirmation,
+        restricted: p.restricted,
         matched,
         not_counted,
         sources: p.sources.clone(),
@@ -1902,7 +2017,9 @@ pub fn attach_suggestions(campaigns: &mut [Campaign], links: &[ActorLink]) {
 pub fn export_links(links: &[ActorLink]) -> BTreeMap<String, Vec<ConfidenceLink>> {
     let mut out: BTreeMap<String, Vec<ConfidenceLink>> = BTreeMap::new();
     for l in links {
-        if l.status == LinkStatus::Rejected || !(l.publishable || l.status == LinkStatus::Confirmed)
+        if l.status == LinkStatus::Rejected
+            || l.restricted
+            || !(l.publishable || l.status == LinkStatus::Confirmed)
         {
             continue;
         }
@@ -2018,7 +2135,7 @@ fn valid_slug(s: &str) -> bool {
         && !s.starts_with('-')
 }
 
-fn https_host(url: &str) -> Option<String> {
+pub(crate) fn https_host(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://")?;
     let auth = rest.split(['/', '?', '#']).next()?;
     let host = auth.rsplit('@').next()?.split(':').next()?;
@@ -2149,6 +2266,7 @@ mod tests {
                 source_countries: vec!["XA".into()],
             },
             notes: String::new(),
+            imported: None,
         }
     }
 
@@ -2558,7 +2676,11 @@ mod tests {
                 e.summary
             );
         }
-        assert_eq!(l.sources[0].title, r.sources[0].title, "kept as data");
+        assert_eq!(l.sources[0].title, WITHHELD_TITLE, "withheld when served");
+        assert!(
+            r.problems(&sidecar().known_ids()).is_empty(),
+            "kept as data"
+        );
         r.sources[0].publisher = "Group responsible for it (fictional)".into();
         r.aliases = vec!["the crew that is behind it".into()];
         let p = r.problems(&sidecar().known_ids()).join("\n");
