@@ -175,7 +175,7 @@ async fn model(
     until: Option<i64>,
 ) -> Result<WindowModel, ApiError> {
     let (from, to) = window_bounds(state, since, until);
-    window_model(
+    let mut m = window_model(
         state,
         tenant_id,
         from,
@@ -185,7 +185,10 @@ async fn model(
             record: canonical_window(since, until),
         },
     )
-    .await
+    .await?;
+    // Actor possible-associations (#29) on `suggested_actor_links`.
+    crate::routes::actors::attach_to_model(state, tenant_id, &mut m).await?;
+    Ok(m)
 }
 
 fn find(m: WindowModel, campaign_id: &str) -> Result<(Campaign, WindowModel), ApiError> {
@@ -517,7 +520,7 @@ async fn act(
     let mut inputs = m.inputs.take().expect("full model has inputs");
     inputs.actions.push(action.clone());
     let record = canonical_window(q.since, q.until);
-    let after = run_clustering(
+    let mut after = run_clustering(
         &state,
         &who.tenant_id,
         &inputs,
@@ -526,6 +529,15 @@ async fn act(
         record,
     )
     .await;
+    crate::routes::actors::match_window(
+        &state,
+        &who.tenant_id,
+        &mut after.campaigns,
+        &m.attempts,
+        &m.iocs,
+        &inputs,
+    )
+    .await?;
     let campaign = after.get(&campaign_id).cloned();
     Ok(Json(ActionResult { action, campaign }))
 }

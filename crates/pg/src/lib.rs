@@ -40,6 +40,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         "0007_campaign_registry_order",
         include_str!("../../../migrations/postgres/0007_campaign_registry_order.sql"),
     ),
+    (
+        "0008_actor_link_decisions",
+        include_str!("../../../migrations/postgres/0008_actor_link_decisions.sql"),
+    ),
 ];
 
 /// Arbitrary constant key for the migration advisory lock.
@@ -448,6 +452,61 @@ fn override_row(r: &Row) -> LinkOverrideRow {
         at: r.get("at"),
         note: r.get("note"),
     }
+}
+
+/// One stored analyst decision on an actor link (`actor_link_decisions`,
+/// #29).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActorDecisionRow {
+    pub subject_id: String,
+    pub actor_id: String,
+    pub feedback: String,
+    pub analyst_id: String,
+    pub at: i64,
+    pub note: String,
+}
+
+pub async fn put_actor_decision(
+    client: &Client,
+    tenant_id: &str,
+    r: &ActorDecisionRow,
+) -> Result<(), Error> {
+    client
+        .execute(
+            "INSERT INTO actor_link_decisions (tenant_id, subject_id, actor_id, feedback, analyst_id, at, note)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (tenant_id, subject_id, actor_id)
+             DO UPDATE SET feedback = $4, analyst_id = $5, at = $6, note = $7",
+            &[&tenant_id, &r.subject_id, &r.actor_id, &r.feedback, &r.analyst_id, &r.at, &r.note],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Decisions for these subjects (campaign or attempt ids).
+pub async fn actor_decisions(
+    client: &Client,
+    tenant_id: &str,
+    subject_ids: &[String],
+) -> Result<Vec<ActorDecisionRow>, Error> {
+    let rows = client
+        .query(
+            "SELECT subject_id, actor_id, feedback, analyst_id, at, note FROM actor_link_decisions
+             WHERE tenant_id = $1 AND subject_id = ANY($2) ORDER BY subject_id, actor_id",
+            &[&tenant_id, &subject_ids],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| ActorDecisionRow {
+            subject_id: r.get("subject_id"),
+            actor_id: r.get("actor_id"),
+            feedback: r.get("feedback"),
+            analyst_id: r.get("analyst_id"),
+            at: r.get("at"),
+            note: r.get("note"),
+        })
+        .collect())
 }
 
 /// Append one analyst campaign action (#33). `body` is the whole

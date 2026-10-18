@@ -1,5 +1,6 @@
 //! Route handlers grouped by resource.
 
+pub mod actors;
 pub mod agents;
 pub mod attempts;
 pub mod audit;
