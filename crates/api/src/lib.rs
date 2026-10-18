@@ -15,6 +15,7 @@ use std::sync::Arc;
 use axum::{Json, Router, routing::get};
 use serde::Serialize;
 
+pub mod actor_sync;
 pub mod auth;
 pub mod catalogue;
 pub mod d1_sql;

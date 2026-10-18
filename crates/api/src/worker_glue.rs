@@ -65,6 +65,7 @@ async fn fetch(
     if let Some(p) = zone_purger(&env) {
         state.cache_purger = Arc::new(p);
     }
+    state.actors = actor_catalogue(&env).await;
     Ok(router(state).call(req).await?)
 }
 
@@ -214,6 +215,112 @@ async fn purge(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleC
         ),
         Err(_) => worker::console_error!("purge: enrichment purge failed; next run retries"),
     }
+    sync_actor_catalogue(&env).await;
+}
+
+/// The actor catalogue from ThreatSieve (#29): one bounded sync run per
+/// cron. Without the opt-in `THREATSIEVE` binding or the key it does
+/// nothing, and the API keeps the bundled catalogue.
+async fn sync_actor_catalogue(env: &Env) {
+    let Some(config) = crate::actor_sync::bundled_config() else {
+        worker::console_error!("actor sync: configs/actor-catalogue.yaml did not load");
+        return;
+    };
+    if !config.threatsieve.enabled {
+        return;
+    }
+    let Ok(bucket) = env.bucket("EVIDENCE") else {
+        worker::console_error!("actor sync: EVIDENCE bucket missing");
+        return;
+    };
+    let blobs = R2Blobs { bucket };
+    let http = env
+        .service(&config.threatsieve.binding)
+        .ok()
+        .map(|fetcher| ThreatSieveHttp { fetcher });
+    let secret = |name: &str| -> Option<String> { env.secret(name).ok().map(|s| s.to_string()) };
+    let deps = crate::actor_sync::SyncDeps {
+        blobs: &blobs,
+        http: http
+            .as_ref()
+            .map(|h| h as &dyn crate::enrich_consumer::ProviderHttp),
+        secret: &secret,
+        config,
+        now_ms: now_ms(),
+    };
+    worker::console_log!("actor sync: {:?}", crate::actor_sync::run_sync(&deps).await);
+}
+
+/// R2 as [`crate::actor_sync::Blobs`], in the private evidence bucket.
+struct R2Blobs {
+    bucket: worker::Bucket,
+}
+
+impl crate::actor_sync::Blobs for R2Blobs {
+    fn get(&self, key: &str) -> crate::actor_sync::BlobFuture<'_, Option<String>> {
+        let key = key.to_string();
+        Box::pin(async move {
+            let Some(obj) = self
+                .bucket
+                .get(key)
+                .execute()
+                .await
+                .map_err(|e| e.to_string())?
+            else {
+                return Ok(None);
+            };
+            match obj.body() {
+                Some(b) => b.text().await.map(Some).map_err(|e| e.to_string()),
+                None => Ok(None),
+            }
+        })
+    }
+
+    fn put(&self, key: &str, body: String) -> crate::actor_sync::BlobFuture<'_, ()> {
+        let key = key.to_string();
+        Box::pin(async move {
+            self.bucket
+                .put(key, body)
+                .execute()
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+    }
+}
+
+thread_local! {
+    /// The served actor catalogue, the snapshot digest it was built from
+    /// and when R2 was last checked, for the life of the isolate.
+    static ACTORS: std::cell::RefCell<Option<(i64, Option<String>, Arc<foiled_core::actor::ActorCatalogue>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// How often an isolate rechecks the snapshot pointer.
+const ACTOR_RECHECK_MS: i64 = 300_000;
+
+/// The actor catalogue to serve (#29): the bundled one, or the bundled one
+/// plus a fresh ThreatSieve snapshot. Rechecked every five minutes.
+async fn actor_catalogue(env: &Env) -> Arc<foiled_core::actor::ActorCatalogue> {
+    let now = now_ms();
+    let Some(config) = crate::actor_sync::bundled_config().filter(|c| c.threatsieve.enabled) else {
+        return crate::links::bundled_actor_catalogue();
+    };
+    if let Some(c) = ACTORS.with(|a| {
+        a.borrow()
+            .as_ref()
+            .filter(|(at, _, _)| now - at < ACTOR_RECHECK_MS)
+            .map(|(_, _, c)| c.clone())
+    }) {
+        return c;
+    }
+    let Ok(bucket) = env.bucket("EVIDENCE") else {
+        return crate::links::bundled_actor_catalogue();
+    };
+    let blobs = R2Blobs { bucket };
+    let (sha, catalogue) = crate::actor_sync::load_catalogue(&blobs, config, now).await;
+    ACTORS.with(|a| *a.borrow_mut() = Some((now, sha, catalogue.clone())));
+    catalogue
 }
 
 /// Queue consumer for both queues this Worker reads. workers-rs allows one
