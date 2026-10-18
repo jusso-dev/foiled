@@ -1,0 +1,9 @@
+{
+  "provider": "threatsieve_restricted",
+  "key": "threatsieve.scanner",
+  "value": true,
+  "confidence": 70,
+  "observed_at": 1792285400000,
+  "ttl_secs": 21600,
+  "raw_ref": "threatsieve:obs_0000000000000000000000000000000000000000000000000000000000000001"
+}

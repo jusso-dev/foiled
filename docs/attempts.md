@@ -60,12 +60,15 @@ Every attempt carries a score for its source, from 0 (looks targeted) to 100 (lo
 | Distinct catalogue products touched | 1: base 10. 2 to 3: base 40. 4 or more: base 70. |
 | Decoys touched | 5 or more: +10 |
 | Events in the window | 1,000 or more: +10 |
-| GreyNoise `noise` (#11) | +20 |
-| GreyNoise `riot` (#11) | at least 90 (known business service) |
+| ThreatSieve scanner classification `reputation.scanner.is_scanner` (#11) | +20 |
+| ThreatSieve `reputation.scanner.benign_service` (#11) | at least 90 (known business or research service) |
+| ThreatSieve `reputation.classification` and `tags` (#11) | evidence only, no points |
 
 Bands: 0 to 29 `targeted`, 30 to 59 `mixed`, 60 and above `mass`. `evidence` lists every reason in words, and `fleet_scope` says what the score could see (`tenant` today, `fleet` once shared research sensors report through #31 and #35).
 
-Examples: one source, one product, a handful of requests scores 10 (`targeted`). A source that touched five different products scores 80 (`mass`). A source GreyNoise marks as RIOT scores at least 90.
+The ThreatSieve inputs come from `enrichment::noise_inputs` over the source address's cached Facts ([enrichment.md](enrichment.md#how-facts-are-consumed)). No scanner Fact means unknown and is neutral, the same as `is_scanner: false`. A `threatsieve_restricted` answer (any source that is not redistributable or not for commercial use, such as GreyNoise) counts only for the tenant whose lookup fetched it, and only once the operator has opted in with `show_restricted_to_requester`; its evidence lines say `restricted source, console only`. Another tenant's restricted answer never moves a score.
+
+Examples: one source, one product, a handful of requests scores 10 (`targeted`). A source that touched five different products scores 80 (`mass`). A source ThreatSieve marks as a benign service scores at least 90, and one it classifies as a scanner gains 20.
 
 ## API
 

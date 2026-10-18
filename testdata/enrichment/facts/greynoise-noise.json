@@ -1,9 +1,0 @@
-{
-  "provider": "greynoise",
-  "key": "greynoise.noise",
-  "value": true,
-  "confidence": 80,
-  "observed_at": 1792285400000,
-  "ttl_secs": 86400,
-  "raw_ref": "enrich_cache:greynoise:ip:203.0.113.7"
-}

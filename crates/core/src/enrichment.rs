@@ -1,5 +1,5 @@
-//! Enrichment (#11): observables, Facts, provider response parsers, the local
-//! IP-to-ASN table, cache freshness, noise inputs and export redaction.
+//! Enrichment (#11): observables, Facts, the local IP-to-ASN table, cache
+//! freshness, noise inputs and export redaction.
 //!
 //! Everything here is pure. The `foiled-enrich` Queue consumer in the API
 //! Worker does the HTTP fetches, the per-provider rate limit and the D1 cache;
@@ -25,11 +25,12 @@ use crate::capture::{CaptureEvent, Channel, PayloadRef};
 
 /// Provider id for the local IP-to-ASN table.
 pub const LOCAL_ASN: &str = "local_asn";
-/// Provider id for GreyNoise Community.
+/// Legacy provider ids for GreyNoise, CrowdSec CTI and DShield. Foiled no
+/// longer calls them (ThreatSieve does); the ids stay on
+/// [`NEVER_REDISTRIBUTE`] and [`KNOWN_THIRD_PARTY`] so their data is still
+/// caught if it turns up under these names or key namespaces.
 pub const GREYNOISE: &str = "greynoise";
-/// Provider id for CrowdSec CTI.
 pub const CROWDSEC: &str = "crowdsec";
-/// Provider id for DShield (SANS ISC).
 pub const DSHIELD: &str = "dshield";
 /// Provider id for ThreatSieve, the operator's intel hub, for Facts whose
 /// every contributing source allows redistribution and commercial use.
@@ -55,21 +56,11 @@ pub const NEVER_REDISTRIBUTE: &[&str] = &[
     THREATSIEVE_RESTRICTED,
 ];
 
-/// Confidence given to GreyNoise facts. GreyNoise Community does not report a
-/// certainty, so this is a fixed provider default (`docs/enrichment.md`).
-pub const GREYNOISE_CONFIDENCE: u8 = 80;
-/// Confidence given to DShield facts, which are sensor counts with no
-/// certainty field.
-pub const DSHIELD_CONFIDENCE: u8 = 70;
 /// Confidence given to local ASN and country facts.
 pub const LOCAL_ASN_CONFIDENCE: u8 = 90;
-/// CrowdSec confidence when the response carries no `confidence` field.
-pub const CROWDSEC_DEFAULT_CONFIDENCE: u8 = 50;
 
 /// Longest provider string kept in a Fact. Provider output is untrusted text.
 pub const MAX_TEXT: usize = 256;
-/// Most items kept from any provider list.
-pub const MAX_ITEMS: usize = 64;
 /// Longest URL observable accepted.
 pub const MAX_URL: usize = 2048;
 
@@ -587,7 +578,7 @@ impl CacheEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Response parsers
+// Response parsing
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -618,114 +609,12 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-type Object = serde_json::Map<String, Value>;
-
-fn parse_object(body: &str) -> Result<Object, ParseError> {
-    match serde_json::from_str::<Value>(body) {
-        Ok(Value::Object(o)) => Ok(o),
-        Ok(_) => Err(ParseError::NotObject),
-        Err(_) => Err(ParseError::NotJson),
-    }
-}
-
 /// Untrusted provider text: control characters removed, length capped.
 pub(crate) fn clip(s: &str) -> String {
     s.chars()
         .filter(|c| !c.is_control())
         .take(MAX_TEXT)
         .collect()
-}
-
-fn text_field(o: &Object, key: &'static str) -> Option<String> {
-    o.get(key)
-        .and_then(Value::as_str)
-        .map(clip)
-        .filter(|s| !s.is_empty())
-}
-
-fn provider_message(o: &Object) -> String {
-    ["message", "error", "detail"]
-        .iter()
-        .find_map(|k| o.get(*k).and_then(Value::as_str))
-        .map(clip)
-        .unwrap_or_else(|| "unknown error".to_owned())
-}
-
-/// Parses a GreyNoise Community response (`GET /v3/community/{ip}`).
-///
-/// `noise` and `riot` are required booleans; `classification`, `name` and
-/// `last_seen` are added when present. A "not observed" answer (both flags
-/// false) still yields the two flag Facts, because "not noise" is useful to
-/// the noise score (#25). A body with no flags is a provider error, such as a
-/// rate limit message.
-pub fn parse_greynoise_community(body: &str, stamp: &Stamp) -> Result<Vec<Fact>, ParseError> {
-    let o = parse_object(body)?;
-    if !o.contains_key("noise") && !o.contains_key("riot") {
-        return Err(ParseError::Provider(provider_message(&o)));
-    }
-    let flag = |k: &'static str| match o.get(k) {
-        Some(Value::Bool(b)) => Ok(*b),
-        Some(_) => Err(ParseError::WrongType(k)),
-        None => Err(ParseError::Missing(k)),
-    };
-    let noise = flag("noise")?;
-    let riot = flag("riot")?;
-    let fact = |key: &str, v: Value| stamp.fact(GREYNOISE, key, v, GREYNOISE_CONFIDENCE);
-    let mut facts = vec![
-        fact("greynoise.noise", Value::Bool(noise)),
-        fact("greynoise.riot", Value::Bool(riot)),
-    ];
-    for (field, key) in [
-        ("classification", "greynoise.classification"),
-        ("name", "greynoise.name"),
-        ("last_seen", "greynoise.last_seen"),
-    ] {
-        if let Some(v) = text_field(&o, field) {
-            facts.push(fact(key, Value::String(v)));
-        }
-    }
-    Ok(facts)
-}
-
-fn crowdsec_confidence(o: &Object) -> u8 {
-    match o.get("confidence").and_then(Value::as_str) {
-        Some("high") => 90,
-        Some("medium") => 60,
-        Some("low") => 30,
-        _ => CROWDSEC_DEFAULT_CONFIDENCE,
-    }
-}
-
-/// `name` of each object in a list (CrowdSec `behaviors`, `attack_details`,
-/// `mitre_techniques`), clipped, de-duplicated and capped at [`MAX_ITEMS`].
-fn names(o: &Object, key: &'static str, keep: impl Fn(&str) -> bool) -> Vec<Value> {
-    let mut out: Vec<String> = o
-        .get(key)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| match item {
-            Value::String(s) => Some(s.as_str()),
-            Value::Object(m) => m.get("name").and_then(Value::as_str),
-            _ => None,
-        })
-        .filter(|s| keep(s))
-        .map(clip)
-        .collect();
-    out.sort();
-    out.dedup();
-    out.truncate(MAX_ITEMS);
-    out.into_iter().map(Value::String).collect()
-}
-
-fn is_technique_id(s: &str) -> bool {
-    let b = s.as_bytes();
-    let base = b.len() >= 5 && b[0] == b'T' && b[1..5].iter().all(u8::is_ascii_digit);
-    match b.len() {
-        5 => base,
-        9 => base && b[5] == b'.' && b[6..9].iter().all(u8::is_ascii_digit),
-        _ => false,
-    }
 }
 
 fn is_cve_id(s: &str) -> bool {
@@ -739,92 +628,6 @@ fn is_cve_id(s: &str) -> bool {
         && year.bytes().all(|b| b.is_ascii_digit())
         && (4..=7).contains(&num.len())
         && num.bytes().all(|b| b.is_ascii_digit())
-}
-
-/// Parses a CrowdSec CTI smoke response (`GET /v2/smoke/{ip}`).
-///
-/// Produces `crowdsec.reputation`, `crowdsec.behaviors`,
-/// `crowdsec.attack_details`, `crowdsec.mitre_techniques` and
-/// `crowdsec.cves`, each only when present and non-empty. Technique and CVE
-/// ids that do not look like ids are dropped. Confidence comes from the
-/// response's own `confidence` (`high` 90, `medium` 60, `low` 30).
-pub fn parse_crowdsec_smoke(body: &str, stamp: &Stamp) -> Result<Vec<Fact>, ParseError> {
-    let o = parse_object(body)?;
-    let has_data = ["ip", "reputation", "behaviors", "scores"]
-        .iter()
-        .any(|k| o.contains_key(*k));
-    if !has_data {
-        return Err(ParseError::Provider(provider_message(&o)));
-    }
-    let confidence = crowdsec_confidence(&o);
-    let fact = |key: &str, v: Value| stamp.fact(CROWDSEC, key, v, confidence);
-    let mut facts = Vec::new();
-    if let Some(r) = text_field(&o, "reputation") {
-        facts.push(fact("crowdsec.reputation", Value::String(r)));
-    }
-    let lists = [
-        ("crowdsec.behaviors", names(&o, "behaviors", |_| true)),
-        (
-            "crowdsec.attack_details",
-            names(&o, "attack_details", |_| true),
-        ),
-        (
-            "crowdsec.mitre_techniques",
-            names(&o, "mitre_techniques", is_technique_id),
-        ),
-        ("crowdsec.cves", names(&o, "cves", is_cve_id)),
-    ];
-    for (key, items) in lists {
-        if !items.is_empty() {
-            facts.push(fact(key, Value::Array(items)));
-        }
-    }
-    Ok(facts)
-}
-
-/// A DShield count may be a number, a numeric string or null.
-fn dshield_count(o: &Object, key: &'static str) -> Result<Option<u64>, ParseError> {
-    match o.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(n)) => n.as_u64().map(Some).ok_or(ParseError::WrongType(key)),
-        Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
-        Some(Value::String(s)) => s
-            .trim()
-            .parse::<u64>()
-            .map(Some)
-            .map_err(|_| ParseError::WrongType(key)),
-        Some(_) => Err(ParseError::WrongType(key)),
-    }
-}
-
-/// Parses a DShield IP response (`GET /api/ip/{ip}?json`).
-///
-/// Produces `dshield.count` (reports), `dshield.attacks` (targets),
-/// `dshield.mindate` and `dshield.maxdate`, each only when not null. An IP
-/// DShield has never seen returns nulls and yields no Facts.
-pub fn parse_dshield_ip(body: &str, stamp: &Stamp) -> Result<Vec<Fact>, ParseError> {
-    let o = parse_object(body)?;
-    let ip = match o.get("ip") {
-        Some(Value::Object(ip)) => ip,
-        Some(_) => return Err(ParseError::WrongType("ip")),
-        None => return Err(ParseError::Provider(provider_message(&o))),
-    };
-    let fact = |key: &str, v: Value| stamp.fact(DSHIELD, key, v, DSHIELD_CONFIDENCE);
-    let mut facts = Vec::new();
-    for (field, key) in [("count", "dshield.count"), ("attacks", "dshield.attacks")] {
-        if let Some(n) = dshield_count(ip, field)? {
-            facts.push(fact(key, Value::from(n)));
-        }
-    }
-    for (field, key) in [
-        ("mindate", "dshield.mindate"),
-        ("maxdate", "dshield.maxdate"),
-    ] {
-        if let Some(d) = text_field(ip, field) {
-            facts.push(fact(key, Value::String(d)));
-        }
-    }
-    Ok(facts)
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,31 +980,74 @@ pub fn usable_facts(
 // ---------------------------------------------------------------------------
 
 /// The enrichment inputs to the noise score on attempts (#25) and the
-/// `noise_score` evidence in the confidence layer (#27). `None` means the
-/// provider was not asked, is off, or did not answer.
+/// `noise_score` evidence in the confidence layer (#27): ThreatSieve's
+/// scanner classification and reputation for the attempt's source address.
+/// `None` (or no `tags`) means ThreatSieve was off, did not answer, or holds
+/// nothing for the address: unknown, not "not a scanner".
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoiseFacts {
-    pub greynoise_noise: Option<bool>,
-    pub greynoise_riot: Option<bool>,
-    pub crowdsec_reputation: Option<String>,
+    /// `threatsieve.scanner`: the source scans the internet.
+    pub scanner: Option<bool>,
+    /// `threatsieve.benign_service`: a known business or research service.
+    pub benign_service: Option<bool>,
+    /// `threatsieve.classification`: `malicious`, `suspicious`, `benign` or
+    /// `unknown`.
+    pub classification: Option<String>,
+    /// `threatsieve.tags`, clipped, at most [`MAX_NOISE_TAGS`].
+    pub tags: Vec<String>,
+    /// True when any input above came from a `threatsieve_restricted` row:
+    /// the reading tenant's own lookup, never for export.
+    pub restricted: bool,
 }
 
-/// Picks the newest value for each noise input from `facts`. Ties on
-/// `observed_at` keep the later Fact in the slice.
-pub fn noise_inputs(facts: &[Fact]) -> NoiseFacts {
-    let newest = |provider: &str, key: &str| {
-        facts
+/// Most ThreatSieve tags kept as noise evidence.
+pub const MAX_NOISE_TAGS: usize = 8;
+
+/// Picks the noise inputs for `ip` from `usable`, the output of
+/// [`usable_facts`] for the reading tenant. That is what keeps restricted
+/// rows in bounds: a `threatsieve_restricted` row only reaches `usable` for
+/// the tenant whose lookup fetched it, and only once the operator has opted
+/// in with `show_restricted_to_requester`, so another tenant's restricted
+/// answer never moves this tenant's score. Only `threatsieve` and
+/// `threatsieve_restricted` Facts count. For each key the newest Fact wins;
+/// ties on `observed_at` keep the later Fact.
+pub fn noise_inputs(usable: &[ObservedFacts], ip: &Observable) -> NoiseFacts {
+    let facts: Vec<&Fact> = usable
+        .iter()
+        .filter(|o| o.observable == *ip)
+        .flat_map(|o| &o.facts)
+        .filter(|f| f.provider == THREATSIEVE || f.provider == THREATSIEVE_RESTRICTED)
+        .collect();
+    let mut restricted = false;
+    let mut newest = |key: &str| {
+        let f = facts
             .iter()
-            .filter(|f| f.provider == provider && f.key == key)
-            .max_by_key(|f| f.observed_at)
-            .map(|f| &f.value)
+            .filter(|f| f.key == key)
+            .max_by_key(|f| f.observed_at)?;
+        restricted |= f.provider == THREATSIEVE_RESTRICTED;
+        Some(&f.value)
     };
+    let scanner = newest("threatsieve.scanner").and_then(Value::as_bool);
+    let benign_service = newest("threatsieve.benign_service").and_then(Value::as_bool);
+    let classification = newest("threatsieve.classification")
+        .and_then(Value::as_str)
+        .map(clip)
+        .filter(|s| !s.is_empty());
+    let tags = newest("threatsieve.tags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(clip)
+        .filter(|s| !s.is_empty())
+        .take(MAX_NOISE_TAGS)
+        .collect();
     NoiseFacts {
-        greynoise_noise: newest(GREYNOISE, "greynoise.noise").and_then(Value::as_bool),
-        greynoise_riot: newest(GREYNOISE, "greynoise.riot").and_then(Value::as_bool),
-        crowdsec_reputation: newest(CROWDSEC, "crowdsec.reputation")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        scanner,
+        benign_service,
+        classification,
+        tags,
+        restricted,
     }
 }
 
@@ -1231,27 +1077,15 @@ pub fn redact_for_export(facts: &[Fact]) -> Vec<Fact> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::collections::BTreeSet;
 
     const NOW: i64 = 1_792_285_400_000;
     const DAY: u64 = 86_400;
 
-    const GN_NOISE: &str =
-        include_str!("../../../testdata/enrichment/providers/greynoise-community-noise.json");
-    const GN_RIOT: &str =
-        include_str!("../../../testdata/enrichment/providers/greynoise-community-riot.json");
-    const GN_UNSEEN: &str =
-        include_str!("../../../testdata/enrichment/providers/greynoise-community-not-found.json");
-    const CS_SMOKE: &str =
-        include_str!("../../../testdata/enrichment/providers/crowdsec-smoke.json");
-    const CS_UNSEEN: &str =
-        include_str!("../../../testdata/enrichment/providers/crowdsec-not-found.json");
-    const DS_IP: &str = include_str!("../../../testdata/enrichment/providers/dshield-ip.json");
-    const DS_UNSEEN: &str =
-        include_str!("../../../testdata/enrichment/providers/dshield-unknown.json");
     const ASN_CSV: &str = include_str!("../../../testdata/enrichment/asn.csv");
     const FACT_FIXTURES: [&str; 3] = [
-        include_str!("../../../testdata/enrichment/facts/greynoise-noise.json"),
+        include_str!("../../../testdata/enrichment/facts/threatsieve-restricted-scanner.json"),
         include_str!("../../../testdata/enrichment/facts/local-asn-number.json"),
         include_str!("../../../testdata/enrichment/facts/yara-match.json"),
     ];
@@ -1441,210 +1275,9 @@ mod tests {
 
     #[test]
     fn fact_freshness_uses_its_own_ttl() {
-        let facts = parse_greynoise_community(GN_NOISE, &Stamp::new(NOW, 10)).unwrap();
-        assert!(facts[0].is_fresh(NOW + 9_000));
-        assert!(!facts[0].is_fresh(NOW + 10_000));
-    }
-
-    // --- GreyNoise -----------------------------------------------------------
-
-    #[test]
-    fn greynoise_noise() {
-        let facts = parse_greynoise_community(GN_NOISE, &stamp()).unwrap();
-        assert_eq!(get(&facts, "greynoise.noise"), Some(&Value::Bool(true)));
-        assert_eq!(get(&facts, "greynoise.riot"), Some(&Value::Bool(false)));
-        assert_eq!(
-            get(&facts, "greynoise.classification"),
-            Some(&Value::from("malicious"))
-        );
-        assert_eq!(
-            get(&facts, "greynoise.last_seen"),
-            Some(&Value::from("2026-10-15"))
-        );
-        assert!(facts.iter().all(|f| f.provider == GREYNOISE
-            && f.confidence == GREYNOISE_CONFIDENCE
-            && f.observed_at == NOW
-            && f.ttl_secs == DAY));
-    }
-
-    #[test]
-    fn greynoise_riot() {
-        let facts = parse_greynoise_community(GN_RIOT, &stamp()).unwrap();
-        assert_eq!(get(&facts, "greynoise.riot"), Some(&Value::Bool(true)));
-        assert_eq!(
-            get(&facts, "greynoise.name"),
-            Some(&Value::from("Example Public Resolver"))
-        );
-    }
-
-    #[test]
-    fn greynoise_not_observed_still_reports_flags() {
-        let facts = parse_greynoise_community(GN_UNSEEN, &stamp()).unwrap();
-        assert_eq!(facts.len(), 2);
-        assert_eq!(get(&facts, "greynoise.noise"), Some(&Value::Bool(false)));
-        assert_eq!(get(&facts, "greynoise.riot"), Some(&Value::Bool(false)));
-    }
-
-    #[test]
-    fn greynoise_errors() {
-        assert_eq!(
-            parse_greynoise_community(r#"{"message":"Rate limit exceeded"}"#, &stamp()),
-            Err(ParseError::Provider("Rate limit exceeded".to_owned()))
-        );
-        assert_eq!(
-            parse_greynoise_community(r#"{"noise":"yes","riot":false}"#, &stamp()),
-            Err(ParseError::WrongType("noise"))
-        );
-        assert_eq!(
-            parse_greynoise_community(r#"{"noise":true}"#, &stamp()),
-            Err(ParseError::Missing("riot"))
-        );
-        assert_eq!(
-            parse_greynoise_community("<html>", &stamp()),
-            Err(ParseError::NotJson)
-        );
-        assert_eq!(
-            parse_greynoise_community("[]", &stamp()),
-            Err(ParseError::NotObject)
-        );
-    }
-
-    #[test]
-    fn provider_text_is_clipped_and_stripped() {
-        let long = "x".repeat(MAX_TEXT * 2);
-        let body = format!(
-            r#"{{"noise":true,"riot":false,"name":"{long}","classification":"bad\u0007\u001b[31m"}}"#
-        );
-        let facts = parse_greynoise_community(&body, &stamp()).unwrap();
-        let name = get(&facts, "greynoise.name").unwrap().as_str().unwrap();
-        assert_eq!(name.chars().count(), MAX_TEXT);
-        assert_eq!(
-            get(&facts, "greynoise.classification"),
-            Some(&Value::from("bad[31m"))
-        );
-    }
-
-    // --- CrowdSec -------------------------------------------------------------
-
-    #[test]
-    fn crowdsec_smoke() {
-        let facts = parse_crowdsec_smoke(CS_SMOKE, &stamp()).unwrap();
-        assert_eq!(
-            get(&facts, "crowdsec.reputation"),
-            Some(&Value::from("malicious"))
-        );
-        assert_eq!(
-            get(&facts, "crowdsec.behaviors"),
-            Some(&serde_json::json!(["http:exploit", "http:scan"]))
-        );
-        assert_eq!(
-            get(&facts, "crowdsec.attack_details"),
-            Some(&serde_json::json!([
-                "crowdsecurity/http-path-traversal-probing",
-                "crowdsecurity/http-probing"
-            ]))
-        );
-        // "not-a-technique" is dropped; the sub-technique is kept.
-        assert_eq!(
-            get(&facts, "crowdsec.mitre_techniques"),
-            Some(&serde_json::json!(["T1190", "T1595.002"]))
-        );
-        // "CVE-bogus" is dropped.
-        assert_eq!(
-            get(&facts, "crowdsec.cves"),
-            Some(&serde_json::json!(["CVE-2099-0001"]))
-        );
-        assert!(
-            facts
-                .iter()
-                .all(|f| f.provider == CROWDSEC && f.confidence == 90)
-        );
-    }
-
-    #[test]
-    fn crowdsec_not_found_is_a_provider_error() {
-        assert_eq!(
-            parse_crowdsec_smoke(CS_UNSEEN, &stamp()),
-            Err(ParseError::Provider(
-                "IP address information not found".to_owned()
-            ))
-        );
-    }
-
-    #[test]
-    fn crowdsec_sparse_and_confidence_levels() {
-        let facts = parse_crowdsec_smoke(
-            r#"{"ip":"198.51.100.23","reputation":"unknown","behaviors":[],"cves":[]}"#,
-            &stamp(),
-        )
-        .unwrap();
-        assert_eq!(facts.len(), 1);
-        assert_eq!(facts[0].confidence, CROWDSEC_DEFAULT_CONFIDENCE);
-        let low = parse_crowdsec_smoke(
-            r#"{"ip":"198.51.100.23","reputation":"suspicious","confidence":"low"}"#,
-            &stamp(),
-        )
-        .unwrap();
-        assert_eq!(low[0].confidence, 30);
-    }
-
-    #[test]
-    fn crowdsec_lists_are_capped() {
-        let many: Vec<String> = (0..200)
-            .map(|i| format!("\"CVE-2099-{:04}\"", i + 1000))
-            .collect();
-        let body = format!(r#"{{"ip":"203.0.113.7","cves":[{}]}}"#, many.join(","));
-        let facts = parse_crowdsec_smoke(&body, &stamp()).unwrap();
-        assert_eq!(
-            get(&facts, "crowdsec.cves")
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .len(),
-            MAX_ITEMS
-        );
-    }
-
-    // --- DShield ---------------------------------------------------------------
-
-    #[test]
-    fn dshield_ip() {
-        let facts = parse_dshield_ip(DS_IP, &stamp()).unwrap();
-        assert_eq!(get(&facts, "dshield.count"), Some(&Value::from(42u64)));
-        assert_eq!(get(&facts, "dshield.attacks"), Some(&Value::from(7u64)));
-        assert_eq!(
-            get(&facts, "dshield.mindate"),
-            Some(&Value::from("2026-09-30"))
-        );
-        assert_eq!(
-            get(&facts, "dshield.maxdate"),
-            Some(&Value::from("2026-10-15"))
-        );
-        assert!(facts.iter().all(|f| f.confidence == DSHIELD_CONFIDENCE));
-    }
-
-    #[test]
-    fn dshield_unknown_ip_has_no_facts() {
-        assert_eq!(parse_dshield_ip(DS_UNSEEN, &stamp()).unwrap(), Vec::new());
-    }
-
-    #[test]
-    fn dshield_numeric_strings_and_errors() {
-        let facts = parse_dshield_ip(
-            r#"{"ip":{"number":"203.0.113.7","count":"12","attacks":""}}"#,
-            &stamp(),
-        )
-        .unwrap();
-        assert_eq!(get(&facts, "dshield.count"), Some(&Value::from(12u64)));
-        assert_eq!(get(&facts, "dshield.attacks"), None);
-        assert_eq!(
-            parse_dshield_ip(r#"{"ip":{"count":"lots"}}"#, &stamp()),
-            Err(ParseError::WrongType("count"))
-        );
-        assert_eq!(
-            parse_dshield_ip(r#"{"error":"bad IP address"}"#, &stamp()),
-            Err(ParseError::Provider("bad IP address".to_owned()))
-        );
+        let f = Stamp::new(NOW, 10).fact(THREATSIEVE, "threatsieve.scanner", Value::Bool(true), 70);
+        assert!(f.is_fresh(NOW + 9_000));
+        assert!(!f.is_fresh(NOW + 10_000));
     }
 
     // --- ASN table -------------------------------------------------------------
@@ -1750,57 +1383,234 @@ mod tests {
 
     // --- consumers -------------------------------------------------------------
 
+    fn ts(provider: &str, key: &str, v: Value, at: i64) -> Fact {
+        fact_at(provider, key, v, at, DAY)
+    }
+
+    fn observed(ip: &str, facts: Vec<Fact>) -> ObservedFacts {
+        ObservedFacts {
+            observable: Observable::ip(ip).unwrap(),
+            facts,
+        }
+    }
+
     #[test]
-    fn noise_inputs_from_facts() {
-        assert_eq!(noise_inputs(&[]), NoiseFacts::default());
-        let mut facts = parse_greynoise_community(GN_NOISE, &Stamp::new(NOW - 1000, DAY)).unwrap();
-        facts.extend(parse_crowdsec_smoke(CS_SMOKE, &stamp()).unwrap());
-        // A newer GreyNoise answer wins over the older one.
-        facts.extend(parse_greynoise_community(GN_RIOT, &stamp()).unwrap());
+    fn noise_inputs_from_threatsieve_facts() {
+        let src = Observable::ip("203.0.113.7").unwrap();
+        assert_eq!(noise_inputs(&[], &src), NoiseFacts::default());
+        let usable = vec![
+            observed(
+                "203.0.113.7",
+                vec![
+                    ts(
+                        THREATSIEVE,
+                        "threatsieve.scanner",
+                        Value::Bool(false),
+                        NOW - 1000,
+                    ),
+                    ts(
+                        THREATSIEVE,
+                        "threatsieve.classification",
+                        Value::from("suspicious"),
+                        NOW,
+                    ),
+                    ts(
+                        THREATSIEVE,
+                        "threatsieve.benign_service",
+                        Value::Bool(true),
+                        NOW,
+                    ),
+                    // A newer answer wins over the older one.
+                    ts(THREATSIEVE, "threatsieve.scanner", Value::Bool(true), NOW),
+                    ts(
+                        THREATSIEVE,
+                        "threatsieve.tags",
+                        json!(["bruteforce", "", "web\u{7}scan"]),
+                        NOW,
+                    ),
+                ],
+            ),
+            // Another address's answer does not count.
+            observed(
+                "198.51.100.5",
+                vec![ts(
+                    THREATSIEVE,
+                    "threatsieve.benign_service",
+                    Value::Bool(false),
+                    NOW + 1,
+                )],
+            ),
+        ];
         assert_eq!(
-            noise_inputs(&facts),
+            noise_inputs(&usable, &src),
             NoiseFacts {
-                greynoise_noise: Some(false),
-                greynoise_riot: Some(true),
-                crowdsec_reputation: Some("malicious".to_owned()),
+                scanner: Some(true),
+                benign_service: Some(true),
+                classification: Some("suspicious".to_owned()),
+                tags: vec!["bruteforce".to_owned(), "webscan".to_owned()],
+                restricted: false,
             }
         );
     }
 
     #[test]
-    fn noise_inputs_ignore_other_providers() {
-        let mut f = parse_greynoise_community(GN_NOISE, &stamp()).unwrap();
-        for fact in &mut f {
-            fact.provider = "fake".to_owned();
-        }
-        assert_eq!(noise_inputs(&f), NoiseFacts::default());
+    fn noise_inputs_ignore_other_providers_and_legacy_keys() {
+        let src = Observable::ip("203.0.113.7").unwrap();
+        let usable = vec![observed(
+            "203.0.113.7",
+            vec![
+                ts("fake", "threatsieve.scanner", Value::Bool(true), NOW),
+                ts(
+                    LOCAL_ASN,
+                    "threatsieve.benign_service",
+                    Value::Bool(true),
+                    NOW,
+                ),
+                ts(THREATSIEVE, "greynoise.noise", Value::Bool(true), NOW),
+                ts(THREATSIEVE, "threatsieve.scanner", Value::from("yes"), NOW),
+            ],
+        )];
+        assert_eq!(noise_inputs(&usable, &src), NoiseFacts::default());
     }
 
     #[test]
-    fn export_drops_every_third_party_fact() {
+    fn noise_inputs_use_only_the_readers_own_restricted_rows() {
+        let ret = crate::retention::RetentionConfig::default();
+        let src = Observable::ip("203.0.113.7").unwrap();
+        let mut mine = row(
+            THREATSIEVE_RESTRICTED,
+            "203.0.113.7",
+            NOW,
+            DAY,
+            vec![
+                ts(
+                    THREATSIEVE_RESTRICTED,
+                    "threatsieve.scanner",
+                    Value::Bool(true),
+                    NOW,
+                ),
+                ts(
+                    THREATSIEVE_RESTRICTED,
+                    "threatsieve.benign_service",
+                    Value::Bool(true),
+                    NOW,
+                ),
+            ],
+        );
+        mine.tenant_id = Some("t1".into());
+        let shared = row(
+            THREATSIEVE,
+            "203.0.113.7",
+            NOW,
+            DAY,
+            vec![ts(
+                THREATSIEVE,
+                "threatsieve.classification",
+                Value::from("malicious"),
+                NOW,
+            )],
+        );
+        let rows = vec![mine, shared];
+        let inputs = |tenant: &str, opt_in: bool| {
+            let policy = ReadPolicy {
+                now_ms: NOW + 1000,
+                tenant_id: Some(tenant),
+                show_third_party: true,
+                show_restricted_to_requester: opt_in,
+            };
+            noise_inputs(&usable_facts(&rows, policy, &ret), &src)
+        };
+        let shared_only = NoiseFacts {
+            classification: Some("malicious".to_owned()),
+            ..NoiseFacts::default()
+        };
+        // Another tenant never gets t1's restricted answer, whatever the flags.
+        assert_eq!(inputs("t2", true), shared_only);
+        // Without the operator's opt-in, not even t1 does.
+        assert_eq!(inputs("t1", false), shared_only);
+        // Opted in: t1's own restricted answer counts, and says so.
+        assert_eq!(
+            inputs("t1", true),
+            NoiseFacts {
+                scanner: Some(true),
+                benign_service: Some(true),
+                classification: Some("malicious".to_owned()),
+                tags: Vec::new(),
+                restricted: true,
+            }
+        );
+    }
+
+    #[test]
+    fn export_drops_restricted_and_third_party_facts() {
+        let config: crate::enrich_pipeline::EnrichConfig =
+            serde_yaml_ng::from_str(include_str!("../../../configs/enrichment.yaml")).unwrap();
+        let mapped = crate::enrich_pipeline::lookup_outcome(
+            200,
+            None,
+            include_str!("../../../testdata/enrichment/threatsieve/lookup.json"),
+            NOW,
+            &config,
+        )
+        .unwrap();
         let mut facts = Vec::new();
-        facts.extend(parse_greynoise_community(GN_NOISE, &stamp()).unwrap());
-        facts.extend(parse_crowdsec_smoke(CS_SMOKE, &stamp()).unwrap());
-        facts.extend(parse_dshield_ip(DS_IP, &stamp()).unwrap());
+        let mut shareable = Vec::new();
+        for m in &mapped {
+            if m.restricted {
+                assert!(m.facts.iter().all(|f| f.provider == THREATSIEVE_RESTRICTED));
+            } else {
+                shareable.extend(m.facts.iter().cloned());
+            }
+            facts.extend(m.facts.iter().cloned());
+        }
+        // The fixture has both kinds: a GreyNoise-backed scanner answer is
+        // restricted, the CVE and network-only answers are not.
+        assert!(
+            facts
+                .iter()
+                .any(|f| f.provider == THREATSIEVE_RESTRICTED && f.key == "threatsieve.scanner")
+        );
+        assert!(shareable.iter().any(|f| f.key == "cve.kev_listed"));
+        assert!(shareable.iter().all(|f| f.provider == THREATSIEVE));
+
         let asn = AsnTable::from_csv(ASN_CSV).unwrap();
         facts.extend(
             asn.enrich(&Observable::ip("203.0.113.7").unwrap(), NOW)
                 .unwrap(),
         );
-        for p in ["shadowserver", "huntio", "abuseipdb", "AbuseIPDB"] {
+        for p in [
+            "greynoise",
+            "crowdsec",
+            "dshield",
+            "shadowserver",
+            "huntio",
+            "abuseipdb",
+            "AbuseIPDB",
+            "THREATSIEVE_RESTRICTED",
+        ] {
             facts.push(stamp().fact(p, &format!("{}.x", p.to_ascii_lowercase()), Value::Null, 50));
         }
-        // Relabelled third-party data is still caught by its key.
-        facts.push(stamp().fact("foiled", "greynoise.noise", Value::Bool(true), 50));
+        // Relabelled data is still caught by its key namespace.
+        facts.push(stamp().fact(THREATSIEVE, "greynoise.noise", Value::Bool(true), 50));
+        facts.push(stamp().fact(
+            THREATSIEVE,
+            "threatsieve_restricted.scanner",
+            Value::Bool(true),
+            50,
+        ));
         let yara: Fact = serde_json::from_str(FACT_FIXTURES[2]).unwrap();
         facts.push(yara.clone());
+        let fixture: Fact = serde_json::from_str(FACT_FIXTURES[0]).unwrap();
+        facts.push(fixture);
 
         let out = redact_for_export(&facts);
-        assert_eq!(out, vec![yara]);
+        shareable.push(yara);
+        assert_eq!(out, shareable);
         for p in NEVER_REDISTRIBUTE {
             assert!(is_never_redistribute(p));
         }
         assert!(!is_never_redistribute("yara"));
+        assert!(!is_never_redistribute(THREATSIEVE));
     }
 
     // --- provider interface and attachment to an attempt ------------------------
