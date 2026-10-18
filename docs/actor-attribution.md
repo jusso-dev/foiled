@@ -121,7 +121,7 @@ Default weights (`configs/confidence.yaml`):
 - **No shared indicator:** capped below `medium` (39) without `actor_indicator_overlap` evidence. Technique, targeting, ASN and attacker-chosen overlap alone is a lead, not an association.
 - **No analyst:** capped below `high` (69), never `publishable` and never `auto_state_promote`.
 
-An analyst `true_positive` sets 100, `high`, "confirmed association" and `publishable`. A link is a review queue candidate (`review_queue`) when it is pending and at or above `radar_queue_min` (40).
+An analyst `true_positive` sets 100, `high`, "confirmed association" and `publishable`. A link is a review queue candidate (`review_queue`) when it needs analyst attention, whatever its status: pending and at or above `radar_queue_min`, or confirmed with attempts the confirmation does not cover (`new_since_confirmation`, which includes every attempt of a confirmation recorded before covered attempts were stored). `radar_queue_min` is 40.
 
 ## False flags
 
@@ -130,7 +130,19 @@ Everything an attacker sends to a decoy is under their control. A false flag cop
 - **Observed infrastructure** is the address an attack came from, or an address or domain the decoy contacted (DNS lookups, egress) that the attacker did not name. Only it counts as a shared indicator.
 - **Attacker-chosen values** count on the weak `actor_payload_overlap` source, are marked `observed: false`, and add a `not_counted` note about false flags. They are request content, URLs in requests, payload and file hashes, and callbacks the attacker directed: a DNS lookup or connection to a host named anywhere in the attempt's application, network or hook data (a JNDI lookup string, an SSRF target, a download command), and the address the decoy reached for such a host. Techniques and targeting are attacker-chosen too.
 
-Callbacks are not proof of anything on their own. An attacker can make a decoy contact any host it names (JNDI and SSRF payloads exist for exactly this), so a callback to a host the report lists, named in the request, is a false flag as easily as it is a lead. The name check is a plain string match, so an obfuscated name (for example a JNDI lookup split with `${lower:...}`) can still slip through and count as observed. A source address can be spoofed only for traffic that never completes a handshake, but it can be a compromised or rented host, and observed infrastructure in general can be borrowed or shared. That is why no link reaches `high` without an analyst.
+Callbacks are not proof of anything on their own. An attacker can make a decoy contact any host it names (JNDI and SSRF payloads exist for exactly this), so a callback to a host the report lists, named in the request, is a false flag as easily as it is a lead.
+
+How the check works: for each attempt, every string in the `data` and `hook` of its application, network and hook events is normalised (percent-encoding undone twice, literal `\uXXXX` escapes decoded, fullwidth ASCII and ideographic full stops folded to ASCII, lowercased) and split into host-like tokens. A callback host is attacker-named when it equals a token or sits under a named domain (a lookup of `<data>.evil.example` after naming `evil.example`); addresses match whole tokens only, so `1.2.3.4` never matches inside `11.2.3.45`. It is decided per attempt: one attempt naming a shared host (a CDN, say) does not make it sent for another attempt that reached it unprompted. In a campaign, an indicator any member observed unprompted counts as observed.
+
+Known ways a named host can still look observed:
+
+- **Unicode tricks beyond the folds above:** other compatibility characters (full NFKC is not applied), confusables, and internationalised names written in Unicode in the request but looked up as punycode (`xn--...`), since IDNA is not applied.
+- **Other encodings:** base64, hex, HTML entities, JSON escapes other than `\uXXXX`, string concatenation, and lookup obfuscation such as `${lower:...}` or `${::-e}` in JNDI strings.
+- **Redirects:** the attacker names a host it controls, which redirects (HTTP 3xx, a CNAME or a referral) to the reported host. The second hop was never named.
+- **Names hidden in dropped files:** a payload or downloaded script that carries the reported host inside a file, not in the request, so it never reaches the hook or application data.
+- **Unrecorded request parts:** anything the capture did not store (bodies when payload storage is off, #16), which cannot be searched.
+
+Whatever slips through is bounded: it can lift a link to `medium` at most, it is never publishable, and it never reaches `high` or an export without an analyst confirming it. A source address can be spoofed only for traffic that never completes a handshake, but it can be a compromised or rented host, and observed infrastructure in general can be borrowed or shared.
 
 A perfect copy of a report's techniques, URLs and hashes, with every callback named in the request, stays `low` (unit and golden tests build both, including a JNDI-style lookup: [`testdata/actors/jndi-callback.input.json`](../testdata/actors/jndi-callback.input.json)). Analysts should treat a match that rests on request content or directed callbacks as a lead, and look for infrastructure the attacker did not choose in front of the decoy, such as where the attack came from or a second hop the implant reached by itself.
 
@@ -170,7 +182,7 @@ Links are matched on request over the same bounded window as campaigns (default 
 
 The catalogue is loaded through `actor::CatalogueSource`. The API's source is the bundled ATT&CK groups sidecar plus `catalogue/actors/`; another source (for example a threat intel platform holding actor, intrusion-set and report catalogues) can implement the same trait and goes through the same checks.
 
-The review queue (#35) lists pending links with `GET /v0/actor-links?status=pending&review_queue=true`. Inside the API it can call `routes::actors::actor_model` and `routes::actors::record_decision`, which apply the same checks, audit and rate limit as the route.
+The review queue (#35) lists every link that needs analyst attention with `GET /v0/actor-links?review_queue=true`. Do not add `status=pending`: confirmed links whose confirmation does not cover every current attempt need review too. A queue that reads campaigns instead filters `suggested_actor_links` on its own `review_queue` flag (the same rule). Inside the API it can call `routes::actors::actor_model` (filter on `review_queue`) and `routes::actors::record_decision`, which apply the same checks, audit and rate limit as the route.
 
 ## Exports
 
