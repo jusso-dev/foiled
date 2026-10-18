@@ -51,7 +51,9 @@ tags:
   - name: intel
     description: "Campaigns and IOCs (#33, #34)."
   - name: review
-    description: "Analyst review queue (#35)."
+    description: "Analyst review queue, research write-ups and the radar (#35)."
+  - name: public
+    description: "Unauthenticated public pages data: published exploit pages (#35). The radar is trusted-side only."
   - name: sensors
     description: "Edge sensor registry, enrolment, revocation and the sensor agent channel (#31)."
   - name: quarantine
@@ -1668,43 +1670,458 @@ paths:
       tags: [review]
       operationId: listReviewQueue
       summary: Analyst review queue
-      x-foiled-status: planned
-      x-foiled-issue: 35
+      description: |
+        One queue over pending CVE and technique links, pre-disclosure
+        candidates, IOC publication candidates, campaign labels, actor
+        possible-associations and write-ups in review
+        (`docs/review-queue.md`). Items are derived from the attempts in a
+        window (default the last 7 days, at most 31 days and 20,000 events)
+        and merged with the stored analyst state. Highest priority first:
+        kind, confidence, then SLA age, with overdue items ahead. Scoped to
+        the caller's tenant.
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [review:read]
+      parameters:
+        - { name: since, in: query, schema: { type: integer }, description: "Unix ms, inclusive." }
+        - { name: until, in: query, schema: { type: integer }, description: "Unix ms, exclusive." }
+        - { name: kind, in: query, schema: { type: string, enum: [cve_link, predisclosure_candidate, technique_link, ioc_publication, campaign_label, campaign_merge, false_positive_feedback, actor_association, write_up] } }
+        - { name: status, in: query, schema: { type: string, enum: [pending, open, claimed, snoozed, approved, rejected, all], default: pending }, description: "pending is open, claimed and snoozed." }
+        - { name: assignee, in: query, schema: { type: string, maxLength: 128 }, description: "A token id, or me." }
+        - { name: sla_breached, in: query, schema: { type: boolean } }
+        - { $ref: "#/components/parameters/Limit" }
       responses:
-        "200": { description: "Queue items." }
+        "200":
+          description: Queue items.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, truncated, notes]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/review-item.schema.json" }
+                  total: { type: integer, description: "Matching items before limit." }
+                  truncated: { type: boolean }
+                  notes: { type: array, items: { type: string } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /v0/review-queue/{item_id}:
     get:
       tags: [review]
       operationId: getReviewItem
       summary: Get a review queue item
-      x-foiled-status: planned
-      x-foiled-issue: 35
+      description: Pass the same `since` and `until` as the list that found it.
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [review:read]
       parameters:
-        - { name: item_id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/ReviewItemId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
       responses:
-        "200": { description: "The item." }
-    patch:
+        "200":
+          description: The item.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/review-item.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/review-queue/{item_id}/actions:
+    post:
       tags: [review]
       operationId: actOnReviewItem
-      summary: Confirm, reject, snooze or promote (audited)
-      x-foiled-status: planned
-      x-foiled-issue: 35
+      summary: Claim, assign, release, approve, reject, snooze or promote (audited)
+      description: |
+        Audited as `review.<action>`. Decisions are final. Approve and
+        reject also record the decision where it belongs: a link override
+        (`cve_link`, `predisclosure_candidate`, `technique_link`, and
+        `actor_association` on the anchor attempts, and
+        `false_positive_feedback`), campaign `label` and `feedback` actions
+        (`campaign_label`), a campaign `merge` action (`campaign_merge`
+        approve), the write-up transition to
+        `approved` or back to `draft` (`write_up`, needs `checklist` to
+        approve), or the IOC's release clearance (`ioc_publication`).
+        The version is claimed (compare and set) before the effect is
+        applied; if the effect fails the item goes back to its earlier
+        state. `promote` starts a draft write-up and does not decide the item. An
+        item claimed by someone else can only be reassigned. Pass
+        `expected_version` to refuse the action if the item changed. Rate
+        limited per token (240 an hour by default, shared with write-up
+        writes and radar rollups).
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [review:write]
       parameters:
-        - { name: item_id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/ReviewItemId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action]
+              properties:
+                action: { type: string, enum: [claim, assign, release, approve, reject, snooze, promote] }
+                assignee: { type: string, maxLength: 128, description: "assign only. A token id." }
+                until: { type: integer, description: "snooze only. Unix ms, at most 30 days away." }
+                note: { type: string, maxLength: 1000, description: "Required for reject." }
+                expected_version: { type: integer, minimum: 0 }
+                label: { type: string, minLength: 1, maxLength: 120, description: "approve on campaign_label: the campaign title." }
+                checklist:
+                  type: object
+                  description: "approve on write_up: the second reviewer's checklist, every item true."
+                  additionalProperties: false
+                  required: [tenant_data_removed, wording_checked, no_exploit_code, payloads_redacted, sources_linked, delay_rules_checked]
+                  properties:
+                    tenant_data_removed: { type: boolean }
+                    wording_checked: { type: boolean }
+                    no_exploit_code: { type: boolean }
+                    payloads_redacted: { type: boolean }
+                    sources_linked: { type: boolean }
+                    delay_rules_checked: { type: boolean }
       responses:
-        "200": { description: "Updated." }
+        "200":
+          description: The item as it is now.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [item, effect, writeup_id]
+                properties:
+                  item: { $ref: "../schemas/review-item.schema.json" }
+                  effect: { type: [string, "null"], description: "What the decision changed besides the queue." }
+                  writeup_id: { type: [string, "null"], description: "promote: the new draft." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/write-ups:
+    get:
+      tags: [review]
+      operationId: listWriteUps
+      summary: Research write-ups
+      description: Newest change first. Scoped to the caller's tenant (`docs/research-writeups.md`).
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [review:read]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [draft, review, approved, published, withdrawn] } }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Write-ups.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/write-up.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [review]
+      operationId: createWriteUp
+      summary: Start a draft write-up (audited)
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [review:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WriteUpFields" }
+      responses:
+        "200":
+          description: The draft with its lint findings.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/write-up.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/write-ups/{writeup_id}:
+    get:
+      tags: [review]
+      operationId: getWriteUp
+      summary: Get a write-up with its lint findings
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [review:read]
+      parameters:
+        - { $ref: "#/components/parameters/WriteUpId" }
+      responses:
+        "200":
+          description: The write-up.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/write-up.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [review]
+      operationId: editWriteUp
+      summary: Edit a draft (audited, versioned)
+      description: Drafts only. `expected_version` is required; a mismatch is 409. `redacted_payload` is redacted again on save.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [review:write]
+      parameters:
+        - { $ref: "#/components/parameters/WriteUpId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WriteUpFields" }
+      responses:
+        "200":
+          description: The new version with its lint findings.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/write-up.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/write-ups/{writeup_id}/transitions:
+    post:
+      tags: [review]
+      operationId: transitionWriteUp
+      summary: Submit, send back, approve, reopen, publish or withdraw (audited)
+      description: |
+        Allowed moves: draft to review, review to draft (needs a note),
+        review to approved, approved to draft, approved to published,
+        published to withdrawn. Submit, approve and publish need a clean
+        lint (`lint_failed`). Approve needs a reviewer who is not the author
+        and did not create, edit or submit it since it was last approved
+        (`second_reviewer`) and every checklist item (`checklist_incomplete`).
+        Publish and withdraw need `review:publish` and a publisher tenant
+        (`PUBLISHER_TENANTS`); publish needs TLP:CLEAR (`tlp`), a slug no
+        other published write-up holds (409), and a snapshot free of tenant
+        data (`tenant_data`). The version check comes before the public page
+        is written, so a request that loses a race changes nothing; pages
+        are stored by version and purged from caches on publish and
+        withdrawal. The public page is visible from the later of publish and
+        `embargo_until`. Audited as `writeup.<status>`.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [review:write, review:publish]
+      parameters:
+        - { $ref: "#/components/parameters/WriteUpId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [to]
+              properties:
+                to: { type: string, enum: [draft, review, approved, published, withdrawn] }
+                expected_version: { type: integer, minimum: 1 }
+                note: { type: string, maxLength: 1000 }
+                checklist:
+                  type: object
+                  additionalProperties: false
+                  required: [tenant_data_removed, wording_checked, no_exploit_code, payloads_redacted, sources_linked, delay_rules_checked]
+                  properties:
+                    tenant_data_removed: { type: boolean }
+                    wording_checked: { type: boolean }
+                    no_exploit_code: { type: boolean }
+                    payloads_redacted: { type: boolean }
+                    sources_linked: { type: boolean }
+                    delay_rules_checked: { type: boolean }
+      responses:
+        "200":
+          description: The write-up after the move.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/write-up.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/write-ups/{writeup_id}/versions:
+    get:
+      tags: [review]
+      operationId: listWriteUpVersions
+      summary: Every version of a write-up, oldest first
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [review:read]
+      parameters:
+        - { $ref: "#/components/parameters/WriteUpId" }
+      responses:
+        "200":
+          description: Versions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [writeup_id, items]
+                properties:
+                  writeup_id: { type: string }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [writeup, action, actor_id, at]
+                      properties:
+                        writeup: { $ref: "../schemas/write-up.schema.json" }
+                        action: { type: string, description: "create, edit or transition.<status>." }
+                        actor_id: { type: string }
+                        at: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/radar:
+    get:
+      tags: [review]
+      operationId: getRadar
+      summary: Radar counts and trends for operators
+      description: |
+        Aggregated from daily rollups (`docs/radar.md`). `audience=tenant`
+        (default) is the caller's own data; `audience=fleet` is every
+        tenant's data from opted-in sensors, behind the share policy's
+        minimum distinct sources, sensors and edge tenants per bucket,
+        checked again on any `product` slice and on the publishable split so
+        counts cannot be differenced, and never names a tenant. Trusted side
+        only: there is no public radar. Links below the policy's minimum band never
+        count; headline cards use publishable counts only. Closed days only.
+        Window default 30 days, at most 92.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [review:read]
+      parameters:
+        - { name: audience, in: query, schema: { type: string, enum: [tenant, fleet], default: tenant } }
+        - { $ref: "#/components/parameters/RadarDimension" }
+        - { name: key, in: query, schema: { type: string, maxLength: 200 }, description: "CVE id, technique id, campaign id or vendor/product." }
+        - { name: product, in: query, schema: { type: string, maxLength: 200 }, description: "vendor/product." }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 }, description: "Series per dimension." }
+      responses:
+        "200":
+          description: The feed.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/radar-feed.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v0/radar/rollups:
+    post:
+      tags: [review]
+      operationId: rollUpRadarDay
+      summary: Roll up one closed day for the caller's tenant (audited)
+      description: |
+        Builds the day's attempts, links (with analyst overrides) and
+        campaigns, replaces the tenant-day rollup in Postgres and writes the
+        rows from sensors that may feed the radar (opted in) to the `RADAR`
+        Analytics Engine dataset, without tenant, sensor or source. Idempotent. The day must have closed and be within the
+        last 31 days. Audited as `radar.rollup`.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [review:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [day]
+              properties:
+                day: { type: integer, description: "Any Unix ms on the UTC day." }
+      responses:
+        "200":
+          description: Rolled up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [day, points, analytics_failed, truncated]
+                properties:
+                  day: { type: integer }
+                  points: { type: integer }
+                  analytics_failed: { type: boolean }
+                  truncated: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/public/exploited:
+    get:
+      tags: [public]
+      operationId: listPublicExploitPages
+      summary: Published exploit pages
+      description: Visible pages only (published and past any embargo), newest first, at most 100. No credentials. Rate limited per client (120 a minute).
+      security: []
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      responses:
+        "200":
+          description: Pages.
+          headers:
+            Cache-Control: { $ref: "#/components/headers/PublicCache" }
+          content:
+            application/json:
+              schema: { $ref: "../schemas/public-exploit-list.schema.json" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v0/public/exploited/{slug}:
+    get:
+      tags: [public]
+      operationId: getPublicExploitPage
+      summary: One public exploit page
+      description: |
+        The allow-listed snapshot stored at publish time. 404 for anything
+        not published, withdrawn or still under embargo. IOCs appear only
+        after their release time. No credentials. Rate limited per client
+        (120 a minute).
+      security: []
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string, pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 80 } }
+      responses:
+        "200":
+          description: The page.
+          headers:
+            Cache-Control: { $ref: "#/components/headers/PublicCache" }
+          content:
+            application/json:
+              schema: { $ref: "../schemas/public-exploit-page.schema.json" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
 
   /v0/quarantine:
     get:
@@ -2282,6 +2699,7 @@ components:
         attempts:read, audit:read and events:read (#24). Scopes: catalogue:read, decoys:read,
         decoys:write, decoys:elevate, attempts:read, attempts:write,
         campaigns:read, campaigns:write, iocs:read, review:read, review:write,
+        review:publish,
         sensors:read, sensors:write, hosts:read, hosts:write, quarantine:read,
         quarantine:download, exports:read, alerts:read, alerts:write,
         audit:read, events:read, admin (implies every operator scope).
@@ -2296,6 +2714,9 @@ components:
         tenant in D1. Certificates are issued through `POST /v0/enrol` (#31).
 
   headers:
+    PublicCache:
+      description: "public, max-age=60, s-maxage=60 on success; public, max-age=60 on 404; no-store otherwise. Pages are also purged from Cloudflare's cache on publish and withdrawal."
+      schema: { type: string }
     EnrichmentUnavailable:
       description: "`unavailable` when the enrichment cache (#11) could not be read. The response is complete otherwise; enrichment context is just missing. Absent when the cache was read."
       schema: { type: string, enum: [unavailable] }
@@ -2330,6 +2751,20 @@ components:
       in: path
       required: true
       schema: { type: string }
+    ReviewItemId:
+      name: item_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^rq_[a-f0-9]{24}$" }
+    WriteUpId:
+      name: writeup_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^wu_[a-f0-9]{24}$" }
+    RadarDimension:
+      name: dimension
+      in: query
+      schema: { type: string, enum: [cve, technique, campaign, product] }
     AttemptId:
       name: attempt_id
       in: path
@@ -2554,6 +2989,25 @@ components:
         attack_version: { type: string }
         example: { type: boolean }
         notes: { type: string }
+    WriteUpFields:
+      type: object
+      additionalProperties: false
+      description: Draft fields. Absent fields are left unchanged on edit; null clears the nullable ones.
+      properties:
+        slug: { type: string, pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 80, description: "Required on create." }
+        title: { type: string, maxLength: 160 }
+        summary: { type: string, maxLength: 400 }
+        body_md: { type: string, maxLength: 65536 }
+        tlp: { type: string, enum: [clear, green, amber, amber+strict, red] }
+        embargo_until: { type: [integer, "null"] }
+        cve_ids: { type: array, maxItems: 50, items: { type: string } }
+        technique_ids: { type: array, maxItems: 50, items: { type: string } }
+        campaign_ids: { type: array, maxItems: 50, items: { type: string } }
+        ioc_ids: { type: array, maxItems: 50, items: { type: string } }
+        attempt_ids: { type: array, maxItems: 50, items: { type: string } }
+        first_seen: { type: [integer, "null"] }
+        redacted_payload: { type: [string, "null"], maxLength: 2000 }
+        expected_version: { type: integer, minimum: 1, description: "Required on edit." }
     JsonRpcRequest:
       type: object
       required: [jsonrpc, method]

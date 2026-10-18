@@ -54,3 +54,16 @@ export function confidenceFromLink(link: ApiLink): Confidence {
     link.wording === "confirmed" ? "confirmed" : link.band === "high" ? "probable" : "assessed";
   return { level, score: clampScore(link.score) };
 }
+
+/**
+ * Full sentence for a public link (#35), which has wording but no score.
+ * `what` completes "as ...", for example "an attempt against CVE-2099-0001".
+ * Anything but the exact API value "confirmed" reads as "we assess as", so a
+ * bad value never claims more.
+ */
+export function publicWordingSentence(wording: unknown, what?: string): string {
+  if (wording === "confirmed") {
+    return what ? `Confirmed by an analyst as ${what}.` : "Confirmed by an analyst.";
+  }
+  return `We assess as ${what ?? "linked"}. Not confirmed by an analyst.`;
+}

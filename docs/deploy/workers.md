@@ -6,7 +6,7 @@ The central backend is the trusted side of Foiled. It runs entirely on Cloudflar
 
 - `foiled-api`: the Axum API Worker in `crates/api` (Rust, workers-rs). It serves the control-plane API, the ingest endpoints for sandbox hosts and edge sensors, and the Queue consumer.
 - `foiled-web`: the operator console Worker in `web/` (React Router on Workers with static assets). It calls `foiled-api` over a Service Binding.
-- `foiled-site`: the public exploit pages Worker in `site/` (Astro), planned in #35.
+- `foiled-public`: the public exploit pages (#35). The radar is trusted-side only. The same `web/` build deployed with `FOILED_SURFACE=public` (`wrangler deploy --env public` after `CLOUDFLARE_ENV=public pnpm build`), no Cloudflare Access, and a surface guard that serves only the public paths ([ADR 0011](../adr/0011-public-pages-on-the-web-worker.md), [research-writeups.md](../research-writeups.md#public-site)). It calls only the unauthenticated `/v0/public/*` API routes, and limits each client with a Workers Rate Limiting binding (`PUBLIC_RATE_LIMIT`).
 
 Decoys never run here. They run on sandbox hosts ([vps.md](vps.md)), driven by the host agent (#41).
 
@@ -41,7 +41,7 @@ Every binding the Workers use, with the issue that owns the code that reads or w
 | `foiled-api` | `AI` | Workers AI, called through AI Gateway (`AI_GATEWAY_ID` var) | gateway created in the dashboard | #28 | LLM correlation, with the logging policy from #16 and #28. |
 | `foiled-api` | `RADAR` | Analytics Engine dataset | `foiled_radar` | #35 | High-volume radar counters (3 months retention). |
 | `foiled-web` | `API` | Service Binding to `foiled-api` | `foiled-api` | #14 (decision in #40) | Every console call to the API. No public API call from the browser is needed. |
-| `foiled-site` | none yet | | | #35 | Reads published, confidence-gated data only. If it later gets a binding, it must reach a read-only published-data route and nothing else. |
+| `foiled-public` | `API` | Service Binding to `foiled-api` | `foiled-api` | #35 | Reads published, confidence-gated data only: the loaders refuse any API path outside `/v0/public/`, and those routes take no credentials ([research-writeups.md](../research-writeups.md#what-the-public-routes-can-read)). |
 
 Vars (not secrets, still kept out of the tree where they identify the account):
 
@@ -49,6 +49,10 @@ Vars (not secrets, still kept out of the tree where they identify the account):
 | --- | --- | --- | --- |
 | `foiled-api` | `AI_GATEWAY_ID` | #28 | Placeholder in the committed config. |
 | `foiled-api` | `CF_ZONE_ID` | #31 | The ingest zone, for client certificate issue and revocation ([edge-sensor.md](edge-sensor.md)). |
+| `foiled-api` | `PUBLISHER_TENANTS` | #35 | Comma separated tenant ids whose operators may publish public exploit pages. Unset means nobody can publish. |
+| `foiled-api` | `RESEARCH_TENANTS` | #35 | Comma separated tenant ids the operator runs as research. Only their decoys count as research sensors on the radar and for public IOCs; every other tenant's decoys need an opt-in ([radar.md](../radar.md#research-and-edge)). |
+| `foiled-api` | `PUBLIC_SITE_ORIGIN`, `PUBLIC_ZONE_ID` | #35 | The public site origin (`https://...`) and its zone, for purging page URLs on publish and withdrawal. |
+| `foiled-web`, `foiled-public` | `FOILED_SURFACE` | #35 | `console` or `public`. Anything other than `console` serves only the public paths ([ADR 0011](../adr/0011-public-pages-on-the-web-worker.md)). |
 
 ## Secrets
 
@@ -72,6 +76,7 @@ Proposed names. The owning issue finalises each one.
 | `foiled-api` | `LLM_PROVIDER_API_KEY` (if an external model is used) | #28 | Key for an external model behind AI Gateway. |
 | `foiled-api` | `SHODAN_API_KEY` (optional) | #18 | Operator-supplied Shodan key for the Honeyscore self-check. Only set it if you enable the check ([fingerprint-resistance.md](../fingerprint-resistance.md)). |
 | `foiled-web` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #14 | Same Access check in the console Worker. |
+| `foiled-api` | `CF_CACHE_PURGE_API_TOKEN` (optional) | #35 | Cloudflare API token with only *Zone, Cache Purge* on the public site zone. Purges withdrawn pages; without it they leave caches within 60 seconds ([research-writeups.md](../research-writeups.md#caching-and-withdrawal)). |
 
 Postgres credentials are not a Worker secret: they live in the Hyperdrive configuration, set when you create it.
 

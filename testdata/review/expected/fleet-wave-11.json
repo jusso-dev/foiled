@@ -1,0 +1,26 @@
+{
+  "age_ms": 18000000,
+  "assignee": null,
+  "band": "high",
+  "claimed_at": null,
+  "created_at": 1792288923000,
+  "decided_at": null,
+  "decided_by": null,
+  "item_id": "rq_a77f8a7d5a7ae55ab212ab02",
+  "kind": "ioc_publication",
+  "note": "",
+  "priority": 308,
+  "score": 98,
+  "sla_breached": false,
+  "sla_due_at": 1792461723000,
+  "sla_hours": 48,
+  "snoozed_until": null,
+  "status": "open",
+  "subject": {
+    "ioc_id": "ioc_f7144edc5031b35621ecb0a3"
+  },
+  "tenant_id": "t1",
+  "title": "Release ip indicator 192[.]0[.]2[.]10 after the public delay",
+  "version": 0,
+  "wording": "we assess as"
+}

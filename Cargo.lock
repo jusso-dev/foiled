@@ -728,6 +728,7 @@ name = "foiled-pg"
 version = "0.1.0"
 dependencies = [
  "foiled-core",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-postgres",

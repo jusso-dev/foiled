@@ -1,0 +1,27 @@
+{
+  "age_ms": 16200000,
+  "assignee": null,
+  "band": "high",
+  "claimed_at": null,
+  "created_at": 1792290723000,
+  "decided_at": null,
+  "decided_by": null,
+  "item_id": "rq_aeb157f3fab815583711b002",
+  "kind": "cve_link",
+  "note": "",
+  "priority": 416,
+  "score": 98,
+  "sla_breached": false,
+  "sla_due_at": 1792377123000,
+  "sla_hours": 24,
+  "snoozed_until": null,
+  "status": "open",
+  "subject": {
+    "attempt_id": "att_6b578aee5d058370fb9c6e44",
+    "target": "FOILED-DEMO-0001"
+  },
+  "tenant_id": "t1",
+  "title": "We assess as an attempt against FOILED-DEMO-0001 on foiled/demo-app/1.0.0 from 192.0.2.11",
+  "version": 0,
+  "wording": "we assess as"
+}

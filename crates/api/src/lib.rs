@@ -26,6 +26,7 @@ pub mod links;
 pub mod mcp;
 pub mod memory;
 pub mod routes;
+pub mod sinks;
 pub mod store;
 #[cfg(target_arch = "wasm32")]
 mod worker_glue;
@@ -70,6 +71,9 @@ pub struct Limits {
     pub enrichment_lookup_statements: usize,
     /// Actor link decisions per principal per hour (#29).
     pub actor_decisions_per_hour: u32,
+    /// Review queue actions, write-up writes and radar rollups per
+    /// principal per hour (#35).
+    pub review_actions_per_hour: u32,
 }
 
 impl Default for Limits {
@@ -91,6 +95,7 @@ impl Default for Limits {
             max_window_events: routes::attempts::MAX_WINDOW_EVENTS,
             enrichment_lookup_statements: 20,
             actor_decisions_per_hour: 60,
+            review_actions_per_hour: 240,
         }
     }
 }
@@ -117,6 +122,20 @@ pub struct AppState {
     pub cert_issuer: Option<Arc<dyn issuer::CertIssuer>>,
     /// The actor reference catalogue (#29).
     pub actors: Arc<foiled_core::actor::ActorCatalogue>,
+    /// Contribute-back policy (`configs/contribute-back.yaml`, #37): opt-in
+    /// defaults, the public IOC delay and the radar thresholds (#35).
+    pub share: Arc<foiled_core::share::SharePolicy>,
+    /// Analytics Engine writes for radar rollups (#35).
+    pub radar_sink: Arc<dyn sinks::RadarSink>,
+    /// Tenants whose operators may publish public pages (#35). Empty
+    /// means nobody can publish.
+    pub publisher_tenants: Arc<Vec<String>>,
+    /// Tenants the operator runs as research (#35, #37). Only their sandbox
+    /// decoys count as research sensors; every other tenant's decoys are
+    /// treated like edge sensors (opt-in and every radar threshold).
+    pub research_tenants: Arc<Vec<String>>,
+    /// Purges public page URLs from caches on publish and withdraw (#35).
+    pub cache_purger: Arc<dyn sinks::CachePurger>,
 }
 
 impl AppState {
@@ -132,6 +151,11 @@ impl AppState {
             mcp: Arc::new(mcp::bundled_config()),
             cert_issuer: None,
             actors: links::bundled_actor_catalogue(),
+            share: Arc::new(foiled_core::share::SharePolicy::default()),
+            radar_sink: Arc::new(sinks::NoRadarSink),
+            publisher_tenants: Arc::new(Vec::new()),
+            research_tenants: Arc::new(Vec::new()),
+            cache_purger: Arc::new(sinks::NoCachePurger),
         }
     }
 }
@@ -170,6 +194,10 @@ fn rest_routes() -> Router<AppState> {
         .merge(routes::iocs::router())
         .merge(routes::campaigns::router())
         .merge(routes::actors::router())
+        .merge(routes::radar::router())
+        .merge(routes::review::router())
+        .merge(routes::writeups::router())
+        .merge(routes::public::router())
 }
 
 /// The REST API alone. MCP tool calls are replayed against this router, so

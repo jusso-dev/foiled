@@ -1,0 +1,26 @@
+{
+  "age_ms": 18000000,
+  "assignee": null,
+  "band": "high",
+  "claimed_at": null,
+  "created_at": 1792288923000,
+  "decided_at": null,
+  "decided_by": null,
+  "item_id": "rq_b49be273b7865d7b7ed24e26",
+  "kind": "ioc_publication",
+  "note": "",
+  "priority": 310,
+  "score": 100,
+  "sla_breached": false,
+  "sla_due_at": 1792461723000,
+  "sla_hours": 48,
+  "snoozed_until": null,
+  "status": "open",
+  "subject": {
+    "ioc_id": "ioc_41bb54274bbc8b45b9484528"
+  },
+  "tenant_id": "t1",
+  "title": "Release behaviour_fingerprint indicator bf2:c9c122c2aacfcce3cb84e34b54a301f1 after the public delay",
+  "version": 0,
+  "wording": "we assess as"
+}

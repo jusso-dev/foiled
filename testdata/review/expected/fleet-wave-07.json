@@ -1,0 +1,26 @@
+{
+  "age_ms": 17999991,
+  "assignee": null,
+  "band": "high",
+  "claimed_at": null,
+  "created_at": 1792288923009,
+  "decided_at": null,
+  "decided_by": null,
+  "item_id": "rq_760403bfcf4b222b70bdf06c",
+  "kind": "ioc_publication",
+  "note": "",
+  "priority": 310,
+  "score": 100,
+  "sla_breached": false,
+  "sla_due_at": 1792461723009,
+  "sla_hours": 48,
+  "snoozed_until": null,
+  "status": "open",
+  "subject": {
+    "ioc_id": "ioc_daf259e5ed85436b18bb7a11"
+  },
+  "tenant_id": "t1",
+  "title": "Release domain indicator stage2[.]example[.]invalid after the public delay",
+  "version": 0,
+  "wording": "we assess as"
+}

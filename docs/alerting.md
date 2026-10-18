@@ -2,7 +2,7 @@
 
 Status: event types, payload, config, dedupe, rate limits, routing decisions and webhook signing are in place as pure logic in `foiled_core::alerting` ([crates/core/src/alerting.rs](../crates/core/src/alerting.rs)). The delivery worker described below lands with the control plane integration (#21). Owner: #15.
 
-Related: rotation alert events and reason codes ([rotation.md](rotation.md#alert-events), #8), Honeyscore ([fingerprint-resistance.md](fingerprint-resistance.md#alert-types-for-15), #18), capture disk caps ([ADR 0005](adr/0005-capture-layer.md), #9), hooks ([instrumentation.md](instrumentation.md), #32), attempts (#25), canaries (#17, `docs/canaries.md`, planned), review queue (#35, `docs/radar.md`, planned), edge sensors (#31), host agent ([agent/protocol.md](agent/protocol.md), #41), retention ([privacy-and-retention.md](privacy-and-retention.md), #16), console (#14).
+Related: rotation alert events and reason codes ([rotation.md](rotation.md#alert-events), #8), Honeyscore ([fingerprint-resistance.md](fingerprint-resistance.md#alert-types-for-15), #18), capture disk caps ([ADR 0005](adr/0005-capture-layer.md), #9), hooks ([instrumentation.md](instrumentation.md), #32), attempts (#25), canaries (#17, `docs/canaries.md`, planned), review queue (#35, [review-queue.md](review-queue.md)), edge sensors (#31), host agent ([agent/protocol.md](agent/protocol.md), #41), retention ([privacy-and-retention.md](privacy-and-retention.md), #16), console (#14).
 
 Files:
 

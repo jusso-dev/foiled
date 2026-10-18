@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "canonical_path": "/exploited/demo-app-upload-traversal",
+      "cves": [
+        {
+          "advisory_published_at": 1792022400000,
+          "confirmed_at": null,
+          "id": "FOILED-DEMO-0001",
+          "wording": "we assess as"
+        }
+      ],
+      "slug": "demo-app-upload-traversal",
+      "summary": "We assess as attempts against FOILED-DEMO-0001 from several sources, first seen on Foiled sensors before the advisory.",
+      "title": "Upload path traversal attempts against Demo App",
+      "visible_from": 1792200000000
+    }
+  ]
+}

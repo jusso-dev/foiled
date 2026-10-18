@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/radar-point.schema.json",
+  "title": "Foiled radar rollup point",
+  "description": "One daily rollup row for the radar (#35): attempts from one hashed source at one sensor for one CVE, technique, campaign or product on one UTC day. Stored per tenant in Postgres and written to Analytics Engine without the source hash. Never returned by any endpoint. Mirrored by foiled_core::radar::RadarPoint. See docs/radar.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["day", "tenant_id", "sensor", "sensor_kind", "shared", "dimension", "key", "product", "source", "attempts", "score", "band", "publishable", "predisclosure"],
+  "properties": {
+    "day": { "description": "UTC midnight, Unix ms.", "type": "integer", "multipleOf": 86400000 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "sensor": { "description": "Edge sensor id, or decoy:<id> for a research decoy.", "type": "string", "minLength": 1 },
+    "sensor_kind": { "enum": ["research", "edge"] },
+    "shared": { "description": "The sensor's opt-in for the radar channel (#37).", "type": "boolean" },
+    "dimension": { "enum": ["cve", "technique", "campaign", "product"] },
+    "key": { "description": "CVE id, technique id, campaign id or vendor/product.", "type": "string", "minLength": 1, "maxLength": 200 },
+    "product": { "description": "The attempt's vendor/product.", "type": "string", "minLength": 1 },
+    "source": { "description": "Truncated SHA-256 of the source address. Never output.", "type": "string", "pattern": "^[a-f0-9]{16}$" },
+    "attempts": { "type": "integer", "minimum": 1 },
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "band": { "enum": ["low", "medium", "high"] },
+    "publishable": { "description": "The link passed the #27 publish gate.", "type": "boolean" },
+    "predisclosure": { "description": "Pre-disclosure back-match evidence (#12) was part of the link.", "type": "boolean" }
+  }
+}

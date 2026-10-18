@@ -13,7 +13,8 @@ This is a design the project follows, not legal advice. Data terms change; opera
 | DShield | SSH and Telnet login attempts from Cowrie decoys, in DShield's log format | Cowrie module decoy, through the logging egress proxy | On by default | Off until the sensor owner opts in | `channels.dshield` |
 | CrowdSec | Signals from unmodified Hub scenarios | CrowdSec Security Engine on the sensor host | On by default | Off until the sensor owner opts in | `channels.crowdsec` |
 | SentryPeer | SIP bad actor data through SentryPeer's peer-to-peer sharing | SentryPeer module decoy (#30) | Off; needs a network rule first | Not offered | `channels.sentrypeer` |
-| Public IOCs | Delayed, analyst-confirmed, high-confidence IOCs | API Worker (scheduled), published through #35 | On by default | Not published, even with an opt-in, unless an operator adds `edge` | `public_iocs` |
+| Public IOCs | Delayed, analyst-confirmed, high-confidence IOCs | API Worker, released on #35 public exploit pages ([research-writeups.md](research-writeups.md#iocs-on-a-page)) | On by default | Not published, even with an opt-in, unless an operator adds `edge` | `public_iocs` |
+| Radar | Aggregated counts per CVE, technique, campaign and product, behind minimum counts, on the trusted-side fleet radar only | API Worker ([radar.md](radar.md)) | On for operator-designated research tenants | Off until the owner opts in (a tenant's own decoys included); counts only when enough tenants share the bucket | `radar` |
 
 Policy file: [configs/contribute-back.yaml](../configs/contribute-back.yaml). Code: [crates/core/src/share.rs](../crates/core/src/share.rs) (`SharePolicy`, `may_share`, `public_ioc_release`, `strip_non_shareable`). `foiled-lint` checks that the shipped file parses into `SharePolicy` and passes its rules.
 

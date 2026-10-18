@@ -64,3 +64,25 @@ public_iocs:
   #   green: the account-gated community dataset only, not public pages.
   #   amber, amber+strict, red: nothing is released.
   tlp: clear
+
+# Radar counts (#35): the fleet radar operators see. Trusted side only.
+# Aggregated per key and UTC day; raw sources, tenants and sensors never
+# leave. See docs/radar.md.
+radar:
+  enabled: true
+  # Kinds that may feed the fleet radar. Each sensor must also be opted in
+  # (edge sensors default to off above). Only sensors the operator designates
+  # as research (RESEARCH_TENANTS) are research; a tenant's own decoys count
+  # as edge.
+  sensor_kinds: [research, edge]
+  # A bucket (one CVE, technique, campaign or product on one day) is shown
+  # only with at least this many distinct sources. At least 2.
+  min_sources: 3
+  # And at least this many distinct sensors.
+  min_sensors: 1
+  # Edge sensor data counts in a bucket only when at least this many tenants
+  # contribute edge data to it. At least 2.
+  min_edge_tenants: 3
+  # Lowest confidence band counted. Links must also be publishable (#27), so
+  # LLM-only and pre-disclosure-only links never count.
+  min_confidence: medium

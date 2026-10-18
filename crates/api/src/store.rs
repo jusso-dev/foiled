@@ -145,6 +145,20 @@ pub struct IpIocRow {
     pub hook_cves: Vec<String>,
 }
 
+/// One stored version of a write-up (#35): the whole record after a
+/// change, what changed it and who. Versions are never edited.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteUpVersion {
+    pub writeup: foiled_core::writeup::WriteUp,
+    /// `create`, `edit` or `transition.<status>`.
+    pub action: String,
+    pub actor_id: String,
+    pub at: i64,
+}
+
+/// Most radar rollup rows one read returns.
+pub const MAX_RADAR_POINTS: usize = 200_000;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DecoyQuery {
     pub state: Option<DecoyState>,
@@ -457,6 +471,107 @@ pub trait Store: Send + Sync {
     /// set, and failure rows that no longer affect any backoff. Each
     /// statement deletes at most `plan.batch` rows.
     fn purge_enrichment(&self, plan: EnrichPurgePlan) -> StoreFuture<'_, EnrichPurgeCounts>;
+    // Review queue, write-ups, public pages and radar rollups (#35).
+
+    /// Stored analyst state for these review items.
+    fn review_states(
+        &self,
+        tenant_id: &str,
+        item_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<foiled_core::review::ReviewState>>;
+
+    /// Write an item's state if the stored version is `expected` (0 when
+    /// there is no row yet). False, writing nothing, when it is not.
+    fn put_review_state(
+        &self,
+        tenant_id: &str,
+        state: foiled_core::review::ReviewState,
+        expected: u32,
+    ) -> StoreFuture<'_, bool>;
+
+    /// Insert a new write-up and its first version row.
+    fn insert_writeup(
+        &self,
+        writeup: foiled_core::writeup::WriteUp,
+        actor_id: &str,
+    ) -> StoreFuture<'_, ()>;
+
+    fn get_writeup(
+        &self,
+        tenant_id: &str,
+        writeup_id: &str,
+    ) -> StoreFuture<'_, Option<foiled_core::writeup::WriteUp>>;
+
+    /// Newest change first, optionally one status only.
+    fn list_writeups(
+        &self,
+        tenant_id: &str,
+        status: Option<foiled_core::writeup::WriteUpStatus>,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<foiled_core::writeup::WriteUp>>;
+
+    /// Replace a write-up if its stored version is `expected`, and append
+    /// the new version row, together. False, writing nothing, otherwise.
+    fn update_writeup(
+        &self,
+        writeup: foiled_core::writeup::WriteUp,
+        expected: u32,
+        action: &str,
+        actor_id: &str,
+    ) -> StoreFuture<'_, bool>;
+
+    /// Every version, oldest first.
+    fn writeup_versions(
+        &self,
+        tenant_id: &str,
+        writeup_id: &str,
+    ) -> StoreFuture<'_, Vec<WriteUpVersion>>;
+
+    /// Store the public snapshot of a write-up, replacing an earlier one
+    /// for the same write-up. False when another write-up holds the slug.
+    fn put_public_page(
+        &self,
+        tenant_id: &str,
+        writeup_id: &str,
+        page: foiled_core::writeup::PublicPage,
+    ) -> StoreFuture<'_, bool>;
+
+    fn remove_public_page(&self, tenant_id: &str, writeup_id: &str) -> StoreFuture<'_, ()>;
+
+    /// The page for a slug if it is visible at `now`. Not tenant scoped:
+    /// public pages hold no tenant data, and this is the only read the
+    /// public routes make besides [`Store::public_pages`] and
+    /// [`Store::radar_points`].
+    fn public_page(
+        &self,
+        slug: &str,
+        now: i64,
+    ) -> StoreFuture<'_, Option<foiled_core::writeup::PublicPage>>;
+
+    /// Pages visible at `now`, newest first.
+    fn public_pages(
+        &self,
+        now: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<foiled_core::writeup::PublicPageSummary>>;
+
+    /// Replace one tenant's rollup for one day.
+    fn put_radar_points(
+        &self,
+        tenant_id: &str,
+        day: i64,
+        points: Vec<foiled_core::radar::RadarPoint>,
+    ) -> StoreFuture<'_, ()>;
+
+    /// Rollup rows with `since <= day < until`, for one tenant or (None)
+    /// every tenant, at most `limit`.
+    fn radar_points(
+        &self,
+        tenant_id: Option<&str>,
+        since: i64,
+        until: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<foiled_core::radar::RadarPoint>>;
 
     fn record_heartbeat(
         &self,

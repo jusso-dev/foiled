@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (17 Oct 2026).
+Accepted (17 Oct 2026). The public-site location (option B, Astro in `site/`) is superseded by [ADR 0011](0011-public-pages-on-the-web-worker.md): the public exploit pages are routes in `web/`, deployed as a separate public Worker. The rest of this ADR stands.
 
 Tracking issue: #40. Related: #1, #3, #7, #9, #14, #19, #21, #28, #31, #35, #39, #41.
 

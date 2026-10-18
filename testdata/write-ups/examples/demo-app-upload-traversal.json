@@ -1,0 +1,42 @@
+{
+  "tenant_id": "tenant-example",
+  "status": "approved",
+  "tlp": "clear",
+  "embargo_until": null,
+  "technique_ids": [
+    "T1190"
+  ],
+  "campaign_ids": [],
+  "ioc_ids": [],
+  "attempt_ids": [
+    "att_0123456789abcdef01234567"
+  ],
+  "first_seen": 1791936000000,
+  "source_item_id": null,
+  "author_id": "tok_author",
+  "reviewer_id": "tok_reviewer",
+  "checklist": {
+    "tenant_data_removed": true,
+    "wording_checked": true,
+    "no_exploit_code": true,
+    "payloads_redacted": true,
+    "sources_linked": true,
+    "delay_rules_checked": true
+  },
+  "version": 4,
+  "created_at": 1792000000000,
+  "updated_at": 1792100000000,
+  "submitted_at": 1792050000000,
+  "approved_at": 1792100000000,
+  "published_at": null,
+  "withdrawn_at": null,
+  "writeup_id": "wu_eb9cd6d77525a899d708ad67",
+  "slug": "demo-app-upload-traversal",
+  "title": "Upload path traversal attempts against Demo App",
+  "summary": "We assess as attempts against FOILED-DEMO-0001 from several sources, first seen on Foiled sensors before the advisory.",
+  "body_md": "## What we saw\n\nWe assess as attempts against FOILED-DEMO-0001: uploads that climb out of the upload directory with `../` segments.\n\n## Behaviour\n\n1. A probe of `/api/upload`.\n2. An upload with a traversal path.\n3. A request for the dropped file.\n\nSources included 203.0.113.21 and 198[.]51[.]100[.]40, which are documentation addresses in this example.\n\n## Sources\n\n- [Advisory](https://advisories.example.invalid/FOILED-DEMO-0001)\n- [Exploited list](/exploited)\n",
+  "cve_ids": [
+    "FOILED-DEMO-0001"
+  ],
+  "redacted_payload": "POST /api/upload?path=../../tmp/.w HTTP/1.1\nAuthorization: Bearer REDACTED"
+}

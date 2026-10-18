@@ -1,0 +1,26 @@
+{
+  "age_ms": 18000000,
+  "assignee": null,
+  "band": "high",
+  "claimed_at": null,
+  "created_at": 1792288923000,
+  "decided_at": null,
+  "decided_by": null,
+  "item_id": "rq_34bcf3988f247dc0061e9ba5",
+  "kind": "ioc_publication",
+  "note": "",
+  "priority": 310,
+  "score": 100,
+  "sla_breached": false,
+  "sla_due_at": 1792461723000,
+  "sla_hours": 48,
+  "snoozed_until": null,
+  "status": "open",
+  "subject": {
+    "ioc_id": "ioc_f0b759f39d270c2848199404"
+  },
+  "tenant_id": "t1",
+  "title": "Release http_ua indicator demo-loader/0.2 after the public delay",
+  "version": 0,
+  "wording": "we assess as"
+}
