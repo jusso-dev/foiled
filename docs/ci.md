@@ -9,7 +9,7 @@ CI runs on every pull request and on every push to `main`, using GitHub-hosted r
 | Rust (fmt, clippy, test) | `cargo fmt --check`, `cargo clippy` with warnings as errors, and `cargo test` for the whole workspace on the host target. |
 | Rust (wasm32 Worker build) | `crates/api` passes clippy and builds in release mode for `wasm32-unknown-unknown`. Every crate the API Worker pulls in must build for Workers (ADR 0009, #40). |
 | Front end (lint, typecheck, test, build) | Biome lint and format check, `wrangler types` plus React Router typegen plus `tsc`, Vitest unit tests and a production build of every package in the pnpm workspace. |
-| Docs and schemas | `foiled-lint` checks that every `*.schema.json` is a valid JSON Schema and that catalogue entries and other bound data files validate against their schema. Lychee checks internal Markdown links offline. |
+| Docs and schemas | `foiled-lint` checks that every `*.schema.json` is a valid JSON Schema and that catalogue entries and other bound data files validate against their schema. The OASIS `stix2-validator` (pinned 3.2.0) validates the golden STIX bundles in strict mode (#13). Lychee checks internal Markdown links offline. |
 
 ## Run the same checks locally
 
@@ -34,6 +34,10 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+
+# STIX fixtures (optional locally, needs Python 3)
+python3 -m venv .venv-stix && .venv-stix/bin/pip install stix2-validator==3.2.0
+.venv-stix/bin/stix2_validator --version 2.1 --strict -d 103,245,302,401 testdata/exports/stix/
 
 # Markdown links (optional, needs lychee installed)
 lychee --offline --include-fragments './**/*.md'

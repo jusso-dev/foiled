@@ -1,0 +1,28 @@
+{
+  "attempts": [
+    {
+      "attempt_id": "att_58d10ea05f1470733c2e46a6",
+      "file_ioc_limited": true,
+      "notes": [
+        "Post-exploitation activity was seen but no file was captured, so the implant may be memory-resident. File IOCs are limited and no file hash is reported; use the command line, behaviour fingerprint and network callback indicators instead."
+      ],
+      "state": "post-exploitation"
+    }
+  ],
+  "dropped": {
+    "actor_links": 0,
+    "attempts_empty": 1,
+    "attempts_filtered": 0,
+    "iocs_below_gate": 15,
+    "links_below_gate": 2,
+    "payload_iocs": 0,
+    "suppressed": 0
+  },
+  "format": "foiled-iocs",
+  "items": [],
+  "marking": "TLP:AMBER",
+  "review": "published",
+  "tlp": "amber",
+  "unreviewed": false,
+  "version": 1
+}

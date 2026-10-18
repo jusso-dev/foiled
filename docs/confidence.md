@@ -87,4 +87,4 @@ These are tests (`crates/core/src/confidence.rs` and `crates/lint/tests/confiden
 
 ## Explainability
 
-The console's confidence panel (#14) shows the score, band and wording, then every contribution with its points, every cap that applied, the evidence ledger with links to the events, and the noise band with `decoy_types_touched` when present. STIX exports (#13) carry the score as the relationship's `confidence` and the wording in the description.
+The console's confidence panel (#14) shows the score, band and wording, then every contribution with its points, every cap that applied, the evidence ledger with links to the events, and the noise band with `decoy_types_touched` when present. STIX exports (#13) carry the score as the relationship's `confidence` and the wording in the description, and only publishable links leave unless an analyst asks for more ([intel-outputs.md](intel-outputs.md#the-gate)).

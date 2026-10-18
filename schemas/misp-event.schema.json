@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/misp-event.schema.json",
+  "title": "Foiled MISP event (minimal)",
+  "description": "The MISP event JSON Foiled exports (#13): one unpublished event with attributes, file objects, tags and ATT&CK galaxy tags. A subset of MISP's event format, enough to check what Foiled emits. Category and type pairs are checked by foiled_core::intel::misp::problems against MISP's describeTypes. See docs/intel-outputs.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["Event"],
+  "properties": {
+    "Event": {
+      "type": "object",
+      "required": ["uuid", "info", "date", "timestamp", "published", "distribution", "analysis", "threat_level_id", "Attribute", "Object", "Tag"],
+      "properties": {
+        "uuid": { "$ref": "#/$defs/uuid" },
+        "info": { "type": "string", "minLength": 1 },
+        "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "timestamp": { "type": "string", "pattern": "^[0-9]+$" },
+        "published": { "const": false },
+        "distribution": { "const": "0" },
+        "analysis": { "enum": ["0", "1", "2"] },
+        "threat_level_id": { "enum": ["1", "2", "3", "4"] },
+        "Attribute": { "type": "array", "items": { "$ref": "#/$defs/attribute" } },
+        "Object": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["uuid", "name", "meta-category", "template_uuid", "Attribute"],
+            "properties": {
+              "uuid": { "$ref": "#/$defs/uuid" },
+              "name": { "type": "string" },
+              "meta-category": { "type": "string" },
+              "template_uuid": { "$ref": "#/$defs/uuid" },
+              "template_version": { "type": "string" },
+              "Attribute": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "allOf": [{ "$ref": "#/$defs/attribute" }, { "required": ["object_relation"] }] }
+              }
+            }
+          }
+        },
+        "Tag": { "type": "array", "items": { "$ref": "#/$defs/tag" } }
+      }
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "tag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": { "name": { "type": "string", "minLength": 1 } }
+    },
+    "attribute": {
+      "type": "object",
+      "required": ["uuid", "type", "category", "value", "to_ids"],
+      "properties": {
+        "uuid": { "$ref": "#/$defs/uuid" },
+        "type": {
+          "enum": ["ip-src", "ip-dst", "domain", "url", "uri", "user-agent", "pattern-in-traffic", "text", "sha256", "vulnerability", "threat-actor", "campaign-id", "comment"]
+        },
+        "category": {
+          "enum": ["Network activity", "Payload delivery", "Payload installation", "External analysis", "Attribution", "Other"]
+        },
+        "value": { "type": "string" },
+        "to_ids": { "type": "boolean" },
+        "comment": { "type": "string" },
+        "object_relation": { "type": "string" },
+        "first_seen": { "type": "string" },
+        "last_seen": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "distribution": { "type": "string" },
+        "Tag": { "type": "array", "items": { "$ref": "#/$defs/tag" } }
+      }
+    }
+  }
+}

@@ -2,7 +2,7 @@
 
 Status: extraction, schema, API and golden fixtures in place. Owner: #34.
 
-Related: attempts ([attempts.md](attempts.md), #25), the attempt timeline ([attempt-timeline.md](attempt-timeline.md), #10), confidence ([confidence.md](confidence.md), #27), enrichment ([enrichment.md](enrichment.md), #11), vulnerable-path hooks ([instrumentation.md](instrumentation.md), #32), canaries ([canaries.md](canaries.md), #17), privacy and retention ([privacy-and-retention.md](privacy-and-retention.md), #16), contribute-back ([contribute-back.md](contribute-back.md), #37). Consumers: exports (#13), campaigns (#33) and the radar (#35).
+Related: attempts ([attempts.md](attempts.md), #25), the attempt timeline ([attempt-timeline.md](attempt-timeline.md), #10), confidence ([confidence.md](confidence.md), #27), enrichment ([enrichment.md](enrichment.md), #11), vulnerable-path hooks ([instrumentation.md](instrumentation.md), #32), canaries ([canaries.md](canaries.md), #17), privacy and retention ([privacy-and-retention.md](privacy-and-retention.md), #16), contribute-back ([contribute-back.md](contribute-back.md), #37). Consumers: exports (#13, [intel-outputs.md](intel-outputs.md)), campaigns (#33) and the radar (#35).
 
 An IOC is a value someone else can use to spot the same activity: an address, a name, a URL, an exact request string, a hash, a command line or a behaviour fingerprint. Foiled pulls IOCs out of [attempts](attempts.md) and the capture events they were built from, deduplicates them per value, links each one back to its attempts and campaigns, and scores it with the confidence layer.
 
@@ -227,7 +227,7 @@ File-centric intelligence fails when the attacker stays in memory: a loader pipe
 
 ### Export examples
 
-Exports are #13's to build. These examples fix what they must say for a memory-only attempt; none of them contains a file hash.
+These examples fix what exports say for a memory-only attempt; none of them contains a file hash. #13 built them ([intel-outputs.md](intel-outputs.md)); the golden outputs are under [testdata/exports](../testdata/exports/synthetic.input.json).
 
 JSON, as served by the API and as #13 should pass through (trimmed):
 
@@ -245,7 +245,7 @@ JSON, as served by the API and as #13 should pass through (trimmed):
 }
 ```
 
-CSV, one row per IOC with the limitation spelt out:
+CSV (`/v0/exports/iocs.csv?fields=ioc`), one row per IOC with the limitation spelt out (further columns follow `note`, see [intel-outputs.md](intel-outputs.md#ioc-csv-and-json)):
 
 ```text
 indicator_type,indicator,first_seen,last_seen,file_ioc_limited,note
@@ -254,9 +254,9 @@ behaviour_fingerprint,bf2:07d7fffe3024f68dcedc50ae3405fd39,2026-10-18T01:02:03Z,
 url,hxxp://stage2[.]example[.]invalid/m.sh,2026-10-18T01:02:04Z,2026-10-18T01:02:05Z,true,memory-resident implant: no file hash available
 ```
 
-STIX 2.1 (sketch for #13): network and command-line IOCs become `indicator` objects with patterns (`[url:value = '...']`, `[domain-name:value = '...']`, `[process:command_line = '...']`). The behaviour fingerprint has no STIX observable type, so it becomes an `indicator` with `pattern_type: "foiled-bf"` and the steps in `description`, plus an `x_foiled_file_ioc_limited: true` property. No `file` SCO and no `[file:hashes...]` pattern is emitted. A `note` object on the bundle carries the attempt note above.
+STIX 2.1: network and command-line IOCs become `indicator` objects with patterns (`[url:value = '...']`, `[domain-name:value = '...']`, `[process:command_line = '...']`). The behaviour fingerprint has no STIX observable type, so it becomes an `indicator` with `pattern_type: "foiled-bf"` and the steps in `x_foiled_fingerprint`, plus an `x_foiled_file_ioc_limited: true` property. No `file` observable, no `[file:hashes...]` pattern and no `malware` object is emitted. A `note` on the attempt's `observed-data` carries the attempt note above.
 
-MISP (sketch for #13): attributes `ip-dst`, `domain`, `url`, `user-agent`, `text` (command line, category "Payload installation"), and `text` with comment "foiled behaviour fingerprint" for `bf2:` values. The event gets the tag `foiled:file-ioc-limited` and the attempt note as an event comment. No `sha256` or `filename|sha256` attribute.
+MISP: attributes `ip-src`, `ip-dst`, `domain`, `url`, `uri`, `user-agent`, `text` (command line, category "Payload installation"), and `text` with comment "foiled behaviour fingerprint" for `bf2:` values. Request body hashes are `text` attributes that say they are not file hashes. The event gets the tag `foiled:file-ioc-limited` and the attempt note as an event comment. No `sha256` or `filename|sha256` attribute.
 
 ## Confidence
 
@@ -288,7 +288,7 @@ curl -sS -H "authorization: Bearer $FOILED_TOKEN" \
   "$FOILED_API/v0/iocs?type=url&value=hxxp://stage2%5B.%5Dexample%5B.%5Dinvalid/m.sh"
 ```
 
-`GET /v0/exports/iocs.csv` (#22) still exports source addresses only, now with trailing `asn`, `as_org` and `country` columns that only ever hold shareable context (see [ASN context](#asn-context)). #13 replaces it with full IOC exports built on this model.
+`GET /v0/exports/iocs.csv` (#22) still exports source addresses only by default, with trailing `asn`, `as_org` and `country` columns that only ever hold shareable context (see [ASN context](#asn-context)). `fields=ioc` gives one row per IOC from this model, and `/v0/exports/iocs.json`, STIX, MISP and TAXII build on it too ([intel-outputs.md](intel-outputs.md)).
 
 ## Retention
 
@@ -296,7 +296,7 @@ IOCs are derived, not stored: they are recomputed from live capture events, so o
 
 ## For exports, campaigns and the radar
 
-- **Exports (#13)** consume `Ioc` as is: map `type` to STIX observables or MISP attribute types, emit `display` in human formats and `value` in machine formats, call `redact_for_export`, carry `file_ioc_limited` and the attempt notes, and use `confidence.wording`. `redacted: true` values must not be presented as byte-exact.
+- **Exports (#13, [intel-outputs.md](intel-outputs.md))** consume `Ioc` as is: map `type` to STIX observables or MISP attribute types, emit `display` in human formats and `value` in machine formats, call `redact_for_export`, carry `file_ioc_limited` and the attempt notes, and use `confidence.wording`. `redacted: true` values must not be presented as byte-exact.
 - **Campaigns (#33)** cluster on shared IOCs, especially `payload_sha256`, `file_sha256`, stage-2 `url`, callback `domain` and address, `behaviour_fingerprint` and `cmdline`, write `campaign_id` on attempts, and fill `campaign_ids` from those attempts ([campaigns.md](campaigns.md#features)).
 - **Radar (#35) and contribute-back (#37)** release only `origin: observed` IOCs with `confidence.publishable`, after `redact_for_export`, the delay and TLP rules, and the canary and secret checks in [contribute-back.md](contribute-back.md#what-a-released-ioc-contains).
 

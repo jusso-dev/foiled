@@ -227,11 +227,11 @@ Catalogue priors add `catalogue_prior` evidence and LLM suggestions add `llm` ev
 
 ### Export as STIX (#13)
 
-Published links (score at or above `publish_min` in #27) export as STIX 2.1 objects:
+Published links (score at or above `publish_min` in #27) export as STIX 2.1 objects ([intel-outputs.md](intel-outputs.md#stix-21)):
 
-- An `attack-pattern` object with the sidecar's `stix_id` as its id, the technique `name`, and `external_references` of `{source_name: "mitre-attack", external_id, url}`. Sub-techniques use the sub-technique's own object. Bundles that include ATT&CK names carry MITRE's notice.
-- A `relationship` from the attempt's exported object (as #13 defines it) to the `attack-pattern`, with `confidence` from #27 and a description that names the ATT&CK version and summarises the matched signals.
-- Links below `publish_min`, or carried only by LLM or catalogue prior evidence, are not exported.
+- A Foiled-created `attack-pattern` object (its own id, `created_by_ref` the Foiled identity) with the technique `name`, `kill_chain_phases` from the sidecar tactics, `external_references` of `{source_name: "mitre-attack", external_id, url}` and the sidecar's `stix_id` in `x_foiled_mitre_stix_id`. MITRE's own id is never emitted, because only MITRE may version that object; TIPs merge on the external id. Sub-techniques get their own object. A statement marking on the object reproduces MITRE's notice and licence.
+- A `related-to` relationship from the attempt's `observed-data` to the `attack-pattern`, with `confidence` from #27, "we assess as" (or "confirmed" after an analyst) in the description, `x_foiled_attack_version`, and the points per evidence source in `x_foiled_evidence`.
+- Links below `publish_min`, or carried only by LLM or catalogue prior evidence, are not exported. Under the shipped weights a rule-only technique link scores at most 50, so technique links leave once an analyst confirms them, or in an analyst's unreviewed export.
 
 ### Console (#14)
 

@@ -1,0 +1,54 @@
+{
+  "Event": {
+    "Attribute": [
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"100\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "External analysis",
+        "comment": "Attempt att_58d10ea05f1470733c2e46a6: We assess as an attempt against FOILED-DEMO-0001. Confidence 100 of 100 (high).",
+        "distribution": "5",
+        "to_ids": false,
+        "type": "vulnerability",
+        "uuid": "4497b83f-1328-5714-94e5-856dedc3fbd1",
+        "value": "FOILED-DEMO-0001"
+      },
+      {
+        "category": "Other",
+        "distribution": "5",
+        "to_ids": false,
+        "type": "comment",
+        "uuid": "e1e474bc-9e8e-59c3-ae8d-280294a4fe59",
+        "value": "Attempt att_58d10ea05f1470733c2e46a6: Post-exploitation activity was seen but no file was captured, so the implant may be memory-resident. File IOCs are limited and no file hash is reported; use the command line, behaviour fingerprint and network callback indicators instead."
+      }
+    ],
+    "Object": [],
+    "Tag": [
+      {
+        "name": "tlp:amber"
+      },
+      {
+        "name": "foiled:export"
+      },
+      {
+        "name": "foiled:file-ioc-limited"
+      }
+    ],
+    "analysis": "1",
+    "date": "2026-10-18",
+    "distribution": "0",
+    "info": "Foiled decoy activity from 2026-10-18: 1 attempt, 0 indicators",
+    "published": false,
+    "threat_level_id": "3",
+    "timestamp": "1792285327",
+    "uuid": "015961aa-6948-578d-9225-ae905a0f38da"
+  }
+}

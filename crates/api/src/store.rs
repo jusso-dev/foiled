@@ -251,12 +251,62 @@ pub trait Store: Send + Sync {
         limit: usize,
     ) -> StoreFuture<'_, Vec<CaptureEvent>>;
 
+    /// Events strictly after `after` in `(ts, event_id)` order, with
+    /// `ts < until`, oldest first, at most `limit`. Lets a reader continue
+    /// past a cut even when more than `limit` events share one millisecond
+    /// (#13). The default reads the cursor's millisecond whole, then the
+    /// rest; stores that can compare `(ts, event_id)` directly override it.
+    fn events_after(
+        &self,
+        tenant_id: &str,
+        after: (i64, String),
+        until: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<CaptureEvent>> {
+        let tenant_id = tenant_id.to_string();
+        Box::pin(async move {
+            let (ts, id) = after;
+            let mut out: Vec<CaptureEvent> = self
+                .events_between(&tenant_id, ts, (ts + 1).min(until), usize::MAX)
+                .await?
+                .into_iter()
+                .filter(|e| e.event_id > id)
+                .take(limit)
+                .collect();
+            if out.len() < limit && ts + 1 < until {
+                out.extend(
+                    self.events_between(&tenant_id, ts + 1, until, limit - out.len())
+                        .await?,
+                );
+            }
+            Ok(out)
+        })
+    }
+
     /// Analyst decisions on an attempt's links (#27).
     fn link_overrides(
         &self,
         tenant_id: &str,
         attempt_id: &str,
     ) -> StoreFuture<'_, Vec<LinkOverride>>;
+
+    /// Analyst decisions for several attempts at once, for exports (#13).
+    /// The default asks once per attempt; stores that can answer in one
+    /// query override it.
+    fn link_overrides_many(
+        &self,
+        tenant_id: &str,
+        attempt_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<LinkOverride>> {
+        let tenant_id = tenant_id.to_string();
+        Box::pin(async move {
+            let mut out = Vec::new();
+            for a in attempt_ids {
+                out.extend(self.link_overrides(&tenant_id, &a).await?);
+            }
+            Ok(out)
+        })
+    }
 
     /// Record an analyst decision, replacing any earlier one for the link.
     fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()>;

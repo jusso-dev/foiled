@@ -994,6 +994,22 @@ impl Store for CfStore {
         })
     }
 
+    fn events_after(
+        &self,
+        tenant_id: &str,
+        after: (i64, String),
+        until: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<CaptureEvent>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::events_after(&client, &t, after.0, &after.1, until, limit as i64)
+                .await
+                .map_err(err)
+        })
+    }
+
     fn link_overrides(
         &self,
         tenant_id: &str,
@@ -1005,25 +1021,25 @@ impl Store for CfStore {
             let rows = foiled_pg::link_overrides(&client, &t, &a)
                 .await
                 .map_err(err)?;
-            Ok(rows
-                .into_iter()
-                .filter_map(|r| {
-                    let kind = serde_json::from_value(serde_json::Value::String(r.kind)).ok()?;
-                    let feedback =
-                        serde_json::from_value(serde_json::Value::String(r.feedback)).ok()?;
-                    Some(LinkOverride {
-                        attempt_id: r.attempt_id,
-                        kind,
-                        target: r.target,
-                        decision: foiled_core::confidence::Override {
-                            feedback,
-                            analyst_id: r.analyst_id,
-                            at: r.at,
-                            note: r.note,
-                        },
-                    })
-                })
-                .collect())
+            Ok(rows.into_iter().filter_map(override_from_row).collect())
+        })
+    }
+
+    fn link_overrides_many(
+        &self,
+        tenant_id: &str,
+        attempt_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<LinkOverride>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            if attempt_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            let client = self.pg().await?;
+            let rows = foiled_pg::link_overrides_many(&client, &t, &attempt_ids)
+                .await
+                .map_err(err)?;
+            Ok(rows.into_iter().filter_map(override_from_row).collect())
         })
     }
 
@@ -1469,4 +1485,20 @@ impl Store for CfStore {
             Ok(())
         })
     }
+}
+
+fn override_from_row(r: foiled_pg::LinkOverrideRow) -> Option<LinkOverride> {
+    let kind = serde_json::from_value(serde_json::Value::String(r.kind)).ok()?;
+    let feedback = serde_json::from_value(serde_json::Value::String(r.feedback)).ok()?;
+    Some(LinkOverride {
+        attempt_id: r.attempt_id,
+        kind,
+        target: r.target,
+        decision: foiled_core::confidence::Override {
+            feedback,
+            analyst_id: r.analyst_id,
+            at: r.at,
+            note: r.note,
+        },
+    })
 }

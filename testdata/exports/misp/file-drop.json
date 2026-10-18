@@ -1,0 +1,242 @@
+{
+  "Event": {
+    "Attribute": [
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "attacking address. We assess as malicious activity: ip seen at Foiled decoys, which have no legitimate users, in 1 attempt (3 sightings). Confidence 98 of 100 (high).",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:03:20.000Z",
+        "last_seen": "2026-10-18T01:03:20.005Z",
+        "timestamp": "1792285400",
+        "to_ids": true,
+        "type": "ip-src",
+        "uuid": "4ec54784-fe64-5c7f-91d0-141a84de958e",
+        "value": "203.0.113.7"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "request path. We assess as malicious activity: http_path seen at Foiled decoys, which have no legitimate users, in 1 attempt (2 sightings). Confidence 98 of 100 (high).",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:03:20.000Z",
+        "last_seen": "2026-10-18T01:03:20.003Z",
+        "timestamp": "1792285400",
+        "to_ids": true,
+        "type": "uri",
+        "uuid": "98cfb22f-cd9a-5b73-85f8-c3270fada4c6",
+        "value": "/api/upload?path=../../../tmp/x.sh"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "user agent. We assess as malicious activity: http_ua seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:03:20.000Z",
+        "last_seen": "2026-10-18T01:03:20.000Z",
+        "timestamp": "1792285400",
+        "to_ids": false,
+        "type": "user-agent",
+        "uuid": "fea4b1ee-8268-5f99-b1cc-a8662ba23cd9",
+        "value": "curl/8.0"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Payload delivery",
+        "comment": "SHA-256 of a request body sent to the decoy, not a file hash. We assess as malicious activity: payload_sha256 seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:03:20.000Z",
+        "last_seen": "2026-10-18T01:03:20.000Z",
+        "timestamp": "1792285400",
+        "to_ids": false,
+        "type": "text",
+        "uuid": "47163575-765a-5544-afc5-6c71ff007de3",
+        "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Other",
+        "comment": "foiled behaviour fingerprint. We assess as malicious activity: behaviour_fingerprint seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:03:20.000Z",
+        "last_seen": "2026-10-18T01:03:55.000Z",
+        "timestamp": "1792285435",
+        "to_ids": false,
+        "type": "text",
+        "uuid": "8d599d38-c227-5f04-ad58-3ccab29dce7d",
+        "value": "bf2:0de7b0e05fd88c37375be5ad651909f0"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Payload delivery",
+        "comment": "SHA-256 of a request body sent to the decoy, not a file hash. We assess as malicious activity: payload_sha256 seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:03:20.003Z",
+        "last_seen": "2026-10-18T01:03:20.003Z",
+        "timestamp": "1792285400",
+        "to_ids": false,
+        "type": "text",
+        "uuid": "ee8a82d2-3c8b-5495-98bb-76f587c11f20",
+        "value": "061f6e75bb4f65a2b379124cefacf9feca6570cf5b52e88419d4ab06189f13b2"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Payload installation",
+        "comment": "command line. We assess as malicious activity: cmdline seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:03:20.900Z",
+        "last_seen": "2026-10-18T01:03:20.900Z",
+        "timestamp": "1792285400",
+        "to_ids": true,
+        "type": "text",
+        "uuid": "e790b91f-71e8-5874-acd6-8a8b61e08941",
+        "value": "/bin/chmod +x /tmp/x.sh"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "External analysis",
+        "comment": "Attempt att_9c09513968e521d297116de5: We assess as an attempt against FOILED-DEMO-0001. Confidence 98 of 100 (high).",
+        "distribution": "5",
+        "to_ids": false,
+        "type": "vulnerability",
+        "uuid": "ed240206-ff26-571f-aa56-ae608ecc2060",
+        "value": "FOILED-DEMO-0001"
+      }
+    ],
+    "Object": [
+      {
+        "Attribute": [
+          {
+            "Tag": [
+              {
+                "name": "foiled:confidence=\"98\""
+              },
+              {
+                "name": "foiled:band=\"high\""
+              },
+              {
+                "name": "foiled:wording=\"we assess as\""
+              }
+            ],
+            "category": "Payload installation",
+            "comment": "captured file. We assess as malicious activity: file_sha256 seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+            "distribution": "5",
+            "first_seen": "2026-10-18T01:03:55.000Z",
+            "last_seen": "2026-10-18T01:03:55.000Z",
+            "object_relation": "sha256",
+            "timestamp": "1792285435",
+            "to_ids": true,
+            "type": "sha256",
+            "uuid": "93cad954-2c79-5dc8-a9db-4fe1c1a53988",
+            "value": "c1c5d1b2f75673adc7db8fbf8bf1ab10f405dac8e71ce3cb8d7d0fef7fdeb172"
+          }
+        ],
+        "comment": "A file Foiled captured after exploitation. It has not been classified.",
+        "description": "File object describing a file with meta-information",
+        "distribution": "5",
+        "meta-category": "file",
+        "name": "file",
+        "template_uuid": "688c46fb-5edb-40a3-8273-1af7923e2215",
+        "template_version": "25",
+        "timestamp": "1792285435",
+        "uuid": "10a9797c-1d7a-59b5-989f-28b1ef735679"
+      }
+    ],
+    "Tag": [
+      {
+        "name": "tlp:amber"
+      },
+      {
+        "name": "foiled:export"
+      }
+    ],
+    "analysis": "1",
+    "date": "2026-10-18",
+    "distribution": "0",
+    "info": "Foiled decoy activity from 2026-10-18: 1 attempt, 8 indicators",
+    "published": false,
+    "threat_level_id": "3",
+    "timestamp": "1792285435",
+    "uuid": "69110310-e49a-5ecd-b16a-e118376907a1"
+  }
+}

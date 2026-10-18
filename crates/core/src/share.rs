@@ -142,6 +142,40 @@ impl Tlp {
     pub fn allows_release(self) -> bool {
         matches!(self, Tlp::Clear | Tlp::Green)
     }
+
+    /// The TLP 2.0 label in lower case, as in the serialised form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Tlp::Clear => "clear",
+            Tlp::Green => "green",
+            Tlp::Amber => "amber",
+            Tlp::AmberStrict => "amber+strict",
+            Tlp::Red => "red",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Tlp> {
+        [
+            Tlp::Clear,
+            Tlp::Green,
+            Tlp::Amber,
+            Tlp::AmberStrict,
+            Tlp::Red,
+        ]
+        .into_iter()
+        .find(|t| t.as_str() == s)
+    }
+
+    /// Order from most to least shareable, for "at least as strict as".
+    pub fn strictness(self) -> u8 {
+        match self {
+            Tlp::Clear => 0,
+            Tlp::Green => 1,
+            Tlp::Amber => 2,
+            Tlp::AmberStrict => 3,
+            Tlp::Red => 4,
+        }
+    }
 }
 
 /// Settings shared by the community channels.

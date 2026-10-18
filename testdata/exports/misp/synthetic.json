@@ -1,0 +1,353 @@
+{
+  "Event": {
+    "Attribute": [
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "attacking address. We assess as malicious activity: ip seen at Foiled decoys, which have no legitimate users, in 1 attempt (3 sightings). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it. Context: asn.number 64498 (team_asn); asn.org Example Hosting (team_asn); geo.country US (team_asn).",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:03.000Z",
+        "last_seen": "2026-10-18T01:02:04.003Z",
+        "timestamp": "1792285324",
+        "to_ids": true,
+        "type": "ip-src",
+        "uuid": "f1e86716-22cc-5035-afa2-5645b4b4e976",
+        "value": "203.0.113.60"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "request path. We assess as malicious activity: http_path seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:03.000Z",
+        "last_seen": "2026-10-18T01:02:03.000Z",
+        "timestamp": "1792285323",
+        "to_ids": true,
+        "type": "uri",
+        "uuid": "def9f6d5-c05b-5d55-98f7-ab10f63c6e16",
+        "value": "/api/health"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "user agent. We assess as malicious activity: http_ua seen at Foiled decoys, which have no legitimate users, in 1 attempt (2 sightings). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:03.000Z",
+        "last_seen": "2026-10-18T01:02:04.000Z",
+        "timestamp": "1792285324",
+        "to_ids": false,
+        "type": "user-agent",
+        "uuid": "1c35cd7a-13f4-553b-853a-4e2ec1067d77",
+        "value": "demo-exploit/1.2"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Other",
+        "comment": "foiled behaviour fingerprint. We assess as malicious activity: behaviour_fingerprint seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:03.000Z",
+        "last_seen": "2026-10-18T01:02:07.000Z",
+        "timestamp": "1792285327",
+        "to_ids": false,
+        "type": "text",
+        "uuid": "6320369f-7a60-54a3-a401-769d119a163b",
+        "value": "bf2:3fadc4c5cb8b630d24e3afd4a50cffa1"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "request path. We assess as malicious activity: http_path seen at Foiled decoys, which have no legitimate users, in 1 attempt (2 sightings). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:04.000Z",
+        "last_seen": "2026-10-18T01:02:04.003Z",
+        "timestamp": "1792285324",
+        "to_ids": true,
+        "type": "uri",
+        "uuid": "0819bb8a-62cc-57a4-809c-10f38fe68641",
+        "value": "/api/upload?path=../../../tmp/.cache/run"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Payload delivery",
+        "comment": "exact request string. We assess as malicious activity: request_substring seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:04.000Z",
+        "last_seen": "2026-10-18T01:02:04.000Z",
+        "timestamp": "1792285324",
+        "to_ids": true,
+        "type": "pattern-in-traffic",
+        "uuid": "5359c732-39cc-595b-be20-97383a904af9",
+        "value": "#!/bin/sh\necho foiled-demo"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Payload delivery",
+        "comment": "SHA-256 of a request body sent to the decoy, not a file hash. We assess as malicious activity: payload_sha256 seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:04.000Z",
+        "last_seen": "2026-10-18T01:02:04.000Z",
+        "timestamp": "1792285324",
+        "to_ids": false,
+        "type": "text",
+        "uuid": "72615823-5e73-529c-96ff-099f72c88787",
+        "value": "39433a17e4ac567f3ad66e98be845a45b01a7ac024aa07c7a923daa52de6c546"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Payload delivery",
+        "comment": "SHA-256 of a request body sent to the decoy, not a file hash. We assess as malicious activity: payload_sha256 seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:04.003Z",
+        "last_seen": "2026-10-18T01:02:04.003Z",
+        "timestamp": "1792285324",
+        "to_ids": false,
+        "type": "text",
+        "uuid": "fe0fca4c-c8e6-5477-96ff-224a4eafebf0",
+        "value": "5e2bf57d3f40c4b6df69daf1936cb766f832374b4fc0259a7cbff06e2f70f269"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "domain. We assess as malicious activity: domain seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:06.000Z",
+        "last_seen": "2026-10-18T01:02:06.000Z",
+        "timestamp": "1792285326",
+        "to_ids": true,
+        "type": "domain",
+        "uuid": "7efd1c11-f341-5dea-8440-14701dc8cab2",
+        "value": "q4x9.cb.example.invalid"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "callback or second stage. We assess as malicious activity: ip seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:07.000Z",
+        "last_seen": "2026-10-18T01:02:07.000Z",
+        "timestamp": "1792285327",
+        "to_ids": true,
+        "type": "ip-dst",
+        "uuid": "d6915604-080b-53b1-9c09-966efbf12f03",
+        "value": "198.51.100.77"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "domain. We assess as malicious activity: domain seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:07.000Z",
+        "last_seen": "2026-10-18T01:02:07.000Z",
+        "timestamp": "1792285327",
+        "to_ids": true,
+        "type": "domain",
+        "uuid": "0d11dd1b-2a4e-5121-849e-2816bdfb98ca",
+        "value": "checkin.example.invalid"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"98\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "Network activity",
+        "comment": "URL. We assess as malicious activity: url seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high). Seen in an attempt where the implant may be memory-resident: no file hash is available for it.",
+        "distribution": "5",
+        "first_seen": "2026-10-18T01:02:07.000Z",
+        "last_seen": "2026-10-18T01:02:07.000Z",
+        "timestamp": "1792285327",
+        "to_ids": true,
+        "type": "url",
+        "uuid": "cb56a152-0f51-5b89-951c-f24bff437242",
+        "value": "http://checkin.example.invalid/beacon"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"100\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"we assess as\""
+          }
+        ],
+        "category": "External analysis",
+        "comment": "Attempt att_58d10ea05f1470733c2e46a6: We assess as an attempt against FOILED-DEMO-0001. Confidence 100 of 100 (high).",
+        "distribution": "5",
+        "to_ids": false,
+        "type": "vulnerability",
+        "uuid": "dc9d6789-465f-5ef0-a04e-bfc9acfd047a",
+        "value": "FOILED-DEMO-0001"
+      },
+      {
+        "Tag": [
+          {
+            "name": "foiled:confidence=\"100\""
+          },
+          {
+            "name": "foiled:band=\"high\""
+          },
+          {
+            "name": "foiled:wording=\"confirmed\""
+          }
+        ],
+        "category": "External analysis",
+        "comment": "Attempt att_58d10ea05f1470733c2e46a6: An analyst confirmed this attempt as ATT&CK T1190 (Exploit Public-Facing Application). Confidence 100 of 100 (high).",
+        "distribution": "5",
+        "to_ids": false,
+        "type": "text",
+        "uuid": "71df1e7a-909e-5c44-bac9-674fed5943ef",
+        "value": "T1190 Exploit Public-Facing Application"
+      },
+      {
+        "category": "Other",
+        "distribution": "5",
+        "to_ids": false,
+        "type": "comment",
+        "uuid": "f032ece5-abbc-5abe-984d-462215c3161e",
+        "value": "Attempt att_58d10ea05f1470733c2e46a6: Post-exploitation activity was seen but no file was captured, so the implant may be memory-resident. File IOCs are limited and no file hash is reported; use the command line, behaviour fingerprint and network callback indicators instead.\n\nATT&CK v20.0: © 2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation. MITRE ATT&CK and ATT&CK are registered trademarks of The MITRE Corporation. The MITRE Corporation (MITRE) hereby grants you a non-exclusive, royalty-free license to use ATT&CK for research, development, and commercial purposes. Any copy you make for such purposes is authorized provided that you reproduce MITRE's copyright designation and this license in any such copy."
+      }
+    ],
+    "Object": [],
+    "Tag": [
+      {
+        "name": "tlp:amber"
+      },
+      {
+        "name": "foiled:export"
+      },
+      {
+        "name": "foiled:file-ioc-limited"
+      },
+      {
+        "name": "misp-galaxy:mitre-attack-pattern=\"Exploit Public-Facing Application - T1190\""
+      }
+    ],
+    "analysis": "1",
+    "date": "2026-10-18",
+    "distribution": "0",
+    "info": "Foiled decoy activity from 2026-10-18: 1 attempt, 13 indicators",
+    "published": false,
+    "threat_level_id": "3",
+    "timestamp": "1792285327",
+    "uuid": "a6139240-efcf-5e61-b9d1-54f71e6e8672"
+  }
+}

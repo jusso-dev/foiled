@@ -1,6 +1,6 @@
 # Contribute back
 
-Status: Draft for v0.3. Owner: #37. Related: #35 (exploit pages and datasets), #38 (licence and data-terms register), #16 (privacy and retention), #31 (edge sensors), #30 (decoy modules), #4 (network isolation), #41 (host agent), #34 (IOCs), #27 (confidence), #17 (canaries).
+Status: Draft for v0.3. Owner: #37. Related: #13 (operator exports, [intel-outputs.md](intel-outputs.md)), #35 (exploit pages and datasets), #38 (licence and data-terms register), #16 (privacy and retention), #31 (edge sensors), #30 (decoy modules), #4 (network isolation), #41 (host agent), #34 (IOCs), #27 (confidence), #17 (canaries).
 
 Foiled consumes community threat intel (GreyNoise, CrowdSec, DShield, Shadowserver), so its research sensors should give signal back. [research/landscape.md](research/landscape.md) argues for this contribute-to-consume model in its "Contribution back" section. This doc sets out each channel, where it is configured, what it sends, what is never sent, and how to test it.
 
