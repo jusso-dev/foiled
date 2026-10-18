@@ -65,7 +65,7 @@
       "additionalProperties": false,
       "required": ["version", "steps"],
       "properties": {
-        "version": { "const": 1 },
+        "version": { "const": 2 },
         "steps": { "type": "array", "minItems": 2, "maxItems": 64, "items": { "type": "string" } }
       }
     },
@@ -125,7 +125,7 @@
     },
     {
       "if": { "properties": { "type": { "const": "behaviour_fingerprint" } } },
-      "then": { "required": ["fingerprint"], "properties": { "fingerprint": { "type": "object" }, "value": { "pattern": "^bf1:[a-f0-9]{32}$" } } },
+      "then": { "required": ["fingerprint"], "properties": { "fingerprint": { "type": "object" }, "value": { "pattern": "^bf2:[a-f0-9]{32}$" } } },
       "else": { "properties": { "fingerprint": false } }
     }
   ],

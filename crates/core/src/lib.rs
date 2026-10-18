@@ -23,6 +23,7 @@ pub mod hooks;
 pub mod ioc;
 pub mod llm;
 pub mod mcp;
+pub mod redact;
 pub mod release;
 pub mod retention;
 pub mod share;

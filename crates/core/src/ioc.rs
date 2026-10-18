@@ -30,6 +30,10 @@ use crate::confidence::{Band, ConfidenceConfig, Evidence, EvidenceSource, LinkKi
 use crate::enrichment::{Fact, Observable, ObservableKind, is_never_redistribute};
 use crate::timeline::printable;
 
+pub use crate::redact::{
+    REDACTED, TextKind, mask_secret_arg, redact, redact_as, secret_arg_positions,
+};
+
 /// Longest value kept, in characters. Longer request strings and command
 /// lines are dropped rather than cut, because a cut value is no longer an
 /// exact indicator; their hashes still become IOCs.
@@ -46,62 +50,11 @@ pub const MAX_FINGERPRINT_STEPS: usize = 64;
 pub const MAX_URLS_PER_TEXT: usize = 8;
 /// Most attempts and decoys that add confidence evidence to one IOC.
 pub const MAX_CONFIDENCE_ITEMS: usize = 16;
-/// Version of the behaviour fingerprint format (`bf1:`).
-pub const FINGERPRINT_VERSION: u32 = 1;
+/// Version of the behaviour fingerprint format (`bf2:`). Version 1 (`bf1:`,
+/// #75) is no longer computed and is not comparable (`docs/iocs.md`).
+pub const FINGERPRINT_VERSION: u32 = 2;
 
-const FINGERPRINT_DOMAIN: &str = "foiled-behaviour-fingerprint/v1";
-const REDACTED: &str = "REDACTED";
-
-/// A parameter, field or header whose name contains one of these (ignoring
-/// case) has its value treated as a secret: `password`, `X-Api-Key`,
-/// `X-Amz-Signature`, `db_passwd`, `sessid`.
-const SECRET_KEY_PARTS: &[&str] = &[
-    "secret",
-    "token",
-    "password",
-    "passwd",
-    "pwd",
-    "api-key",
-    "api_key",
-    "apikey",
-    "private_key",
-    "private-key",
-    "privatekey",
-    "signature",
-    "session",
-    "sessid",
-    "auth",
-    "credential",
-    "cookie",
-    "jwt",
-];
-
-/// Names that are secrets only as a whole word (`pass=`, `key=`), because
-/// as substrings they would hit ordinary names (`passport`, `monkey`).
-const SECRET_KEY_WORDS: &[&str] = &["pass", "key", "sig", "sid"];
-
-/// Longest parameter or header name considered.
-const MAX_KEY_CHARS: usize = 48;
-
-fn secret_key(name: &str) -> bool {
-    let k = name.trim_start_matches('-').to_ascii_lowercase();
-    SECRET_KEY_WORDS.contains(&k.as_str()) || SECRET_KEY_PARTS.iter().any(|p| k.contains(p))
-}
-
-/// Command-line flags whose next word is a secret.
-const SECRET_FLAGS: &[&str] = &[
-    "--api-key",
-    "--apikey",
-    "--pass",
-    "--password",
-    "--secret",
-    "--token",
-    "bearer",
-    "basic",
-];
-
-/// Protocol commands whose arguments are credentials.
-const SECRET_COMMANDS: &[&str] = &["AUTH", "LOGIN", "PASS"];
+const FINGERPRINT_DOMAIN: &str = "foiled-behaviour-fingerprint/v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -126,7 +79,7 @@ pub enum IocType {
     Cmdline,
     /// A DNS name the decoy was made to look up.
     DnsQuery,
-    /// Stable id over the attempt's normalised steps (`bf1:`).
+    /// Stable id over the attempt's normalised steps (`bf2:`).
     BehaviourFingerprint,
 }
 
@@ -332,180 +285,15 @@ pub fn ioc_id(ty: IocType, value: &str) -> String {
 // Redaction, defanging and refanging
 // ---------------------------------------------------------------------------
 
-/// Remove secrets and personal information from attacker text: URL
-/// credentials, secret-looking parameters and flags, bearer tokens and the
-/// local part of email addresses. Returns the new text and whether anything
-/// changed. Linear in the input.
-pub fn redact(s: &str) -> (String, bool) {
-    let out = redact_emails(&redact_pairs(&redact_flags(&redact_userinfo(s))));
-    let changed = out != s;
-    (out, changed)
-}
-
-fn redact_userinfo(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find("://") {
-        let (head, tail) = rest.split_at(i + 3);
-        out.push_str(head);
-        let end = tail
-            .find(|c: char| matches!(c, '/' | '?' | '#' | '\'' | '"') || c.is_whitespace())
-            .unwrap_or(tail.len());
-        let authority = &tail[..end];
-        match authority.rfind('@') {
-            Some(at) => {
-                out.push_str(REDACTED);
-                out.push_str(&authority[at..]);
-            }
-            None => out.push_str(authority),
-        }
-        rest = &tail[end..];
+/// Mask credential arguments in place ([`secret_arg_positions`]). Returns
+/// whether any were found, including ones already masked upstream (the
+/// Redis emulator masks before it logs).
+fn redact_command(tokens: &mut [String]) -> bool {
+    let hits = secret_arg_positions(tokens);
+    for &i in &hits {
+        tokens[i] = mask_secret_arg(&tokens[i]);
     }
-    out.push_str(rest);
-    out
-}
-
-fn value_end(c: char) -> bool {
-    matches!(c, '&' | ';' | '\'' | '"' | '#' | ',' | '}' | ']') || c.is_whitespace()
-}
-
-fn key_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '-')
-}
-
-/// Redact the value after a secret-looking name in query strings
-/// (`password=x`), headers (`X-Api-Key: x`) and JSON (`"password":"x"`).
-/// The name is matched by [`secret_key`]. Look-back is bounded, so this is
-/// linear in the input.
-fn redact_pairs(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        out.push(c);
-        if c != '=' && c != ':' {
-            continue;
-        }
-        let before = &out[..out.len() - 1];
-        // JSON keys end with a quote before the colon.
-        let quoted = c == ':' && (before.ends_with('"') || before.ends_with('\''));
-        let name_end = before.len() - usize::from(quoted);
-        let key_len = before[..name_end]
-            .chars()
-            .rev()
-            .take(MAX_KEY_CHARS + 1)
-            .take_while(|ch| key_char(*ch))
-            .count();
-        if key_len == 0 || key_len > MAX_KEY_CHARS {
-            continue;
-        }
-        let key = &before[name_end - key_len..name_end];
-        let starts_word = before[..name_end - key_len]
-            .chars()
-            .next_back()
-            .is_none_or(|p| {
-                matches!(p, '?' | '&' | ';' | '\'' | '"' | '{' | ',' | '(' | '[')
-                    || p.is_whitespace()
-            });
-        if !starts_word || !secret_key(key) {
-            continue;
-        }
-        // A header or JSON value may follow spaces and an opening quote.
-        if c == ':' {
-            while chars.peek().is_some_and(|n| *n == ' ' || *n == '\t') {
-                out.push(chars.next().unwrap_or(' '));
-            }
-        }
-        let quote = match chars.peek() {
-            Some(&q @ ('"' | '\'')) => {
-                out.push(q);
-                chars.next();
-                Some(q)
-            }
-            _ => None,
-        };
-        let mut skipped = false;
-        while let Some(&n) = chars.peek() {
-            let end = match quote {
-                Some(q) => n == q,
-                None => value_end(n),
-            };
-            if end {
-                break;
-            }
-            chars.next();
-            skipped = true;
-        }
-        if skipped {
-            out.push_str(REDACTED);
-        }
-    }
-    out
-}
-
-fn redact_flags(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut redact_next = false;
-    for piece in s.split_inclusive(char::is_whitespace) {
-        let word = piece.trim_end();
-        let tail = &piece[word.len()..];
-        if redact_next && !word.is_empty() {
-            out.push_str(REDACTED);
-            out.push_str(tail);
-            redact_next = false;
-            continue;
-        }
-        out.push_str(piece);
-        let w = word
-            .trim_matches(|c| matches!(c, '\'' | '"'))
-            .to_ascii_lowercase();
-        if SECRET_FLAGS.contains(&w.as_str()) {
-            redact_next = true;
-        }
-    }
-    out
-}
-
-/// Replace the local part of email addresses, written plainly or with the
-/// `@` URL-encoded (`%40`).
-fn redact_emails(s: &str) -> String {
-    let local_char =
-        |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-');
-    let mut out = String::with_capacity(s.len());
-    for (i, c) in s.char_indices() {
-        let sep = if c == '@' {
-            1
-        } else if c == '%' && s[i..].get(..3).is_some_and(|x| x == "%40") {
-            3
-        } else {
-            0
-        };
-        if sep > 0 {
-            let domain: String = s[i + sep..]
-                .chars()
-                .take(254)
-                .take_while(|d| d.is_ascii_alphanumeric() || matches!(d, '.' | '-'))
-                .collect();
-            let domain = domain.trim_end_matches('.');
-            let tld_ok = domain.rsplit_once('.').is_some_and(|(_, tld)| {
-                tld.len() >= 2 && tld.bytes().all(|b| b.is_ascii_alphabetic())
-            });
-            let local_len = out
-                .chars()
-                .rev()
-                .take(65)
-                .take_while(|ch| local_char(*ch))
-                .count();
-            if tld_ok && (1..=64).contains(&local_len) {
-                let local = &out[out.len() - local_len..];
-                if local != REDACTED {
-                    out.truncate(out.len() - local_len);
-                    out.push_str(REDACTED);
-                }
-            }
-        }
-        out.push(c);
-    }
-    out
+    !hits.is_empty()
 }
 
 /// Replace URL schemes with their defanged forms, ignoring ASCII case.
@@ -638,19 +426,86 @@ fn names_canary(v: &str, e: &CaptureEvent) -> bool {
         || text(e, "canary_id").is_some_and(|id| v.contains(id))
 }
 
-/// Parse an address literal, including the single-number (`2852039166`)
-/// and hexadecimal (`0xa9fea9fe`) IPv4 forms URLs accept.
+/// One part of a loose IPv4 address, as `inet_aton` and WHATWG URL
+/// parsing read it: `0x` hexadecimal, a leading `0` octal, else decimal.
+fn ipv4_part(p: &str) -> Option<u64> {
+    if p.is_empty() || p.len() > 34 {
+        return None;
+    }
+    if let Some(hex) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
+        return if hex.is_empty() {
+            Some(0)
+        } else {
+            u64::from_str_radix(hex, 16).ok()
+        };
+    }
+    if p.len() > 1 && p.starts_with('0') {
+        return u64::from_str_radix(&p[1..], 8).ok();
+    }
+    if p.bytes().all(|b| b.is_ascii_digit()) {
+        p.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// IPv4 in every form a URL or resolver accepts: one to four parts, each
+/// decimal, octal or hexadecimal, the last part filling the remaining bytes
+/// (`127.1`, `169.254.43518`, `2852039166`, `0251.0376.0251.0376`,
+/// `0xa9.0xfe.0xa9.0xfe`).
+fn parse_ipv4_loose(s: &str) -> Option<std::net::Ipv4Addr> {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.is_empty() || parts.len() > 4 {
+        return None;
+    }
+    let nums: Vec<u64> = parts.iter().map(|p| ipv4_part(p)).collect::<Option<_>>()?;
+    let (last, head) = nums.split_last()?;
+    if head.iter().any(|n| *n > 255) {
+        return None;
+    }
+    let width = 8 * (5 - nums.len() as u32);
+    if width < 64 && *last >= 1u64 << width {
+        return None;
+    }
+    let mut n: u64 = 0;
+    for (i, h) in head.iter().enumerate() {
+        n |= h << (24 - 8 * i as u32);
+    }
+    n |= last;
+    u32::try_from(n).ok().map(std::net::Ipv4Addr::from)
+}
+
+/// A host name with the trailing root dots removed and lower case:
+/// `Metadata.Google.Internal.` and `metadata.google.internal` are one name.
+fn host_key(raw: &str) -> String {
+    fold_width(raw.trim())
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
+}
+
+/// Full-width forms (`１６９．２５４`) and ideographic full stops mapped to
+/// ASCII, the way IDNA mapping in URL parsing treats a host.
+fn fold_width(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\u{3002}' | '\u{FF61}' => '.',
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            _ => c,
+        })
+        .collect()
+}
+
+/// Parse an address literal in any form a URL or resolver accepts:
+/// IPv6 (bracketed or not), and loose IPv4 ([`parse_ipv4_loose`]), with
+/// trailing dots ignored.
 fn parse_ip(raw: &str) -> Option<IpAddr> {
-    let raw = raw.trim().trim_start_matches('[').trim_end_matches(']');
+    let folded = fold_width(raw.trim());
+    let raw = folded.trim_start_matches('[').trim_end_matches(']');
+    let raw = raw.trim_end_matches('.');
     if let Ok(ip) = raw.parse::<IpAddr>() {
         return Some(ip.to_canonical());
     }
-    let n = match raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
-        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
-        None if raw.bytes().all(|b| b.is_ascii_digit()) => raw.parse::<u32>().ok()?,
-        None => return None,
-    };
-    Some(IpAddr::V4(std::net::Ipv4Addr::from(n)))
+    parse_ipv4_loose(raw).map(IpAddr::V4)
 }
 
 /// True for addresses that are the decoy's own or the platform's network:
@@ -658,6 +513,28 @@ fn parse_ip(raw: &str) -> Option<IpAddr> {
 /// 169.254.169.254), carrier-grade NAT, unique local (fd00::/8), multicast
 /// and unspecified. These are never IOCs, whether bare or inside a URL.
 fn internal_ip(ip: IpAddr) -> bool {
+    // IPv4 inside IPv6: IPv4-compatible (`::169.254.169.254`), the NAT64
+    // prefix 64:ff9b::/96 and 6to4 (2002::/16) reach that IPv4 host.
+    if let IpAddr::V6(v6) = ip {
+        let seg = v6.segments();
+        let compatible = seg[..6] == [0; 6] && (seg[6] != 0 || seg[7] > 1);
+        let nat64 = seg[0] == 0x64 && seg[1] == 0xff9b && seg[2..6] == [0; 4];
+        let v4 = |hi: u16, lo: u16| {
+            IpAddr::V4(std::net::Ipv4Addr::new(
+                (hi >> 8) as u8,
+                hi as u8,
+                (lo >> 8) as u8,
+                lo as u8,
+            ))
+        };
+        if (compatible || nat64) && internal_ip(v4(seg[6], seg[7])) {
+            return true;
+        }
+        // 6to4, 2002:WWXX:YYZZ::/48, routes to the IPv4 address inside.
+        if seg[0] == 0x2002 && internal_ip(v4(seg[1], seg[2])) {
+            return true;
+        }
+    }
     Observable::ip(&ip.to_string()).is_ok_and(|o| !o.is_external_lookup_eligible())
 }
 
@@ -665,6 +542,7 @@ fn internal_ip(ip: IpAddr) -> bool {
 /// covers `metadata.google.internal`), `.home.arpa`, `.lan`, `.localdomain`
 /// and reverse lookups.
 fn internal_name(d: &str) -> bool {
+    let d = host_key(d);
     d == "localhost"
         || [
             ".localhost",
@@ -678,14 +556,16 @@ fn internal_name(d: &str) -> bool {
         ]
         .iter()
         .any(|s| d.ends_with(s))
+        || !d.contains('.')
 }
 
 fn norm_ip(raw: &str) -> Option<(IocType, String)> {
-    let o = Observable::ip(raw).ok()?;
+    let ip = parse_ip(raw)?;
     // The decoy's own network (guest, bridge, resolver) is never an IOC.
-    if !o.is_external_lookup_eligible() {
+    if internal_ip(ip) {
         return None;
     }
+    let o = Observable::ip(&ip.to_string()).ok()?;
     let ty = if o.value.contains(':') {
         IocType::Ipv6
     } else {
@@ -698,9 +578,9 @@ fn norm_domain(raw: &str) -> Option<String> {
     if parse_ip(raw).is_some() {
         return None;
     }
-    let o = Observable::domain(raw).ok()?;
+    let o = Observable::domain(&host_key(raw)).ok()?;
     // Single-label and local names are not attacker infrastructure.
-    (o.value.contains('.') && !internal_name(&o.value)).then_some(o.value)
+    (!internal_name(&o.value)).then_some(o.value)
 }
 
 /// Host part of a URL authority or a Host header, without port or
@@ -768,7 +648,13 @@ impl Sink<'_> {
         if raw.is_empty() || too_long(raw, max) || names_canary(raw, self.e) {
             return;
         }
-        let (v, redacted) = redact(raw);
+        // Command lines end header values where the shell ends a word.
+        let kind = if ty == IocType::Cmdline {
+            TextKind::CommandLine
+        } else {
+            TextKind::Text
+        };
+        let (v, redacted) = redact_as(raw, kind);
         self.push(ty, v, redacted, role, field);
     }
 
@@ -792,7 +678,7 @@ impl Sink<'_> {
         // name is not attacker infrastructure.
         let internal = match parse_ip(&host) {
             Some(ip) => internal_ip(ip),
-            None => !host.contains('.') || internal_name(&host),
+            None => internal_name(&host),
         };
         if internal {
             return;
@@ -839,6 +725,24 @@ impl Sink<'_> {
     }
 }
 
+/// The command, its subcommand when the capture logs it apart (the Redis
+/// emulator writes `data.subcommand` and leaves it out of `data.args`), and
+/// the arguments, one token each.
+fn command_tokens(e: &CaptureEvent, cmd: &str) -> Vec<String> {
+    let mut tokens = vec![cmd.to_string()];
+    tokens.extend(text(e, "subcommand").map(str::to_string));
+    match e.data.get("args") {
+        Some(Value::Array(a)) => tokens.extend(a.iter().filter_map(|x| match x {
+            Value::String(s) => Some(s.clone()),
+            Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        })),
+        Some(Value::String(a)) => tokens.extend(a.split_whitespace().map(str::to_string)),
+        _ => {}
+    }
+    tokens
+}
+
 fn candidates(e: &CaptureEvent, opts: ExtractOptions, out: &mut Vec<Candidate>) {
     let mut s = Sink { e, out };
     let ua = |s: &mut Sink| {
@@ -870,25 +774,17 @@ fn candidates(e: &CaptureEvent, opts: ExtractOptions, out: &mut Vec<Candidate>) 
                     );
                 }
             } else if let Some(cmd) = text(e, "command") {
-                let args = words(e.data.get("args")).unwrap_or_default();
-                let secret = !args.is_empty()
-                    && SECRET_COMMANDS.contains(&cmd.to_ascii_uppercase().as_str());
-                let line = if args.is_empty() {
-                    cmd.to_string()
-                } else if secret {
-                    format!("{cmd} {REDACTED}")
-                } else {
-                    format!("{cmd} {args}")
-                };
+                let mut tokens = command_tokens(e, cmd);
+                let positional = redact_command(&mut tokens);
                 let before = s.out.len();
                 s.text(
                     IocType::RequestSubstring,
-                    &line,
+                    &tokens.join(" "),
                     MAX_VALUE_CHARS,
                     IocRole::Request,
                     "data.command",
                 );
-                if secret && s.out.len() > before {
+                if positional && s.out.len() > before {
                     s.out[before].redacted = true;
                 }
             }
@@ -1098,42 +994,100 @@ fn step_word(w: &str, max: usize, e: &CaptureEvent) -> String {
     }
 }
 
-/// Path without query values, digit runs folded to `0`, long or token-like
-/// segments folded to `*` and the rest passed through [`step_word`], plus the sorted query parameter names:
-/// `/api/upload?path`.
+/// Path segments after which every segment is a credential, user name or
+/// one-time value (`/login/<user>`, `/reset/<token>`).
+const AUTH_SEGMENTS: &[&str] = &[
+    "2fa",
+    "account",
+    "accounts",
+    "activate",
+    "api-key",
+    "apikey",
+    "auth",
+    "authenticate",
+    "confirm",
+    "forgot",
+    "invite",
+    "key",
+    "keys",
+    "login",
+    "logon",
+    "magic",
+    "mfa",
+    "oauth",
+    "otp",
+    "password",
+    "passwd",
+    "profile",
+    "reset",
+    "secret",
+    "session",
+    "sessions",
+    "signin",
+    "sign-in",
+    "token",
+    "tokens",
+    "u",
+    "unlock",
+    "user",
+    "users",
+    "verify",
+];
+
+/// Shannon entropy of `s` in bits per character.
+fn entropy(s: &str) -> f64 {
+    let mut counts: BTreeMap<char, u32> = BTreeMap::new();
+    let mut n = 0u32;
+    for c in s.chars() {
+        *counts.entry(c).or_default() += 1;
+        n += 1;
+    }
+    let n = f64::from(n.max(1));
+    counts
+        .values()
+        .map(|&c| {
+            let p = f64::from(c) / n;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+/// One path segment or parameter name for a fingerprint step: `*` when it
+/// varies between runs of the same tool (holds a digit, other than a short
+/// version like `v2`, is long or looks random) and otherwise the word.
+fn shape_word(w: &str, e: &CaptureEvent) -> String {
+    let lower = w.to_ascii_lowercase();
+    let version = lower.len() <= 4
+        && lower.starts_with('v')
+        && lower.len() > 1
+        && lower[1..].bytes().all(|b| b.is_ascii_digit());
+    let numeric = w.chars().any(|c| c.is_ascii_digit()) && !version;
+    let random = w.chars().nth(11).is_some() && entropy(w) >= 3.5;
+    if numeric || random || w.chars().nth(32).is_some() {
+        FOLDED.to_string()
+    } else {
+        step_word(w, 32, e)
+    }
+}
+
+/// Path without query values, at most 16 segments through [`shape_word`],
+/// every segment after an [`AUTH_SEGMENTS`] one folded to `*`, plus the
+/// sorted query parameter names: `/api/upload?path`, `/login/*`.
 fn path_shape(p: &str, e: &CaptureEvent) -> String {
     let (path, query) = p.split_once('?').unwrap_or((p, ""));
     let path = path.split('#').next().unwrap_or("");
-    let fold_digits = |seg: &str| {
-        let mut out = String::new();
-        let mut in_digits = false;
-        for c in seg.chars() {
-            if c.is_ascii_digit() {
-                if !in_digits {
-                    out.push('0');
-                }
-                in_digits = true;
-            } else {
-                out.push(c);
-                in_digits = false;
-            }
-        }
-        out
-    };
+    let mut after_auth = false;
     let segments: Vec<String> = path
         .split('/')
         .take(16)
         .map(|seg| {
-            // Long mixed letter and digit segments are ids or tokens.
-            let token_like = seg.chars().nth(7).is_some()
-                && seg.chars().any(|c| c.is_ascii_digit())
-                && seg.chars().any(|c| c.is_ascii_alphabetic());
             if seg.is_empty() {
                 String::new()
-            } else if token_like || seg.chars().nth(32).is_some() {
+            } else if after_auth {
                 FOLDED.to_string()
             } else {
-                step_word(&fold_digits(seg), 32, e)
+                after_auth = AUTH_SEGMENTS.contains(&seg.to_ascii_lowercase().as_str());
+                shape_word(seg, e)
             }
         })
         .collect();
@@ -1146,7 +1100,7 @@ fn path_shape(p: &str, e: &CaptureEvent) -> String {
         .filter_map(|kv| kv.split('=').next())
         .filter(|k| !k.is_empty())
         .take(16)
-        .map(|k| step_word(k, 32, e))
+        .map(|k| shape_word(k, e))
         .collect();
     if !names.is_empty() {
         shaped.push('?');
@@ -1190,12 +1144,17 @@ fn steps_for(e: &CaptureEvent) -> Vec<String> {
                     path_shape(text(e, "path").unwrap_or("/"), e)
                 )]
             } else if let Some(c) = text(e, "command") {
+                // The subcommand as the emulator logged it, else the first
+                // argument of commands known to take one. Never other
+                // arguments: keys, passwords and payloads stay out.
                 let cmd = verb(c, e);
-                let sub = SUBCOMMAND_VERBS
-                    .contains(&cmd.as_str())
-                    .then(|| words(e.data.get("args")))
-                    .flatten()
-                    .and_then(|a| a.split_whitespace().next().map(|w| verb(w, e)));
+                let sub = text(e, "subcommand").map(|w| verb(w, e)).or_else(|| {
+                    SUBCOMMAND_VERBS
+                        .contains(&cmd.as_str())
+                        .then(|| words(e.data.get("args")))
+                        .flatten()
+                        .and_then(|a| a.split_whitespace().next().map(|w| verb(w, e)))
+                });
                 vec![match sub {
                     Some(sub) => format!("cmd {cmd} {sub}"),
                     None => format!("cmd {cmd}"),
@@ -1247,7 +1206,7 @@ fn steps_for(e: &CaptureEvent) -> Vec<String> {
 }
 
 /// The behaviour fingerprint for an attempt that got past probing:
-/// `bf1:` plus 32 hex characters of SHA-256 over the normalised steps,
+/// `bf2:` plus 32 hex characters of SHA-256 over the normalised steps,
 /// in order, with repeats collapsed. `None` for probe-only attempts and
 /// for fewer than two steps, which would match every scanner.
 fn fingerprint(a: &Attempt, mine: &[&CaptureEvent]) -> Option<Candidate> {
@@ -1747,70 +1706,6 @@ mod tests {
     }
 
     #[test]
-    fn redaction_removes_secrets_and_email_local_parts() {
-        let cases = [
-            (
-                "/login?user=bob&password=hunter2&x=1",
-                "/login?user=bob&password=REDACTED&x=1",
-            ),
-            ("/a?token=abc", "/a?token=REDACTED"),
-            ("/a?mytoken=abc", "/a?mytoken=REDACTED"),
-            ("/a?PassWord=abc&monkey=1", "/a?PassWord=REDACTED&monkey=1"),
-            (
-                "/a?db_passwd=x&pass=y&key=z",
-                "/a?db_passwd=REDACTED&pass=REDACTED&key=REDACTED",
-            ),
-            (
-                "/a?Api-Key=x&private_key=y&sessid=z",
-                "/a?Api-Key=REDACTED&private_key=REDACTED&sessid=REDACTED",
-            ),
-            (
-                "/b?X-Amz-Credential=AKIDEXAMPLE&X-Amz-Signature=abc123&X-Amz-Date=1",
-                "/b?X-Amz-Credential=REDACTED&X-Amz-Signature=REDACTED&X-Amz-Date=1",
-            ),
-            (
-                r#"{"user":"bob","password":"hunter2","n":1}"#,
-                r#"{"user":"bob","password":"REDACTED","n":1}"#,
-            ),
-            (r#"{"apiToken": 12345}"#, r#"{"apiToken": REDACTED}"#),
-            ("X-Api-Key: abc123", "X-Api-Key: REDACTED"),
-            ("cookie: sid=abc", "cookie: REDACTED"),
-            (
-                "curl http://u:p@203.0.113.9/x",
-                "curl http://REDACTED@203.0.113.9/x",
-            ),
-            (
-                "mysql --password hunter2 -h db",
-                "mysql --password REDACTED -h db",
-            ),
-            ("app --password=hunter2", "app --password=REDACTED"),
-            (
-                "Authorization: Bearer abc.def",
-                "Authorization: REDACTED REDACTED",
-            ),
-            (
-                "mail admin@example.invalid now",
-                "mail REDACTED@example.invalid now",
-            ),
-            (
-                "/subscribe?to=admin%40example.invalid",
-                "/subscribe?to=REDACTED%40example.invalid",
-            ),
-            ("ssh root@203.0.113.9", "ssh root@203.0.113.9"),
-            (
-                "http://stage2.example.invalid:8080/x",
-                "http://stage2.example.invalid:8080/x",
-            ),
-            ("/plain/path", "/plain/path"),
-        ];
-        for (raw, want) in cases {
-            let (got, changed) = redact(raw);
-            assert_eq!(got, want, "{raw}");
-            assert_eq!(changed, raw != want, "{raw}");
-        }
-    }
-
-    #[test]
     fn redaction_is_linear_on_hostile_input() {
         let s = "=".repeat(100_000) + &"@".repeat(100_000) + &"://".repeat(30_000);
         let (out, _) = redact(&s);
@@ -2020,7 +1915,7 @@ mod tests {
         let (_, b) = run(&other, ExtractOptions::default());
         let fa = values(&a, IocType::BehaviourFingerprint);
         assert_eq!(fa, values(&b, IocType::BehaviourFingerprint));
-        assert!(fa[0].starts_with("bf1:") && fa[0].len() == 36);
+        assert!(fa[0].starts_with("bf2:") && fa[0].len() == 36);
         let detail = a.iocs.iter().find_map(|i| i.fingerprint.clone()).unwrap();
         assert_eq!(
             detail.steps,
@@ -2203,7 +2098,7 @@ mod tests {
         assert_eq!(
             fa,
             values(&b, IocType::BehaviourFingerprint),
-            "passwords do not change bf1"
+            "passwords do not change bf2"
         );
         assert_eq!(fa, values(&c, IocType::BehaviourFingerprint));
         let steps = a
@@ -2252,7 +2147,7 @@ mod tests {
             .find_map(|i| i.fingerprint.clone())
             .unwrap()
             .steps;
-        assert_eq!(steps[0], "http * /reset/*/*/x?token");
+        assert_eq!(steps[0], "http * /reset/*/*/*?token");
     }
 
     #[test]
@@ -2337,6 +2232,277 @@ mod tests {
         );
         assert!(!a.file_ioc_limited, "but the file was captured");
         assert!(a.notes.iter().any(|n| n.contains("not kept")));
+    }
+
+    #[test]
+    fn protocol_secret_arguments_are_redacted_by_position() {
+        let cases: [(&str, Option<&str>, Value, &str); 9] = [
+            (
+                "AUTH",
+                None,
+                json!(["default", "hunter2"]),
+                "AUTH REDACTED REDACTED",
+            ),
+            (
+                "HELLO",
+                None,
+                json!(["3", "AUTH", "default", "hunter2"]),
+                "HELLO 3 AUTH REDACTED REDACTED",
+            ),
+            (
+                "HELLO",
+                None,
+                json!(["3", "SETNAME", "x"]),
+                "HELLO 3 SETNAME x",
+            ),
+            (
+                "CONFIG",
+                Some("SET"),
+                json!(["requirepass", "hunter2"]),
+                "CONFIG SET requirepass REDACTED",
+            ),
+            (
+                "CONFIG",
+                Some("SET"),
+                json!(["masterauth", "hunter2", "dir", "/tmp"]),
+                "CONFIG SET masterauth REDACTED dir /tmp",
+            ),
+            (
+                "CONFIG",
+                None,
+                json!(["SET", "requirepass", "hunter2"]),
+                "CONFIG SET requirepass REDACTED",
+            ),
+            (
+                "MIGRATE",
+                None,
+                json!([
+                    "192.0.2.10",
+                    "6379",
+                    "k",
+                    "0",
+                    "5000",
+                    "AUTH2",
+                    "u",
+                    "hunter2"
+                ]),
+                "MIGRATE 192.0.2.10 6379 k 0 5000 AUTH2 REDACTED REDACTED",
+            ),
+            (
+                "ACL",
+                Some("SETUSER"),
+                json!(["bob", "on", ">hunter2", "#abcd"]),
+                "ACL SETUSER bob on >REDACTED #REDACTED",
+            ),
+            ("PASS", None, json!(["hunter2"]), "PASS REDACTED"),
+        ];
+        for (i, (cmd, sub, args, want)) in cases.into_iter().enumerate() {
+            let mut data = json!({"protocol": "redis", "command": cmd, "args": args});
+            if let Some(sub) = sub {
+                data["subcommand"] = json!(sub);
+            }
+            let events = parse(vec![ev(
+                &format!("e{i}"),
+                T0,
+                "application",
+                "203.0.113.7",
+                data,
+            )]);
+            let (_, x) = run(&events, ExtractOptions::default());
+            let got = x
+                .iocs
+                .iter()
+                .find(|i| i.ioc_type == IocType::RequestSubstring)
+                .unwrap();
+            assert_eq!(got.value, want);
+            assert_eq!(got.redacted, want.contains(REDACTED), "{want}");
+        }
+    }
+
+    #[test]
+    fn emulator_subcommands_shape_fingerprint_steps() {
+        // The Redis emulator logs the subcommand apart and drops it from args.
+        let events = parse(vec![
+            ev(
+                "e1",
+                T0,
+                "application",
+                "203.0.113.7",
+                json!({"protocol": "redis", "command": "CONFIG", "subcommand": "SET", "args": ["requirepass", "hunter2"]}),
+            ),
+            ev(
+                "e2",
+                T0 + 1,
+                "application",
+                "203.0.113.7",
+                json!({"protocol": "redis", "command": "MODULE", "subcommand": "LOAD", "args": ["/tmp/exp.so"]}),
+            ),
+            hook("e3", T0 + 2, "203.0.113.7", "trigger", json!({})),
+        ]);
+        let (_, x) = run(&events, ExtractOptions::default());
+        let steps = x
+            .iocs
+            .iter()
+            .find_map(|i| i.fingerprint.clone())
+            .unwrap()
+            .steps;
+        assert_eq!(steps[..2], ["cmd CONFIG SET", "cmd MODULE LOAD"]);
+    }
+
+    #[test]
+    fn varying_path_segments_do_not_change_fingerprints() {
+        let chain = |path: &str, id: &str| {
+            parse(vec![
+                ev(
+                    &format!("{id}1"),
+                    T0,
+                    "application",
+                    "203.0.113.7",
+                    json!({"method": "POST", "path": path}),
+                ),
+                hook(
+                    &format!("{id}2"),
+                    T0 + 1,
+                    "203.0.113.7",
+                    "trigger",
+                    json!({}),
+                ),
+            ])
+        };
+        let fp = |path: &str, id: &str| {
+            let (_, x) = run(&chain(path, id), ExtractOptions::default());
+            let f = x.iocs.iter().find_map(|i| i.fingerprint.clone()).unwrap();
+            (
+                values(&x, IocType::BehaviourFingerprint)[0].to_string(),
+                f.steps[0].clone(),
+            )
+        };
+        let (a, sa) = fp("/login/hunter0", "a");
+        let (b, _) = fp("/login/correcthorse", "b");
+        let (c, _) = fp("/login/x", "c");
+        assert_eq!(sa, "http POST /login/*");
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_eq!(fp("/u/alice/files", "d").1, "http POST /u/*/*");
+        assert_eq!(fp("/img/42.png", "e").1, "http POST /img/*");
+        assert_eq!(fp("/api/v2/upload", "f").1, "http POST /api/v2/upload");
+        assert_eq!(fp("/dl/aGVsbG93b3JsZEZvbw", "g").1, "http POST /dl/*");
+        assert_eq!(
+            fp("/cgi-bin/administrator.cgi", "h").1,
+            "http POST /cgi-bin/administrator.cgi"
+        );
+    }
+
+    #[test]
+    fn loose_ipv4_and_trailing_dots_are_parsed_like_urls() {
+        for (raw, want) in [
+            ("0251.0376.0251.0376", "169.254.169.254"),
+            ("0177.0.0.1", "127.0.0.1"),
+            ("0xa9.0xfe.0xa9.0xfe", "169.254.169.254"),
+            (
+                "\u{FF11}\u{FF16}\u{FF19}\u{FF0E}\u{FF12}\u{FF15}\u{FF14}\u{FF0E}\u{FF11}\u{FF16}\u{FF19}\u{FF0E}\u{FF12}\u{FF15}\u{FF14}",
+                "169.254.169.254",
+            ),
+            ("169\u{3002}254\u{3002}169\u{3002}254", "169.254.169.254"),
+            ("127.1", "127.0.0.1"),
+            ("169.254.43518", "169.254.169.254"),
+            ("2852039166", "169.254.169.254"),
+            ("0xa9fea9fe", "169.254.169.254"),
+            ("169.254.169.254.", "169.254.169.254"),
+            ("[fd00::1]", "fd00::1"),
+            ("203.0.113.7", "203.0.113.7"),
+        ] {
+            assert_eq!(
+                parse_ip(raw).map(|i| i.to_string()).as_deref(),
+                Some(want),
+                "{raw}"
+            );
+        }
+        for raw in [
+            "256.1.1.1",
+            "1.2.3.4.5",
+            "08.1.1.1",
+            "example.invalid",
+            "1.example",
+            "0x1g.1.1.1",
+            "4294967296",
+        ] {
+            assert!(parse_ip(raw).is_none(), "{raw}");
+        }
+        for ip in [
+            "::169.254.169.254",
+            "64:ff9b::a9fe:a9fe",
+            "2002:a9fe:a9fe::1",
+            "2002:a00:1::",
+            "::ffff:10.0.0.1",
+            "::1",
+            "::",
+        ] {
+            assert!(internal_ip(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in [
+            "::203.0.113.7",
+            "2001:db8::1",
+            "64:ff9b::cb00:7107",
+            "2002:cb00:7107::1",
+        ] {
+            assert!(!internal_ip(ip.parse().unwrap()), "{ip}");
+        }
+        assert!(internal_name("metadata.google.internal."));
+        assert!(internal_name("LOCALHOST."));
+        assert!(!internal_name("stage2.example.invalid."));
+    }
+
+    #[test]
+    fn obfuscated_internal_hosts_are_never_iocs() {
+        let mut egress = ev(
+            "e2",
+            T0 + 10,
+            "egress",
+            "10.85.1.2",
+            json!({"host": "metadata.google.internal.", "method": "GET", "path": "/x"}),
+        );
+        egress["dst"] = json!({"ip": "203.0.113.99", "port": 80});
+        let events = parse(vec![
+            hook(
+                "e1",
+                T0,
+                "203.0.113.7",
+                "trigger",
+                json!({"cmd_lines": [
+                    "curl http://0251.0376.0251.0376/a http://0177.0.0.1/b http://0xa9.0xfe.0xa9.0xfe/c",
+                    "curl http://127.1/d http://169.254.43518/e http://169.254.169.254./f",
+                    "curl http://metadata.google.internal./g http://localhost./h",
+                "curl http://[::169.254.169.254]/i http://\u{FF11}\u{FF16}\u{FF19}\u{FF0E}\u{FF12}\u{FF15}\u{FF14}\u{FF0E}\u{FF11}\u{FF16}\u{FF19}\u{FF0E}\u{FF12}\u{FF15}\u{FF14}/j",
+                    "curl http://stage2.example.invalid./ok"
+                ]}),
+            ),
+            egress,
+            ev(
+                "e3",
+                T0 + 20,
+                "dns",
+                "10.85.1.2",
+                json!({"query": "localhost."}),
+            ),
+            ev(
+                "e4",
+                T0 + 21,
+                "dns",
+                "10.85.1.2",
+                json!({"query": "169.254.169.254."}),
+            ),
+        ]);
+        let (_, x) = run(&events, ExtractOptions::default());
+        assert_eq!(
+            values(&x, IocType::Url),
+            vec!["http://stage2.example.invalid./ok"]
+        );
+        assert_eq!(values(&x, IocType::Domain), vec!["stage2.example.invalid"]);
+        assert!(values(&x, IocType::DnsQuery).is_empty());
+        let mut ips = values(&x, IocType::Ip);
+        ips.sort();
+        assert_eq!(ips, vec!["203.0.113.7", "203.0.113.99"]);
     }
 
     #[test]

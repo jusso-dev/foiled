@@ -1,0 +1,437 @@
+{
+  "description": "Real Redis emulator output (crates/emulators/tests/redis_iocs.rs) for a session that authenticates, sends HELLO AUTH and MIGRATE AUTH2 with a password, rewrites the persistence config, loads a module and sets requirepass. The emulator masks the password in args, error and config_set and keeps only its hash in redacted_args. Ids, times, addresses, ports and the session are pinned; everything else is as emitted.",
+  "events": [
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "application",
+      "data": {
+        "command": "AUTH",
+        "password_len": 7,
+        "password_sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7",
+        "protocol": "redis",
+        "redacted_args": [
+          {
+            "index": 1,
+            "kind": "secret",
+            "len": 7,
+            "sha256": "37a8eec1ce19687d132fe29051dca629d164e2c4958ba141d5f4133a33f0688f"
+          },
+          {
+            "index": 2,
+            "kind": "secret",
+            "len": 7,
+            "sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7"
+          }
+        ],
+        "result": "ok",
+        "session": "s1",
+        "username": "default"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-01",
+      "severity": "low",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285500000
+    },
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "application",
+      "data": {
+        "args": [
+          "3",
+          "AUTH",
+          "REDACTED",
+          "REDACTED"
+        ],
+        "command": "HELLO",
+        "error": "ERR unknown command 'HELLO', with args beginning with: '3' 'AUTH' 'REDACTED' 'REDACTED' ",
+        "protocol": "redis",
+        "redacted_args": [
+          {
+            "index": 3,
+            "kind": "secret",
+            "len": 7,
+            "sha256": "37a8eec1ce19687d132fe29051dca629d164e2c4958ba141d5f4133a33f0688f"
+          },
+          {
+            "index": 4,
+            "kind": "secret",
+            "len": 7,
+            "sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7"
+          }
+        ],
+        "result": "error",
+        "session": "s1"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-02",
+      "severity": "low",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285501000
+    },
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "application",
+      "data": {
+        "args": [
+          "dir",
+          "/var/spool/cron"
+        ],
+        "command": "CONFIG",
+        "config_set": {
+          "dir": "/var/spool/cron"
+        },
+        "protocol": "redis",
+        "result": "ok",
+        "session": "s1",
+        "subcommand": "SET"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-03",
+      "severity": "high",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285502000
+    },
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "hook",
+      "data": {
+        "command": "CONFIG",
+        "protocol": "redis",
+        "session": "s1"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-04",
+      "hook": {
+        "catalogue_id": "emulator/redis/7.0",
+        "cve_id": "CVE-2099-0001",
+        "hook_id": "redis.config-set-persistence",
+        "notes": "CONFIG SET dir /var/spool/cron",
+        "sequence_no": 1,
+        "stage": "trigger",
+        "t_offset_ms": 3000
+      },
+      "severity": "high",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285503000
+    },
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "application",
+      "data": {
+        "args": [
+          "dbfilename",
+          "root"
+        ],
+        "command": "CONFIG",
+        "config_set": {
+          "dbfilename": "root"
+        },
+        "protocol": "redis",
+        "result": "ok",
+        "session": "s1",
+        "subcommand": "SET"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-05",
+      "severity": "high",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285504000
+    },
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "hook",
+      "data": {
+        "command": "CONFIG",
+        "protocol": "redis",
+        "session": "s1"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-06",
+      "hook": {
+        "catalogue_id": "emulator/redis/7.0",
+        "cve_id": "CVE-2099-0001",
+        "hook_id": "redis.config-set-persistence",
+        "notes": "CONFIG SET dbfilename root",
+        "sequence_no": 2,
+        "stage": "trigger",
+        "t_offset_ms": 5000
+      },
+      "severity": "high",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285505000
+    },
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "application",
+      "data": {
+        "args": [
+          "/tmp/exp.so"
+        ],
+        "command": "MODULE",
+        "error": "ERR Error loading the extension. Please check the server logs.",
+        "module_path": "/tmp/exp.so",
+        "protocol": "redis",
+        "result": "error",
+        "session": "s1",
+        "subcommand": "LOAD"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-07",
+      "severity": "high",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285506000
+    },
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "hook",
+      "data": {
+        "command": "MODULE",
+        "protocol": "redis",
+        "session": "s1"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-08",
+      "hook": {
+        "catalogue_id": "emulator/redis/7.0",
+        "hook_id": "redis.module-load",
+        "notes": "MODULE LOAD /tmp/exp.so",
+        "sequence_no": 3,
+        "stage": "trigger",
+        "t_offset_ms": 7000
+      },
+      "severity": "high",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285507000
+    },
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "application",
+      "data": {
+        "args": [
+          "192.0.2.10",
+          "6379",
+          "k",
+          "0",
+          "5000",
+          "AUTH2",
+          "REDACTED",
+          "REDACTED"
+        ],
+        "command": "MIGRATE",
+        "error": "ERR unknown command 'MIGRATE', with args beginning with: '192.0.2.10' '6379' 'k' '0' '5000' 'AUTH2' 'REDACTED' 'REDACTED' ",
+        "protocol": "redis",
+        "redacted_args": [
+          {
+            "index": 7,
+            "kind": "secret",
+            "len": 7,
+            "sha256": "37a8eec1ce19687d132fe29051dca629d164e2c4958ba141d5f4133a33f0688f"
+          },
+          {
+            "index": 8,
+            "kind": "secret",
+            "len": 7,
+            "sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7"
+          }
+        ],
+        "result": "error",
+        "session": "s1"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-09",
+      "severity": "low",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285508000
+    },
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "application",
+      "data": {
+        "args": [
+          "requirepass",
+          "REDACTED"
+        ],
+        "command": "CONFIG",
+        "config_set": {
+          "requirepass": "REDACTED"
+        },
+        "protocol": "redis",
+        "redacted_args": [
+          {
+            "index": 3,
+            "kind": "secret",
+            "len": 7,
+            "sha256": "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7"
+          }
+        ],
+        "result": "ok",
+        "session": "s1",
+        "subcommand": "SET"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-10",
+      "severity": "medium",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285509000
+    },
+    {
+      "catalogue_id": "emulator/redis/7.0",
+      "channel": "application",
+      "data": {
+        "command": "QUIT",
+        "protocol": "redis",
+        "result": "ok",
+        "session": "s1"
+      },
+      "decoy_id": "dcy-redis-1",
+      "decoy_kind": "emulation",
+      "dst": {
+        "ip": "10.85.1.10",
+        "port": 6379
+      },
+      "event_id": "rds-11",
+      "severity": "info",
+      "source": {
+        "id": "host-1",
+        "kind": "host"
+      },
+      "src": {
+        "ip": "198.51.100.23",
+        "port": 40001
+      },
+      "tenant_id": "t1",
+      "ts": 1792285510000
+    }
+  ]
+}

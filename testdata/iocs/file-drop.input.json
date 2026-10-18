@@ -1,5 +1,5 @@
 {
-  "description": "A file-backed chain (the demo exploit: upload, script written, quarantined, chmod seen), a Redis CONFIG SET from a second source and an IPv6 scan of a third. The quarantined script gives a file hash, so this attempt is not file-limited.",
+  "description": "A file-backed chain (the demo exploit: upload, script written, quarantined, chmod seen), a Redis CONFIG SET from a second source (in the Redis emulator's shape: subcommand logged apart from args) and an IPv6 scan of a third. The quarantined script gives a file hash, so this attempt is not file-limited.",
   "events": [
     {
       "event_id": "fd-01",
@@ -105,7 +105,7 @@
       "dst": { "ip": "10.85.1.10", "port": 6379 },
       "tenant_id": "t1",
       "source": { "kind": "host", "id": "host-1" },
-      "data": { "protocol": "redis", "command": "CONFIG", "args": ["SET", "dir", "/var/spool/cron"] }
+      "data": { "protocol": "redis", "session": "s1", "command": "CONFIG", "subcommand": "SET", "args": ["dir", "/var/spool/cron"], "config_set": { "dir": "/var/spool/cron" }, "result": "ok" }
     },
     {
       "event_id": "fd-07",
