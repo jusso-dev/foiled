@@ -14,6 +14,7 @@ pub mod iocs;
 pub mod public;
 pub mod radar;
 pub mod review;
+pub mod taxii;
 pub mod writeups;
 
 use foiled_core::audit::{AuditRecord, Outcome};

@@ -14,12 +14,14 @@ use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
 use foiled_core::radar::{AnalyticsPoint, RadarPoint};
 use foiled_core::review::ReviewState;
 use foiled_core::writeup::{PublicPage, PublicPageSummary, WriteUp, WriteUpStatus};
+use std::collections::BTreeMap;
 
 use crate::sinks::RadarSink;
 use crate::store::{
-    AgentCerts, AgentQuery, AuditQuery, BudgetOutcome, DecoyQuery, EnrolmentTokenRecord,
-    IdentityRecord, IpIocRow, JobRecord, LinkOverride, NewCert, Store, StoreError, StoreFuture,
-    TokenRecord, WriteUpVersion,
+    AgentCerts, AgentQuery, AuditQuery, BudgetOutcome, DayAttempt, DayRecord, DecoyQuery,
+    EnrolmentTokenRecord, Evidence, History, IdentityRecord, IpIocRow, JobRecord, LinkOverride,
+    LogQuery, NewCert, NewVersion, PendingStep, PublishedIoc, StixVersion, Store, StoreError,
+    StoreFuture, TokenRecord, WriteUpVersion,
 };
 
 #[derive(Default)]
@@ -48,6 +50,11 @@ struct Inner {
     fail_enrichment: bool,
     budget: HashMap<(String, &'static str, i64), u32>,
     failures: Vec<ProviderFailureRecord>,
+    /// The STIX object log (#13): rows per (tenant, collection), heads with
+    /// first `created` and newest evidence, and the materialiser's state.
+    stix: HashMap<(String, String), StixLog>,
+    /// The scheduled materialiser's tenant cursor, per collection.
+    stix_cron: HashMap<String, String>,
     agents: Vec<AgentRecord>,
     enrolment_tokens: Vec<EnrolmentTokenRecord>,
     /// CA reference for each bound certificate, by fingerprint.
@@ -58,6 +65,62 @@ struct Inner {
     /// Tenant, write-up id and page.
     public_pages: Vec<(String, String, PublicPage)>,
     radar: Vec<RadarPoint>,
+}
+
+#[derive(Default)]
+struct StixLog {
+    rows: Vec<StixVersion>,
+    /// Content hash per (id, version).
+    hash_of: HashMap<(String, String), String>,
+    created: HashMap<String, Option<String>>,
+    evidence: HashMap<String, i64>,
+    /// Every id any version of an object refers to.
+    refs: HashMap<String, std::collections::BTreeSet<String>>,
+    days: BTreeMap<i64, DayRecord>,
+    /// Attempts by (live, day, attempt id).
+    attempts: BTreeMap<(bool, i64, String), String>,
+    /// Contributions by (live, day, part, ioc id).
+    contributions: BTreeMap<(bool, i64, u32, String), String>,
+    /// IOCs the last merge published: id to (type, value).
+    published: BTreeMap<String, (String, String)>,
+    pending: std::collections::BTreeSet<(&'static str, String)>,
+    /// `(holder, expires_at)`; `None` when released.
+    lease: Option<(String, i64)>,
+    /// The lease generation: incremented on every takeover, never reset.
+    generation: i64,
+    /// Test hook: after this many more fenced writes another run takes
+    /// the lease.
+    takeover_after: Option<usize>,
+}
+
+impl StixLog {
+    /// Refuse a write from a run whose lease generation is not current.
+    fn fence(&mut self, fence: i64) -> Result<(), StoreError> {
+        if let Some(n) = self.takeover_after.as_mut() {
+            if *n == 0 {
+                self.takeover_after = None;
+                self.generation += 1;
+                self.lease = Some(("intruder".into(), i64::MAX));
+            } else {
+                *n -= 1;
+            }
+        }
+        if self.lease.is_some() && self.generation == fence {
+            Ok(())
+        } else {
+            Err(StoreError(format!(
+                "stix lease lost: generation {fence}, current {}",
+                self.generation
+            )))
+        }
+    }
+
+    fn head(&self, id: &str) -> Option<&StixVersion> {
+        self.rows
+            .iter()
+            .filter(|r| r.id == id)
+            .max_by(|a, b| a.version.cmp(&b.version))
+    }
 }
 
 #[derive(Default)]
@@ -166,6 +229,17 @@ impl MemoryStore {
     /// An enrichment cache row, as the `foiled-enrich` consumer would leave
     /// it in D1 (#11). Replaces the row for the same provider and
     /// observable.
+    /// Let `writes` more fenced materialiser writes through for this
+    /// tenant, then hand its lease to another run (a stalled run's lease
+    /// taken over), so the stalled run's later writes are refused.
+    pub fn take_over_stix_lease_after(&self, tenant_id: &str, collection: &str, writes: usize) {
+        self.lock()
+            .stix
+            .entry((tenant_id.to_string(), collection.to_string()))
+            .or_default()
+            .takeover_after = Some(writes);
+    }
+
     pub fn add_cache_entry(&self, entry: CacheEntry) {
         let mut g = self.lock();
         g.cache.retain(|e| e.key() != entry.key());
@@ -237,6 +311,595 @@ impl Store for MemoryStore {
         out.sort_by(|a, b| (a.ts, &a.event_id).cmp(&(b.ts, &b.event_id)));
         out.truncate(limit);
         ready(Ok(out))
+    }
+
+    fn event_signature(&self, tenant_id: &str, since: i64, until: i64) -> StoreFuture<'_, String> {
+        let g = self.lock();
+        let (mut n, mut last) = (0usize, 0usize);
+        for (i, e) in g.events.iter().enumerate() {
+            if e.tenant_id.as_deref() == Some(tenant_id) && e.ts >= since && e.ts < until {
+                n += 1;
+                last = i + 1;
+            }
+        }
+        ready(Ok(format!("{n}:{last}")))
+    }
+
+    fn tenants_with_events(&self, since: i64) -> StoreFuture<'_, Vec<String>> {
+        let set: std::collections::BTreeSet<String> = self
+            .lock()
+            .events
+            .iter()
+            .filter(|e| e.ts >= since)
+            .filter_map(|e| e.tenant_id.clone())
+            .collect();
+        ready(Ok(set.into_iter().collect()))
+    }
+
+    fn stix_history(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ids: Vec<String>,
+    ) -> StoreFuture<'_, BTreeMap<String, History>> {
+        let g = self.lock();
+        let mut out = BTreeMap::new();
+        if let Some(log) = g.stix.get(&(tenant_id.to_string(), collection.to_string())) {
+            for id in ids {
+                let Some(head) = log.head(&id) else {
+                    continue;
+                };
+                let revoked = serde_json::from_str::<serde_json::Value>(&head.content)
+                    .is_ok_and(|v| v["revoked"] == true);
+                out.insert(
+                    id.clone(),
+                    History {
+                        created: log.created.get(&id).cloned().flatten(),
+                        latest: head.version.clone(),
+                        latest_hash: log
+                            .hash_of
+                            .get(&(id.clone(), head.version.clone()))
+                            .cloned()
+                            .unwrap_or_default(),
+                        revoked,
+                    },
+                );
+            }
+        }
+        ready(Ok(out))
+    }
+
+    fn stix_append(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        versions: Vec<NewVersion>,
+        evidence: Vec<Evidence>,
+        now: i64,
+        fence: i64,
+    ) -> StoreFuture<'_, u64> {
+        let mut g = self.lock();
+        let log = g
+            .stix
+            .entry((tenant_id.to_string(), collection.to_string()))
+            .or_default();
+        if let Err(e) = log.fence(fence) {
+            return ready(Err(e));
+        }
+        let newest = log
+            .rows
+            .iter()
+            .map(|r| r.date_added)
+            .max()
+            .unwrap_or(i64::MIN);
+        let date_added = now.max(newest.saturating_add(1));
+        // All or nothing, as the Postgres transaction.
+        let mut fresh = Vec::new();
+        for v in versions {
+            let same_as_head = log.head(&v.id).is_some_and(|h| {
+                log.hash_of.get(&(v.id.clone(), h.version.clone())) == Some(&v.content_sha256)
+            });
+            if same_as_head {
+                continue;
+            }
+            if log.hash_of.contains_key(&(v.id.clone(), v.version.clone()))
+                || fresh
+                    .iter()
+                    .any(|f: &NewVersion| f.id == v.id && f.version == v.version)
+            {
+                return ready(Err(StoreError(format!(
+                    "version conflict: {} {} exists",
+                    v.id, v.version
+                ))));
+            }
+            fresh.push(v);
+        }
+        let inserted = fresh.len() as u64;
+        for v in fresh {
+            log.hash_of
+                .insert((v.id.clone(), v.version.clone()), v.content_sha256);
+            log.created.entry(v.id.clone()).or_insert(v.created);
+            log.refs.entry(v.id.clone()).or_default().extend(v.refs);
+            log.rows.push(StixVersion {
+                id: v.id,
+                object_type: v.object_type,
+                version: v.version,
+                date_added,
+                content: v.content,
+            });
+        }
+        for e in evidence {
+            if log.created.contains_key(&e.id) {
+                let t = log.evidence.entry(e.id).or_insert(e.evidence_ms);
+                *t = (*t).max(e.evidence_ms);
+            }
+        }
+        ready(Ok(inserted))
+    }
+
+    fn stix_query(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        q: LogQuery,
+    ) -> StoreFuture<'_, Vec<StixVersion>> {
+        let g = self.lock();
+        let rows = g
+            .stix
+            .get(&(tenant_id.to_string(), collection.to_string()))
+            .map(|log| foiled_core::intel::log::query_rows(&log.rows, &q))
+            .unwrap_or_default();
+        ready(Ok(rows))
+    }
+
+    fn stix_purge(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        evidence_before: i64,
+        fence: i64,
+    ) -> StoreFuture<'_, u64> {
+        let mut g = self.lock();
+        let log = g
+            .stix
+            .entry((tenant_id.to_string(), collection.to_string()))
+            .or_default();
+        if let Err(e) = log.fence(fence) {
+            return ready(Err(e));
+        }
+        let mut stale: std::collections::HashSet<String> = log
+            .created
+            .keys()
+            .filter(|id| log.evidence.get(*id).copied().unwrap_or(0) < evidence_before)
+            .cloned()
+            .collect();
+        // Keep what an object that stays refers to.
+        let kept: std::collections::HashSet<&String> = log
+            .refs
+            .iter()
+            .filter(|(id, _)| !stale.contains(*id))
+            .flat_map(|(_, r)| r)
+            .collect();
+        stale.retain(|id| !kept.contains(id));
+        let before = log.rows.len();
+        log.rows.retain(|r| !stale.contains(&r.id));
+        let removed = (before - log.rows.len()) as u64;
+        log.hash_of.retain(|(id, _), _| !stale.contains(id));
+        for id in &stale {
+            log.created.remove(id);
+            log.evidence.remove(id);
+            log.refs.remove(id);
+        }
+        log.days.retain(|d, _| *d >= evidence_before);
+        log.attempts.retain(|(_, d, _), _| *d >= evidence_before);
+        let mut requeue = Vec::new();
+        log.contributions.retain(|(_, d, _, ioc), _| {
+            let keep = *d >= evidence_before;
+            if !keep {
+                requeue.push(ioc.clone());
+            }
+            keep
+        });
+        for ioc in requeue {
+            log.pending.insert((PendingStep::Merge.as_str(), ioc));
+        }
+        ready(Ok(removed))
+    }
+
+    fn stix_days(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+    ) -> StoreFuture<'_, BTreeMap<i64, DayRecord>> {
+        let days = self
+            .lock()
+            .stix
+            .get(&(tenant_id.to_string(), collection.to_string()))
+            .map(|l| l.days.clone())
+            .unwrap_or_default();
+        ready(Ok(days))
+    }
+
+    fn put_stix_day(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        record: DayRecord,
+        fence: i64,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        let log = g
+            .stix
+            .entry((tenant_id.to_string(), collection.to_string()))
+            .or_default();
+        if let Err(e) = log.fence(fence) {
+            return ready(Err(e));
+        }
+        log.days.insert(day_ms, record);
+        ready(Ok(()))
+    }
+
+    fn stix_stage_part(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        part: u32,
+        attempts: Vec<DayAttempt>,
+        contributions: Vec<(String, String)>,
+        record: DayRecord,
+        fence: i64,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        let log = g
+            .stix
+            .entry((tenant_id.to_string(), collection.to_string()))
+            .or_default();
+        if let Err(e) = log.fence(fence) {
+            return ready(Err(e));
+        }
+        if part == 0 {
+            log.attempts.retain(|(live, d, _), _| *live || *d != day_ms);
+        }
+        log.contributions
+            .retain(|(live, d, p, _), _| *live || *d != day_ms || *p < part);
+        for a in attempts {
+            log.attempts.insert((false, day_ms, a.attempt_id), a.body);
+        }
+        for (ioc, body) in contributions {
+            log.contributions.insert((false, day_ms, part, ioc), body);
+        }
+        log.days.insert(day_ms, record);
+        ready(Ok(()))
+    }
+
+    fn stix_promote_day(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        record: DayRecord,
+        fence: i64,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        let log = g
+            .stix
+            .entry((tenant_id.to_string(), collection.to_string()))
+            .or_default();
+        if let Err(e) = log.fence(fence) {
+            return ready(Err(e));
+        }
+        let mut moved = BTreeMap::new();
+        log.contributions.retain(|(live, d, p, ioc), body| {
+            if *d != day_ms {
+                return true;
+            }
+            log.pending
+                .insert((PendingStep::Merge.as_str(), ioc.clone()));
+            if !*live {
+                moved.insert((true, *d, *p, ioc.clone()), body.clone());
+            }
+            false
+        });
+        log.contributions.extend(moved);
+        let mut moved = BTreeMap::new();
+        log.attempts.retain(|(live, d, a), body| {
+            if *d != day_ms {
+                return true;
+            }
+            if !*live {
+                moved.insert((true, *d, a.clone()), body.clone());
+            }
+            false
+        });
+        log.attempts.extend(moved);
+        log.days.insert(day_ms, record);
+        ready(Ok(()))
+    }
+
+    fn stix_day_attempts(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        after: Option<String>,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<DayAttempt>> {
+        let g = self.lock();
+        let out = g
+            .stix
+            .get(&(tenant_id.to_string(), collection.to_string()))
+            .map(|l| {
+                l.attempts
+                    .iter()
+                    .filter(|((live, d, a), _)| {
+                        *live && *d == day_ms && after.as_ref().is_none_or(|x| a > x)
+                    })
+                    .take(limit)
+                    .map(|((_, _, a), body)| DayAttempt {
+                        attempt_id: a.clone(),
+                        body: body.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        ready(Ok(out))
+    }
+
+    fn stix_contributions(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ioc_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<(String, i64, String)>> {
+        let g = self.lock();
+        let wanted: std::collections::HashSet<String> = ioc_ids.into_iter().collect();
+        let out = g
+            .stix
+            .get(&(tenant_id.to_string(), collection.to_string()))
+            .map(|l| {
+                l.contributions
+                    .iter()
+                    .filter(|((live, _, _, ioc), _)| *live && wanted.contains(ioc))
+                    .map(|((_, d, _, ioc), body)| (ioc.clone(), *d, body.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        ready(Ok(out))
+    }
+
+    fn stix_published(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ioc_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<PublishedIoc>> {
+        let g = self.lock();
+        let out = g
+            .stix
+            .get(&(tenant_id.to_string(), collection.to_string()))
+            .map(|l| {
+                ioc_ids
+                    .into_iter()
+                    .filter_map(|id| {
+                        l.published
+                            .get(&id)
+                            .map(|(t, v)| (id.clone(), t.clone(), v.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        ready(Ok(out))
+    }
+
+    fn stix_set_published(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        add: Vec<PublishedIoc>,
+        remove: Vec<String>,
+        fence: i64,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        let log = g
+            .stix
+            .entry((tenant_id.to_string(), collection.to_string()))
+            .or_default();
+        if let Err(e) = log.fence(fence) {
+            return ready(Err(e));
+        }
+        for id in remove {
+            log.published.remove(&id);
+        }
+        for (id, t, v) in add {
+            log.published.insert(id, (t, v));
+        }
+        ready(Ok(()))
+    }
+
+    fn stix_pending(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        step: PendingStep,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<String>> {
+        let g = self.lock();
+        let out = g
+            .stix
+            .get(&(tenant_id.to_string(), collection.to_string()))
+            .map(|l| {
+                l.pending
+                    .iter()
+                    .filter(|(s, _)| *s == step.as_str())
+                    .take(limit)
+                    .map(|(_, id)| id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        ready(Ok(out))
+    }
+
+    fn stix_pending_move(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ids: Vec<String>,
+        from: PendingStep,
+        to: Option<PendingStep>,
+        fence: i64,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        let log = g
+            .stix
+            .entry((tenant_id.to_string(), collection.to_string()))
+            .or_default();
+        if let Err(e) = log.fence(fence) {
+            return ready(Err(e));
+        }
+        for id in ids {
+            log.pending.remove(&(from.as_str(), id.clone()));
+            if let Some(t) = to {
+                log.pending.insert((t.as_str(), id));
+            }
+        }
+        ready(Ok(()))
+    }
+
+    fn stix_lease(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        holder: &str,
+        now: i64,
+        ttl_ms: i64,
+    ) -> StoreFuture<'_, Option<i64>> {
+        let mut g = self.lock();
+        let log = g
+            .stix
+            .entry((tenant_id.to_string(), collection.to_string()))
+            .or_default();
+        let out = match &log.lease {
+            Some((h, _)) if h == holder => {
+                log.lease = Some((holder.to_string(), now + ttl_ms));
+                Some(log.generation)
+            }
+            Some((_, exp)) if *exp >= now => None,
+            _ => {
+                log.generation += 1;
+                log.lease = Some((holder.to_string(), now + ttl_ms));
+                Some(log.generation)
+            }
+        };
+        ready(Ok(out))
+    }
+
+    fn stix_release(&self, tenant_id: &str, collection: &str, holder: &str) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        if let Some(log) = g
+            .stix
+            .get_mut(&(tenant_id.to_string(), collection.to_string()))
+            && log.lease.as_ref().is_some_and(|(h, _)| h == holder)
+        {
+            log.lease = None;
+        }
+        ready(Ok(()))
+    }
+
+    fn stix_tenants(&self, collection: &str) -> StoreFuture<'_, Vec<String>> {
+        let tenants: Vec<String> = self
+            .lock()
+            .stix
+            .iter()
+            .filter(|((_, c), log)| {
+                c == collection
+                    && !(log.created.is_empty() && log.days.is_empty() && log.pending.is_empty())
+            })
+            .map(|((t, _), _)| t.clone())
+            .collect();
+        ready(Ok(tenants))
+    }
+
+    fn stix_cron_cursor(&self, collection: &str) -> StoreFuture<'_, Option<String>> {
+        ready(Ok(self.lock().stix_cron.get(collection).cloned()))
+    }
+
+    fn put_stix_cron_cursor(&self, collection: &str, tenant_id: &str) -> StoreFuture<'_, ()> {
+        self.lock()
+            .stix_cron
+            .insert(collection.to_string(), tenant_id.to_string());
+        ready(Ok(()))
+    }
+
+    fn stix_day_inputs(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        now: i64,
+    ) -> StoreFuture<'_, String> {
+        use sha2::{Digest, Sha256};
+        let g = self.lock();
+        let Some(log) = g.stix.get(&(tenant_id.to_string(), collection.to_string())) else {
+            return ready(Ok(String::new()));
+        };
+        let attempts: std::collections::BTreeSet<&String> = log
+            .attempts
+            .keys()
+            .filter(|(live, d, _)| *live && *d == day_ms)
+            .map(|(_, _, a)| a)
+            .collect();
+        let mut h = Sha256::new();
+        for (t, o) in &g.overrides {
+            if t == tenant_id && attempts.contains(&o.attempt_id) {
+                h.update(format!(
+                    "o|{}|{:?}|{}|{:?}\n",
+                    o.attempt_id, o.kind, o.target, o.decision
+                ));
+            }
+        }
+        let mut campaigns = std::collections::BTreeSet::new();
+        if let Some(r) = g.campaign_registry.get(tenant_id) {
+            for a in &attempts {
+                if let Some(c) = r.members.get(*a) {
+                    h.update(format!("m|{a}|{c}\n"));
+                    campaigns.insert(c.clone());
+                }
+            }
+            for c in &campaigns {
+                if let Some(rec) = r.campaigns.get(c) {
+                    h.update(format!("c|{rec:?}\n"));
+                }
+            }
+        }
+        for (t, a) in &g.campaign_actions {
+            if t == tenant_id && campaigns.contains(&a.campaign_id) {
+                h.update(format!("a|{a:?}\n"));
+            }
+        }
+        // Enrichment for the day's addresses.
+        let addresses: std::collections::BTreeSet<String> = log
+            .contributions
+            .iter()
+            .filter(|((live, d, _, _), _)| *live && *d == day_ms)
+            .filter_map(|(_, body)| {
+                let v: serde_json::Value = serde_json::from_str(body).ok()?;
+                matches!(v["ioc_type"].as_str(), Some("ip" | "ipv6"))
+                    .then(|| v["value"].as_str().map(str::to_string))
+                    .flatten()
+            })
+            .collect();
+        for e in &g.cache {
+            if e.tenant_id.as_deref().is_none_or(|t| t == tenant_id)
+                && matches!(e.observable.kind.as_str(), "ip")
+                && addresses.contains(&e.observable.value)
+                && e.is_fresh(now)
+            {
+                h.update(format!("e|{}\n", crate::routes::taxii::cache_row_input(e)));
+            }
+        }
+        ready(Ok(hex::encode(h.finalize())))
     }
 
     fn token(&self, id: &str) -> StoreFuture<'_, Option<TokenRecord>> {

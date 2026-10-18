@@ -30,10 +30,13 @@ use crate::auth::{ClientCert, ClientMeta};
 use crate::d1_sql as sql;
 use crate::issuer::{CertIssuer, IssuedCert, IssuerError, IssuerFuture};
 use crate::routes::ingest::UploadConfig;
+use std::collections::BTreeMap;
+
 use crate::store::{
-    AgentCerts, AgentQuery, AuditQuery, BudgetOutcome, DecoyQuery, EnrolmentTokenRecord,
-    IdentityRecord, IpIocRow, JobRecord, LinkOverride, NewCert, Store, StoreError, StoreFuture,
-    TokenRecord,
+    AgentCerts, AgentQuery, AuditQuery, BudgetOutcome, DayAttempt, DayRecord, DecoyQuery,
+    EnrolmentTokenRecord, Evidence, History, IdentityRecord, IpIocRow, JobRecord, LinkOverride,
+    LogQuery, NewCert, NewVersion, PendingStep, PublishedIoc, StixVersion, Store, StoreError,
+    StoreFuture, TokenRecord,
 };
 use crate::{AppState, router};
 
@@ -191,10 +194,18 @@ fn upload_config(env: &Env) -> Option<UploadConfig> {
     })
 }
 
-/// Hourly cron (`triggers` in `wrangler.jsonc`): purge the enrichment
-/// tables (#16), a bounded batch per run (`enrichment::purge`).
+/// Cron that purges the enrichment tables (#16), hourly.
+const PURGE_CRON: &str = "17 * * * *";
+
+/// The scheduled handler (`triggers` in `wrangler.jsonc`). workers-rs
+/// allows one per Worker, so the schedule decides: [`PURGE_CRON`] purges
+/// the enrichment tables, a bounded batch per run (`enrichment::purge`);
+/// every other schedule is the TAXII materialiser (#13), one bounded tick
+/// over the tenants with recent events, starting after the tenant the last
+/// tick ended on (`routes::taxii::materialise_all`). Failures are logged
+/// and retried by the next run.
 #[event(scheduled)]
-async fn purge(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
+async fn scheduled(event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
     let store = match (env.d1("DB"), env.hyperdrive("HYPERDRIVE")) {
         (Ok(db), Ok(hyperdrive)) => CfStore {
             db,
@@ -202,18 +213,25 @@ async fn purge(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleC
             ingest: None,
         },
         _ => {
-            worker::console_error!("purge: D1 or Hyperdrive binding missing");
+            worker::console_error!("scheduled: D1 or Hyperdrive binding missing");
             return;
         }
     };
-    match crate::enrichment::purge(&store, now_ms()).await {
-        Ok(c) => worker::console_log!(
-            "purge: enrichment expired {}, past retention {}, failures {}",
-            c.expired,
-            c.past_retention,
-            c.failures
-        ),
-        Err(_) => worker::console_error!("purge: enrichment purge failed; next run retries"),
+    if event.cron() == PURGE_CRON {
+        match crate::enrichment::purge(&store, now_ms()).await {
+            Ok(c) => worker::console_log!(
+                "purge: enrichment expired {}, past retention {}, failures {}",
+                c.expired,
+                c.past_retention,
+                c.failures
+            ),
+            Err(_) => worker::console_error!("purge: enrichment purge failed; next run retries"),
+        }
+        return;
+    }
+    let state = AppState::new(Arc::new(store), Arc::new(now_ms));
+    if let Err(e) = crate::routes::taxii::materialise_all(&state).await {
+        worker::console_error!("materialiser: {}", e.message);
     }
     sync_actor_catalogue(&env).await;
 }
@@ -1119,6 +1137,18 @@ impl CfStore {
     }
 }
 
+/// D1 statements one day's enrichment digest may use (98 addresses each).
+const DAY_INPUT_LOOKUP_STATEMENTS: usize = 10;
+
+/// A day record as its Postgres row; progress is stored as JSON.
+fn day_row(day_ms: i64, r: DayRecord) -> Result<foiled_pg::DayRow, StoreError> {
+    let progress = match &r.progress {
+        None => None,
+        Some(p) => Some(serde_json::to_string(p).map_err(|e| StoreError(e.to_string()))?),
+    };
+    Ok((day_ms, r.signature, r.ids, progress, r.served_ms))
+}
+
 impl Store for CfStore {
     fn token(&self, id: &str) -> StoreFuture<'_, Option<TokenRecord>> {
         let id = id.to_string();
@@ -1807,6 +1837,476 @@ impl Store for CfStore {
             foiled_pg::events_between(&client, &t, since, until, limit as i64)
                 .await
                 .map_err(err)
+        })
+    }
+
+    fn event_signature(&self, tenant_id: &str, since: i64, until: i64) -> StoreFuture<'_, String> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::event_signature(&client, &t, since, until)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_tenants(&self, collection: &str) -> StoreFuture<'_, Vec<String>> {
+        let c = collection.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::stix_tenants(&client, &c).await.map_err(err)
+        })
+    }
+
+    fn tenants_with_events(&self, since: i64) -> StoreFuture<'_, Vec<String>> {
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::tenants_with_events(&client, since)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_history(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ids: Vec<String>,
+    ) -> StoreFuture<'_, BTreeMap<String, History>> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            if ids.is_empty() {
+                return Ok(BTreeMap::new());
+            }
+            let client = self.pg().await?;
+            let rows = foiled_pg::stix_history(&client, &t, &c, &ids)
+                .await
+                .map_err(err)?;
+            Ok(rows
+                .into_iter()
+                .map(|(id, created, latest, latest_hash, revoked)| {
+                    (
+                        id,
+                        History {
+                            created,
+                            latest,
+                            latest_hash,
+                            revoked,
+                        },
+                    )
+                })
+                .collect())
+        })
+    }
+
+    fn stix_append(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        versions: Vec<NewVersion>,
+        evidence: Vec<Evidence>,
+        now: i64,
+        fence: i64,
+    ) -> StoreFuture<'_, u64> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let rows: Vec<foiled_pg::VersionRow> = versions
+                .into_iter()
+                .map(|v| foiled_pg::VersionRow {
+                    id: v.id,
+                    version: v.version,
+                    created: v.created,
+                    object_type: v.object_type,
+                    content: v.content,
+                    content_sha256: v.content_sha256,
+                    refs: v.refs,
+                })
+                .collect();
+            let ev: Vec<(String, i64)> = evidence
+                .into_iter()
+                .map(|e| (e.id, e.evidence_ms))
+                .collect();
+            let client = self.pg().await?;
+            foiled_pg::stix_append(&client, &t, &c, &rows, &ev, now, fence)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_query(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        q: LogQuery,
+    ) -> StoreFuture<'_, Vec<StixVersion>> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let versions = foiled_pg::VersionMatch {
+                first: q.versions.first,
+                last: q.versions.last,
+                all: q.versions.all,
+                exact: q.versions.exact.clone(),
+            };
+            let client = self.pg().await?;
+            let rows = foiled_pg::stix_query(
+                &client,
+                &t,
+                &c,
+                q.added_after,
+                q.after
+                    .as_ref()
+                    .map(|a| (a.date_added, a.id.as_str(), a.version.as_str())),
+                q.ids.as_deref(),
+                q.types.as_deref(),
+                &versions,
+                q.limit as i64,
+            )
+            .await
+            .map_err(err)?;
+            Ok(rows
+                .into_iter()
+                .map(|r| StixVersion {
+                    id: r.id,
+                    object_type: r.object_type,
+                    version: r.version,
+                    date_added: r.date_added,
+                    content: r.content,
+                })
+                .collect())
+        })
+    }
+
+    fn stix_purge(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        evidence_before: i64,
+        fence: i64,
+    ) -> StoreFuture<'_, u64> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::stix_purge(&client, &t, &c, evidence_before, fence)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_days(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+    ) -> StoreFuture<'_, BTreeMap<i64, DayRecord>> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::stix_days(&client, &t, &c)
+                .await
+                .map_err(err)?
+                .into_iter()
+                .map(|(day, signature, ids, progress, served_ms)| {
+                    let progress = match progress {
+                        None => None,
+                        Some(p) => Some(serde_json::from_str(&p).map_err(|e| {
+                            StoreError(format!("materialiser progress for day {day}: {e}"))
+                        })?),
+                    };
+                    Ok((
+                        day,
+                        DayRecord {
+                            signature,
+                            ids,
+                            progress,
+                            served_ms,
+                        },
+                    ))
+                })
+                .collect()
+        })
+    }
+
+    fn put_stix_day(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        record: DayRecord,
+        fence: i64,
+    ) -> StoreFuture<'_, ()> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let row = day_row(day_ms, record)?;
+            let client = self.pg().await?;
+            foiled_pg::put_stix_day(&client, &t, &c, &row, fence)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_stage_part(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        part: u32,
+        attempts: Vec<DayAttempt>,
+        contributions: Vec<(String, String)>,
+        record: DayRecord,
+        fence: i64,
+    ) -> StoreFuture<'_, ()> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let row = day_row(day_ms, record)?;
+            let attempts: Vec<foiled_pg::AttemptRow> = attempts
+                .into_iter()
+                .map(|a| (a.attempt_id, a.body))
+                .collect();
+            let part = i32::try_from(part).map_err(|_| StoreError("too many parts".into()))?;
+            let client = self.pg().await?;
+            foiled_pg::stix_stage_part(
+                &client,
+                &t,
+                &c,
+                part,
+                &attempts,
+                &contributions,
+                &row,
+                fence,
+            )
+            .await
+            .map_err(err)
+        })
+    }
+
+    fn stix_promote_day(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        record: DayRecord,
+        fence: i64,
+    ) -> StoreFuture<'_, ()> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let row = day_row(day_ms, record)?;
+            let client = self.pg().await?;
+            foiled_pg::stix_promote_day(&client, &t, &c, &row, fence)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_day_attempts(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        after: Option<String>,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<DayAttempt>> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            Ok(foiled_pg::stix_day_attempts(
+                &client,
+                &t,
+                &c,
+                day_ms,
+                after.as_deref(),
+                limit as i64,
+            )
+            .await
+            .map_err(err)?
+            .into_iter()
+            .map(|(attempt_id, body)| DayAttempt { attempt_id, body })
+            .collect())
+        })
+    }
+
+    fn stix_published(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ioc_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<PublishedIoc>> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            if ioc_ids.is_empty() {
+                return Ok(vec![]);
+            }
+            let client = self.pg().await?;
+            foiled_pg::stix_published(&client, &t, &c, &ioc_ids)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_set_published(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        add: Vec<PublishedIoc>,
+        remove: Vec<String>,
+        fence: i64,
+    ) -> StoreFuture<'_, ()> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::stix_set_published(&client, &t, &c, &add, &remove, fence)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_contributions(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ioc_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<(String, i64, String)>> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            if ioc_ids.is_empty() {
+                return Ok(vec![]);
+            }
+            let client = self.pg().await?;
+            foiled_pg::stix_contributions(&client, &t, &c, &ioc_ids)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_pending(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        step: PendingStep,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<String>> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::stix_pending(&client, &t, &c, step.as_str(), limit as i64)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_pending_move(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ids: Vec<String>,
+        from: PendingStep,
+        to: Option<PendingStep>,
+        fence: i64,
+    ) -> StoreFuture<'_, ()> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::stix_pending_move(
+                &client,
+                &t,
+                &c,
+                &ids,
+                from.as_str(),
+                to.map(PendingStep::as_str),
+                fence,
+            )
+            .await
+            .map_err(err)
+        })
+    }
+
+    fn stix_lease(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        holder: &str,
+        _now: i64,
+        ttl_ms: i64,
+    ) -> StoreFuture<'_, Option<i64>> {
+        let (t, c, h) = (
+            tenant_id.to_string(),
+            collection.to_string(),
+            holder.to_string(),
+        );
+        wrap(async move {
+            let client = self.pg().await?;
+            // Expiry by the database clock, not the Worker's.
+            foiled_pg::stix_lease(&client, &t, &c, &h, ttl_ms)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_release(&self, tenant_id: &str, collection: &str, holder: &str) -> StoreFuture<'_, ()> {
+        let (t, c, h) = (
+            tenant_id.to_string(),
+            collection.to_string(),
+            holder.to_string(),
+        );
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::stix_release(&client, &t, &c, &h)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_cron_cursor(&self, collection: &str) -> StoreFuture<'_, Option<String>> {
+        let c = collection.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::stix_cron_cursor(&client, &c).await.map_err(err)
+        })
+    }
+
+    fn put_stix_cron_cursor(&self, collection: &str, tenant_id: &str) -> StoreFuture<'_, ()> {
+        let (c, t) = (collection.to_string(), tenant_id.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::put_stix_cron_cursor(&client, &c, &t)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn stix_day_inputs(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        now: i64,
+    ) -> StoreFuture<'_, String> {
+        let (t, c) = (tenant_id.to_string(), collection.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            let (sig, addresses) = foiled_pg::stix_day_inputs(&client, &t, &c, day_ms)
+                .await
+                .map_err(err)?;
+            // The enrichment cache (D1) rows for the day's addresses.
+            let observables: Vec<Observable> = addresses
+                .iter()
+                .filter_map(|a| Observable::ip(a).ok())
+                .collect();
+            let mut rows: Vec<String> = self
+                .enrichment_cache(
+                    observables,
+                    now,
+                    DAY_INPUT_LOOKUP_STATEMENTS,
+                    Some(t.clone()),
+                )
+                .await?
+                .iter()
+                .map(crate::routes::taxii::cache_row_input)
+                .collect();
+            rows.sort();
+            use sha2::{Digest, Sha256};
+            Ok(format!(
+                "{sig}|{}",
+                hex::encode(Sha256::digest(rows.join("\n").as_bytes()))
+            ))
         })
     }
 

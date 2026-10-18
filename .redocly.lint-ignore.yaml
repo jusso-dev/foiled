@@ -11,4 +11,5 @@ api/openapi.yaml:
     - '#/paths/~1taxii2~1foiled~1collections~1{collection_id}~1'
     - '#/paths/~1taxii2~1foiled~1collections~1{collection_id}~1objects~1'
     - '#/paths/~1taxii2~1foiled~1collections~1{collection_id}~1objects~1{object_id}~1'
+    - '#/paths/~1taxii2~1foiled~1collections~1{collection_id}~1objects~1{object_id}~1versions~1'
     - '#/paths/~1taxii2~1foiled~1collections~1{collection_id}~1manifest~1'

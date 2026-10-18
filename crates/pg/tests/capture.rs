@@ -153,3 +153,35 @@ async fn events_between_is_half_open_and_tenant_scoped() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn events_after_continues_within_one_millisecond() {
+    let c = connect().await;
+    let tenant = format!("after-{}", std::process::id());
+    let base = stamped(fixture("http-upload.json"), &tenant);
+    let events: Vec<CaptureEvent> = (0..5)
+        .map(|n| {
+            let mut e = base.clone();
+            e.event_id = format!("burst-{n}");
+            e.ts = 1_000;
+            e
+        })
+        .chain(std::iter::once({
+            let mut e = base.clone();
+            e.event_id = "later".into();
+            e.ts = 2_000;
+            e
+        }))
+        .collect();
+    insert_events(&c, &events, 1).await.unwrap();
+    let got = foiled_pg::events_after(&c, &tenant, 1_000, "burst-2", 3_000, 10)
+        .await
+        .unwrap();
+    let ids: Vec<&str> = got.iter().map(|e| e.event_id.as_str()).collect();
+    assert_eq!(ids, vec!["burst-3", "burst-4", "later"]);
+    let capped = foiled_pg::events_after(&c, &tenant, 1_000, "burst-2", 3_000, 1)
+        .await
+        .unwrap();
+    assert_eq!(capped[0].event_id, "burst-3");
+}

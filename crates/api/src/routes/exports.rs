@@ -92,6 +92,10 @@ pub struct ExportQuery {
     pub tlp: Option<String>,
     /// From `x-foiled-next-cursor`: continue a cut export after this event.
     pub cursor: Option<String>,
+    /// Only attempts whose first event is in `[start, end)` (the TAXII
+    /// materialiser's day ownership). Never read from a query string.
+    #[serde(skip)]
+    pub owned: Option<(i64, i64)>,
 }
 
 /// Parse a TLP label. `+` arrives as a space in a query string, and
@@ -132,6 +136,7 @@ impl ExportQuery {
             state: self.state,
             campaign_id: self.campaign_id.clone(),
             decoy_kind: self.decoy_kind,
+            first_seen: self.owned,
             include_unreviewed: self.include_unreviewed,
             include_actors: self.include_actors,
             include_payloads: self.include_payloads,
@@ -244,6 +249,20 @@ pub struct Built {
     /// Names this export for MISP event ids: a digest of the tenant, the
     /// options and the window, so the tenant id itself never appears.
     pub scope: String,
+    /// With `owned` set (the TAXII materialiser): the owned attempts' IOCs
+    /// before the gate, extracted from those attempts only, and what each
+    /// attempt adds to IOC confidence, for the day's IOC contributions.
+    pub owned: Option<OwnedIocs>,
+}
+
+/// See [`Built::owned`].
+pub struct OwnedIocs {
+    /// Payload strings left out, as `select` leaves them out by default.
+    pub iocs: Vec<Ioc>,
+    pub evidence: BTreeMap<String, foiled_core::ioc::AttemptEvidence>,
+    /// The owned attempts as scored, before the gate, so their objects can
+    /// be built later against the gate decision over every day.
+    pub records: Vec<AttemptRecord>,
 }
 
 /// Build the gated selection for a tenant. `format` names the output for
@@ -335,6 +354,33 @@ pub(crate) async fn selection_capped(
         .collect();
     let ids: Vec<String> = attempts.iter().map(|a| a.attempt_id.clone()).collect();
     let kept: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+    // A day's share of each IOC counts only the attempts the day owns, so
+    // adding days never counts an attempt twice.
+    let owned = q.owned.map(|_| {
+        let x = foiled_core::ioc::extract(
+            &attempts,
+            &m.events,
+            &ConfidenceConfig::default(),
+            foiled_core::ioc::ExtractOptions::default(),
+        );
+        OwnedIocs {
+            iocs: x
+                .iocs
+                .into_iter()
+                .filter(|i| opts.include_payloads || !foiled_core::intel::payload_string(i))
+                .collect(),
+            evidence: attempts
+                .iter()
+                .map(|a| {
+                    (
+                        a.attempt_id.clone(),
+                        foiled_core::ioc::AttemptEvidence::of(a),
+                    )
+                })
+                .collect(),
+            records: Vec::new(),
+        }
+    });
     let overrides = if ids.is_empty() {
         OverrideIndex::new()
     } else {
@@ -365,6 +411,10 @@ pub(crate) async fn selection_capped(
             actors: Some(&actor_links),
         },
     );
+    let mut owned = owned;
+    if let Some(o) = &mut owned {
+        o.records = input.attempts.clone();
+    }
     let scope = {
         use sha2::{Digest, Sha256};
         let key = format!(
@@ -388,6 +438,7 @@ pub(crate) async fn selection_capped(
         truncated: m.truncated,
         cut: m.cut,
         scope,
+        owned,
     })
 }
 
@@ -462,6 +513,7 @@ async fn misp_event(
         truncated,
         cut,
         scope,
+        ..
     } = selection(&state, who, &q, "misp").await?;
     let body = misp::event(&sel, &scope).to_string();
     Ok(download(

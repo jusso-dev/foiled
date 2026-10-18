@@ -2349,9 +2349,8 @@ paths:
       tags: [taxii]
       operationId: taxiiDiscovery
       summary: TAXII 2.1 discovery
-      description: Planned as a follow-up to #13, served from a materialised STIX object log. Lists the one API root. Bearer token with `exports:read`, as for every TAXII endpoint.
-      x-foiled-status: planned
-      x-foiled-issue: 13
+      description: Lists the one API root. Bearer token with `exports:read`, as for every TAXII endpoint. Served from the materialised STIX object log (`docs/intel-outputs.md#taxii-21`). Bearer token with `exports:read`, as for every TAXII endpoint.
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
       responses:
@@ -2376,8 +2375,7 @@ paths:
       tags: [taxii]
       operationId: taxiiApiRoot
       summary: TAXII 2.1 API root
-      x-foiled-status: planned
-      x-foiled-issue: 13
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
       responses:
@@ -2402,8 +2400,7 @@ paths:
       tags: [taxii]
       operationId: taxiiCollections
       summary: TAXII 2.1 collections
-      x-foiled-status: planned
-      x-foiled-issue: 13
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
       responses:
@@ -2424,8 +2421,7 @@ paths:
       tags: [taxii]
       operationId: taxiiCollection
       summary: TAXII 2.1 collection
-      x-foiled-status: planned
-      x-foiled-issue: 13
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
       parameters:
@@ -2447,19 +2443,18 @@ paths:
       operationId: taxiiObjects
       summary: TAXII 2.1 objects
       description: |
-        The objects `/v0/exports/stix` builds with default options
-        (publishable only, TLP:AMBER), sorted by `date_added` then id.
-        Each page reads events from its own position (`next`, else
-        `added_after`, else 7 days ago; never more than 30 days back), at
-        most 4,000 per page; a cut window answers `more: true` with a
-        `next`, even on a short page. An object's `date_added` is never
-        earlier than that of any object referring to it, so `added_after`
-        polls never strand a reference. `added_after` is exclusive. Pages
-        hold at most `limit` objects (default 100, at most 1000); follow
-        `next` while `more` is true. `X-TAXII-Date-Added-First` and
-        `X-TAXII-Date-Added-Last` describe the page.
-      x-foiled-status: planned
-      x-foiled-issue: 13
+        Stored object versions from the materialised log, the latest
+        version of each object by default (`match[version]`: a comma list
+        of `last`, `first`, `all` and exact versions, matching any of them).
+        Nothing is rebuilt on a request.
+        Rows sort by `date_added`, then id and version; every append gets
+        a `date_added` after every row before it, so paging never skips or
+        repeats a row, and an id and version always name the same content.
+        `added_after` is exclusive. Pages hold at most `limit` objects
+        (default 100, at most 1000); follow `next` while `more` is true.
+        `X-TAXII-Date-Added-First` and `X-TAXII-Date-Added-Last` describe
+        the page.
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
       parameters:
@@ -2484,13 +2479,16 @@ paths:
       tags: [taxii]
       operationId: taxiiObject
       summary: TAXII 2.1 object by id
-      x-foiled-status: planned
-      x-foiled-issue: 13
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
       parameters:
         - { $ref: "#/components/parameters/TaxiiCollectionId" }
         - { name: object_id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/TaxiiAddedAfter" }
+        - { $ref: "#/components/parameters/TaxiiLimit" }
+        - { $ref: "#/components/parameters/TaxiiNext" }
+        - { name: "match[version]", in: query, schema: { type: string } }
       responses:
         "200": { $ref: "#/components/responses/TaxiiEnvelope" }
         "401": { $ref: "#/components/responses/TaxiiError" }
@@ -2498,13 +2496,89 @@ paths:
         "404": { $ref: "#/components/responses/TaxiiError" }
         "406": { $ref: "#/components/responses/TaxiiError" }
 
+  /taxii2/foiled/collections/{collection_id}/objects/{object_id}/versions/:
+    get:
+      tags: [taxii]
+      operationId: taxiiObjectVersions
+      summary: TAXII 2.1 object versions
+      description: Every stored version of one object, oldest first.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [exports:read]
+      parameters:
+        - { $ref: "#/components/parameters/TaxiiCollectionId" }
+        - { name: object_id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/TaxiiAddedAfter" }
+        - { $ref: "#/components/parameters/TaxiiLimit" }
+        - { $ref: "#/components/parameters/TaxiiNext" }
+      responses:
+        "200":
+          description: The versions.
+          content:
+            application/taxii+json;version=2.1:
+              schema:
+                type: object
+                required: [more]
+                properties:
+                  more: { type: boolean }
+                  next: { type: string }
+                  versions: { type: array, items: { type: string } }
+        "400": { $ref: "#/components/responses/TaxiiError" }
+        "401": { $ref: "#/components/responses/TaxiiError" }
+        "403": { $ref: "#/components/responses/TaxiiError" }
+        "404": { $ref: "#/components/responses/TaxiiError" }
+        "406": { $ref: "#/components/responses/TaxiiError" }
+
+  /v0/taxii/materialise:
+    post:
+      tags: [taxii]
+      operationId: materialiseTaxii
+      summary: Write new STIX object versions to the TAXII log now
+      description: |
+        Runs the materialiser for the caller's tenant: the published view
+        (publishable only, TLP:AMBER) of the last 7 UTC days, built day by
+        day and staged, then published in reference order: indicators,
+        sightings, observables and malware merged over every day's
+        contribution, so they never depend on which day ran last. A
+        version is appended only for content an object does not already
+        have as its head. Objects whose evidence is older than the attempt
+        TTL are purged (#16). A run does a bounded amount of work; with
+        `incomplete: true` the next run continues from the stored progress.
+        One run per tenant at a time: while the scheduled run or another
+        request holds the tenant, this returns 409. Audited as
+        `taxii.materialise`.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [admin]
+      responses:
+        "200":
+          description: What the run did.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [days_written, days_skipped, parts, chunks, versions_written, unchanged, revoked, reissued, purged, incomplete]
+                properties:
+                  days_written: { type: integer }
+                  days_skipped: { type: integer }
+                  parts: { type: integer }
+                  chunks: { type: integer }
+                  versions_written: { type: integer }
+                  unchanged: { type: integer }
+                  revoked: { type: integer }
+                  reissued: { type: integer }
+                  purged: { type: integer }
+                  incomplete: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /taxii2/foiled/collections/{collection_id}/manifest/:
     get:
       tags: [taxii]
       operationId: taxiiManifest
       summary: TAXII 2.1 manifest
-      x-foiled-status: planned
-      x-foiled-issue: 13
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
       parameters:

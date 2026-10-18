@@ -1339,18 +1339,55 @@ fn evidence(
     }
 }
 
+/// What one attempt adds to the confidence of the IOCs seen in it: its
+/// vulnerable-path trigger hook, whether a tier 1 signature matched, and
+/// its noise score. Kept on its own so the TAXII materialiser can score an
+/// IOC over attempts from several windows exactly as one window would.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttemptEvidence {
+    /// `(hook_id, event_id)` of the first trigger-stage hook hit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook: Option<(String, String)>,
+    #[serde(default)]
+    pub signature: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise: Option<u8>,
+}
+
+impl AttemptEvidence {
+    pub fn of(a: &Attempt) -> Self {
+        AttemptEvidence {
+            hook: a
+                .hook_hits
+                .iter()
+                .find(|h| h.stage == HookStage::Trigger)
+                .map(|h| (h.hook_id.clone(), h.event_id.clone())),
+            signature: a
+                .state_history
+                .iter()
+                .any(|c| c.signal == StateSignal::Matcher),
+            noise: a.noise.as_ref().map(|n| n.score),
+        }
+    }
+}
+
 /// Score the indicator with #27. Evidence: the decoys it was seen at (a
 /// decoy has no legitimate users, so this is a catalogue-style prior that
 /// never publishes alone), vulnerable-path hooks and signatures in the
 /// attempts it was seen in, and the lowest noise score of those attempts.
-fn confidence(
+/// `decoys` and `attempts` must be in id order; the first
+/// [`MAX_CONFIDENCE_ITEMS`] of each count. An attempt missing from
+/// `attempts` adds nothing.
+pub fn ioc_confidence<'a>(
     cfg: &ConfidenceConfig,
     id: &str,
-    acc: &Acc,
-    attempts: &BTreeMap<&str, &Attempt>,
+    first_attempt: &str,
+    decoys: impl Iterator<Item = &'a String>,
+    attempts: impl Iterator<Item = (&'a String, Option<&'a AttemptEvidence>)>,
 ) -> IocConfidence {
     let mut ev = Vec::new();
-    for d in acc.decoys.iter().take(MAX_CONFIDENCE_ITEMS) {
+    for d in decoys.take(MAX_CONFIDENCE_ITEMS) {
         ev.push(evidence(
             format!("decoy:{d}"),
             EvidenceSource::CataloguePrior,
@@ -1360,26 +1397,20 @@ fn confidence(
         ));
     }
     let mut noise: Option<u8> = None;
-    for aid in acc.attempts.iter().take(MAX_CONFIDENCE_ITEMS) {
-        let Some(a) = attempts.get(aid.as_str()) else {
+    for (aid, a) in attempts.take(MAX_CONFIDENCE_ITEMS) {
+        let Some(a) = a else {
             continue;
         };
-        if let Some(h) = a.hook_hits.iter().find(|h| h.stage == HookStage::Trigger) {
+        if let Some((hook_id, event_id)) = &a.hook {
             ev.push(evidence(
-                format!("hook:{aid}:{}", h.hook_id),
+                format!("hook:{aid}:{hook_id}"),
                 EvidenceSource::VulnPathHook,
                 100,
-                format!(
-                    "seen in attempt {aid}, where vulnerable-path hook {} fired",
-                    h.hook_id
-                ),
-                Some(h.event_id.clone()),
+                format!("seen in attempt {aid}, where vulnerable-path hook {hook_id} fired"),
+                Some(event_id.clone()),
             ));
         }
-        if a.state_history
-            .iter()
-            .any(|c| c.signal == StateSignal::Matcher)
-        {
+        if a.signature {
             ev.push(evidence(
                 format!("signature:{aid}"),
                 EvidenceSource::Rule,
@@ -1388,8 +1419,8 @@ fn confidence(
                 None,
             ));
         }
-        if let Some(n) = &a.noise {
-            noise = Some(noise.map_or(n.score, |m| m.min(n.score)));
+        if let Some(n) = a.noise {
+            noise = Some(noise.map_or(n, |m| m.min(n)));
         }
     }
     if let Some(n) = noise {
@@ -1401,7 +1432,7 @@ fn confidence(
             None,
         ));
     }
-    match score(cfg, LinkKind::AttemptIoc, &acc.first_attempt, id, ev, None) {
+    match score(cfg, LinkKind::AttemptIoc, first_attempt, id, ev, None) {
         Some(l) => IocConfidence {
             score: l.score,
             band: l.band,
@@ -1421,6 +1452,21 @@ fn confidence(
     }
 }
 
+fn confidence(
+    cfg: &ConfidenceConfig,
+    id: &str,
+    acc: &Acc,
+    attempts: &BTreeMap<&str, AttemptEvidence>,
+) -> IocConfidence {
+    ioc_confidence(
+        cfg,
+        id,
+        &acc.first_attempt,
+        acc.decoys.iter(),
+        acc.attempts.iter().map(|a| (a, attempts.get(a.as_str()))),
+    )
+}
+
 const MEMORY_ONLY_NOTE: &str = "Post-exploitation activity was seen but no file was captured, so the \
     implant may be memory-resident. File IOCs are limited and no file hash is reported; use the \
     command line, behaviour fingerprint and network callback indicators instead.";
@@ -1438,9 +1484,9 @@ pub fn extract(
 ) -> Extraction {
     let by_id: BTreeMap<&str, &CaptureEvent> =
         events.iter().map(|e| (e.event_id.as_str(), e)).collect();
-    let attempt_index: BTreeMap<&str, &Attempt> = attempts
+    let attempt_index: BTreeMap<&str, AttemptEvidence> = attempts
         .iter()
-        .map(|a| (a.attempt_id.as_str(), a))
+        .map(|a| (a.attempt_id.as_str(), AttemptEvidence::of(a)))
         .collect();
     let mut accs: BTreeMap<String, Acc> = BTreeMap::new();
     let mut per_attempt = Vec::new();

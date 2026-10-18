@@ -40,6 +40,20 @@ pub fn attack_sidecar() -> &'static foiled_core::attack::AttackSidecar {
 static ACTOR_REPORTS: &str = include_str!(concat!(env!("OUT_DIR"), "/actor_reports.json"));
 static ATTACK_GROUPS: &str = include_str!("../../../data/attack/groups.json");
 
+/// SHA-256 (hex) over every bundled rule pack and the ATT&CK sidecar, so
+/// the TAXII materialiser (#13) rebuilds days when a rule changes.
+pub fn rules_digest() -> &'static str {
+    use sha2::{Digest, Sha256};
+    static DIGEST: OnceLock<String> = OnceLock::new();
+    DIGEST.get_or_init(|| {
+        let mut h = Sha256::new();
+        for part in [RULES, MATCHERS, SEQUENCES, ADVISORIES, ATTACK_SIDECAR] {
+            h.update(Sha256::digest(part.as_bytes()));
+        }
+        hex::encode(h.finalize())
+    })
+}
+
 /// The ATT&CK rules bundled at build time. Validated by `foiled-lint` in CI,
 /// so a parse failure is a build bug.
 pub fn attack_rules() -> &'static [AttackRule] {

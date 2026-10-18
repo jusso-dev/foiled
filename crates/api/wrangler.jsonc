@@ -63,8 +63,12 @@
   // ThreatSieve add the THREATSIEVE binding to their private copy of this
   // file (docs/deploy/workers.md, "Optional: ThreatSieve"). Without it,
   // enrichment runs local_asn only.
-  // Hourly purge of expired enrichment cache and failure rows (#16).
-  "triggers": { "crons": ["17 * * * *"] },
+  // Hourly purge of expired enrichment cache and failure rows (#16), and the
+  // TAXII object log materialiser (#13) every 15 minutes. The scheduled
+  // handler tells them apart by schedule. No limits.cpu_ms: the 15-minute
+  // trigger gets 30 s of CPU on Workers Paid whatever it says
+  // (docs/intel-outputs.md#taxii-21).
+  "triggers": { "crons": ["17 * * * *", "*/15 * * * *"] },
   // Radar counters (#35).
   "analytics_engine_datasets": [{ "binding": "RADAR", "dataset": "foiled_radar" }]
 }
