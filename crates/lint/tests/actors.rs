@@ -75,6 +75,7 @@ struct Fixture {
     links: Vec<ActorLink>,
     campaigns: Vec<foiled_core::campaign::Campaign>,
     subjects: Vec<foiled_core::actor::Subject>,
+    attempts: Vec<foiled_core::attempt::Attempt>,
 }
 
 type Decisions = BTreeMap<(String, String), ActorDecision>;
@@ -156,6 +157,7 @@ fn run_input(events_rel: &str, geo_rel: &str, decisions: &Decisions) -> Fixture 
         links,
         campaigns: clustering.campaigns,
         subjects: subj,
+        attempts,
     }
 }
 
@@ -338,10 +340,20 @@ fn a_callback_the_attacker_named_counts_as_sent_not_observed() {
         "testdata/actors/jndi-callback.input.json",
         &BTreeMap::new(),
     );
+    let attempt_of = |event: &str| {
+        f.attempts
+            .iter()
+            .find(|a| a.event_ids.iter().any(|e| e == event))
+            .unwrap()
+            .attempt_id
+            .clone()
+    };
+    let (named, unprompted) = (attempt_of("jndi-1"), attempt_of("jndi-4"));
+    assert_ne!(named, unprompted);
     let l = f
         .links
         .iter()
-        .find(|l| l.actor_id == "report:example-cluster-01")
+        .find(|l| l.actor_id == "report:example-cluster-01" && l.subject_id == named)
         .expect("a weak link to review");
     assert_eq!(l.band, Band::Low, "{}", l.score);
     assert!(!l.matched.indicators.is_empty());
@@ -360,6 +372,28 @@ fn a_callback_the_attacker_named_counts_as_sent_not_observed() {
     assert!(
         l.matched.indicators.len() >= 2,
         "the domain and the address reached"
+    );
+    // The other attempt reached the same host and address without naming
+    // them: observed for it, whatever the first attempt sent.
+    let other = f.subjects.iter().find(|s| s.id == unprompted).unwrap();
+    let callbacks: Vec<_> = other
+        .indicators
+        .iter()
+        .filter(|i| i.value == "stage2.example.invalid" || i.value == "192.0.2.80")
+        .collect();
+    assert_eq!(
+        callbacks.len(),
+        3,
+        "domain, DNS query and address: {:#?}",
+        other.indicators
+    );
+    assert!(callbacks.iter().all(|i| i.observed));
+    let mine = f.subjects.iter().find(|s| s.id == named).unwrap();
+    assert!(
+        mine.indicators
+            .iter()
+            .filter(|i| i.value == "stage2.example.invalid" || i.value == "192.0.2.80")
+            .all(|i| !i.observed)
     );
     // In the fleet wave the stage-2 host came from a download command in
     // the post-exploit hook, so the domain and the address the decoy

