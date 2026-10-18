@@ -9,6 +9,7 @@ Related: campaigns ([campaigns.md](campaigns.md), #33), the confidence layer ([c
 - [Design constraints](#design-constraints)
 - [What lives where](#what-lives-where)
 - [Sources and the pin process](#sources-and-the-pin-process)
+- [ThreatSieve](#threatsieve)
 - [Labels](#labels)
 - [Matching](#matching)
 - [Confidence and caps](#confidence-and-caps)
@@ -44,6 +45,9 @@ Related: campaigns ([campaigns.md](campaigns.md), #33), the confidence layer ([c
 | [`testdata/actors/expected/`](../testdata/actors/expected/) | Golden links for the fleet-wave fixture. |
 | [`crates/lint/tests/actors.rs`](../crates/lint/tests/actors.rs) | Golden test and catalogue checks. |
 | [`crates/api/src/routes/actors.rs`](../crates/api/src/routes/actors.rs) | The API. |
+| [`crates/core/src/actor_sync.rs`](../crates/core/src/actor_sync.rs), [`crates/api/src/actor_sync.rs`](../crates/api/src/actor_sync.rs) | The ThreatSieve import: staged sync, mapping, snapshot, layered catalogue source and the cron run ([ThreatSieve](#threatsieve)). |
+| [`configs/actor-catalogue.yaml`](../configs/actor-catalogue.yaml) | Import settings, off by default ([schema](../schemas/actor-catalogue-config.schema.json)). |
+| [`testdata/actors/threatsieve/`](../testdata/actors/threatsieve/) | Fake ThreatSieve answers for the import tests. |
 | [`migrations/postgres/0008_actor_link_decisions.sql`](../migrations/postgres/0008_actor_link_decisions.sql), [`0009_actor_decision_attempts.sql`](../migrations/postgres/0009_actor_decision_attempts.sql) | Stored analyst decisions and the attempts each covered. |
 
 ## Sources and the pin process
@@ -74,6 +78,19 @@ A curated profile is one YAML file under `catalogue/actors/`, reviewed in a pull
 `foiled-core` refuses a profile with an attribution phrase in its label or notes, a named group with fewer than two publishers, a technique outside the sidecar, a missing pin, an invalid or very wide network (shorter than /8, or /32 for IPv6), or a real entry citing an example domain. Fictional entries (`example: true`) must start their label with `EXAMPLE`, say `(fictional)` in the publisher, and use only documentation addresses (RFC 5737, RFC 3849), documentation ASNs (RFC 5398) and reserved domains (RFC 2606, RFC 6761). They live only under `testdata/actors/reports/`; the API never bundles them.
 
 Foiled ships no real curated report yet: only ATT&CK groups and the two fictional examples.
+
+## ThreatSieve
+
+ThreatSieve, the operator's own threat intel platform, is Foiled's single external intel hub (enrichment, #11). The actor catalogue can import from it too, on top of the bundled data:
+
+- **What is pulled.** Actors and intrusion sets (`GET /v1/actors`), campaigns (`GET /v1/campaigns`) and reports (`GET /v1/entities?type=report`), then each actor and campaign in detail (`GET /v1/entities/:id`) for its source records, techniques, related observables and vulnerabilities. Over the `THREATSIEVE` service binding with the `THREATSIEVE_API_KEY` secret (scope `intel:read`), the same opt-in binding enrichment uses ([deploy/workers.md](deploy/workers.md#optional-threatsieve)).
+- **When.** The hourly cron makes at most `calls_per_run` calls (40 by default) and saves its place in the private evidence bucket, so a full sync spans several runs. A 429 or 5xx waits for the next run; a refusal (401, 403) or an unreadable answer starts over. A new sync starts once the snapshot is `refresh_after_hours` old (24). Settings: [`configs/actor-catalogue.yaml`](../configs/actor-catalogue.yaml), off by default.
+- **The snapshot.** A finished sync writes `actors/threatsieve/snapshots/<synced_at>.json` and then `current.json`, a pointer with the snapshot's SHA-256. Readers refuse a snapshot whose digest differs, and serve imports only while it is younger than `stale_after_hours` (168). Without the binding, the key, a snapshot, or with a stale or tampered one, the catalogue is the bundled ATT&CK groups and `catalogue/actors/` alone. API isolates recheck the pointer every five minutes.
+- **Mapping.** Each actor or campaign becomes an entry in the curated format and goes through the same checks ([curated reports](#curated-reports)): a name or alias that claims attribution drops it (aliases are dropped one by one), technique ids outside the pinned sidecar are dropped, observables must be valid indicators, and relationships ThreatSieve marks `model_inferred` are ignored. Reports that name the entity (STIX `object_refs`) become extra sources. Entries keep `imported` (hub, entity id, ATT&CK id, publishers, restricted).
+- **Publishers.** Distinct publishers are the source records ThreatSieve keeps for the entity (mirrors of another source do not count) plus the reports naming it. With two or more, an actor may be a named group. With one, it is a cluster and every signal counts at half strength (`weight_pct: 50`, said in `not_counted`).
+- **ATT&CK.** Groups (`G`) and campaigns (`C`) from ThreatSieve's MITRE source keep their ATT&CK ids (`attack:G9999`). A group the pinned sidecar already holds is left to the sidecar; ThreatSieve adds groups the pinned version does not have.
+- **Pins.** ThreatSieve keeps raw source objects but gives no digest of a report document, so imported entries carry no per-document `sha256`; the pin is the snapshot digest, and each source records its retrieval date. Where a hub gives a digest it can be carried in `sha256`.
+- **Licences.** ThreatSieve's entity answers carry `license` and `redistributable` per source; commercial use comes from its licence records (MITRE, CISA KEV, MISP, IPtoASN, EPSS and NVD allow it; GreyNoise, CrowdSec, VirusTotal, ThreatFox, URLhaus and Feodo do not; anything else is unknown). An entry with any source that is not redistributable or not known to allow commercial use is `restricted`. Restricted entries stay in the snapshot but are left out of the served catalogue unless `include_restricted` is on (off by default, like `show_restricted_to_requester` in [enrichment](enrichment.md): turn it on only once your counsel has confirmed those terms allow showing them to tenants). When served they are matched and shown with a `not_counted` note, and never exported, even confirmed.
 
 ## Labels
 
