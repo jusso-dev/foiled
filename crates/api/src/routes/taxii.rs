@@ -720,9 +720,20 @@ impl Run<'_> {
             i.enrichment = foiled_core::ioc::export_refs(&i.enrichment);
             by_id.insert(i.ioc_id.clone(), i);
         }
-        // A sighting names only `observed-data` that is published.
+        // A sighting names only `observed-data` that is published, and
+        // only an IOC whose recorded gate decision passed: the merge may
+        // have run before a purge changed its contributions, and then its
+        // indicator is not what a fresh gate would say.
         let mut served: BTreeSet<String> = BTreeSet::new();
+        let mut recorded: BTreeSet<String> = BTreeSet::new();
         if sightings {
+            recorded = state
+                .store
+                .stix_published(tenant, PUBLISHED, ids.to_vec())
+                .await?
+                .into_iter()
+                .map(|(id, _, _)| id)
+                .collect();
             let observed: BTreeSet<String> = merged
                 .values()
                 .flat_map(|c| c.observed.iter().cloned())
@@ -745,6 +756,9 @@ impl Run<'_> {
         let mut passes: Vec<crate::store::PublishedIoc> = Vec::new();
         let mut fails: Vec<String> = Vec::new();
         for id in ids {
+            if sightings && !recorded.contains(id) {
+                continue;
+            }
             let built = match (merged.get(id), by_id.get(id)) {
                 (Some(c), Some(i)) => c.objects(i, &served, TLP),
                 _ => (vec![], None),
@@ -1061,10 +1075,10 @@ pub async fn materialise_all(state: &AppState) -> Result<usize, ApiError> {
     materialise_tick(state, TENANTS_PER_TICK, WORK_PER_TICK).await
 }
 
-/// Serve tenants with events in the window, in id order, starting after
-/// the tenant the last tick ended on, until `max_tenants` tenants or
-/// `max_work` parts and chunks. Each tenant gets [`DEFAULT_BUDGET`] and
-/// what is left is continued by a later tick. A tenant another run holds
+/// Serve tenants with events in the window or anything in the log, in id
+/// order, starting after the tenant the last tick ended on, until
+/// `max_tenants` tenants or `max_work` parts and chunks. Each tenant gets
+/// [`DEFAULT_BUDGET`] and what is left is continued by a later tick. A tenant another run holds
 /// is skipped. Keeps going past a failing tenant and returns the first
 /// error; otherwise the number of tenants served.
 pub async fn materialise_tick(
@@ -1073,10 +1087,15 @@ pub async fn materialise_tick(
     max_work: usize,
 ) -> Result<usize, ApiError> {
     let now = (state.clock)();
-    let tenants = state
+    // Tenants with recent events, and every tenant with a log, so one
+    // whose events stopped is still purged as its evidence expires.
+    let mut tenants = state
         .store
         .tenants_with_events(now - WINDOW_DAYS * DAY_MS)
         .await?;
+    tenants.extend(state.store.stix_tenants(PUBLISHED).await?);
+    tenants.sort();
+    tenants.dedup();
     let cursor = state.store.stix_cron_cursor(PUBLISHED).await?;
     let start = cursor
         .as_ref()

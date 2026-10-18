@@ -450,8 +450,9 @@ pub trait Store: Send + Sync {
     /// Retention (#16): remove every version of objects whose newest
     /// evidence is older than `evidence_before`, unless an object that
     /// stays refers to them, and the materialiser's day records, attempts
-    /// and contributions for days before it. Returns the version rows
-    /// removed. Fenced.
+    /// and contributions for days before it. IOCs that lost a contribution
+    /// join the merge queue, so their merged objects and gate decision
+    /// follow. Returns the version rows removed. Fenced.
     fn stix_purge(
         &self,
         tenant_id: &str,
@@ -584,6 +585,11 @@ pub trait Store: Send + Sync {
     /// Give the lease up, if `holder` holds it. The generation is kept, so
     /// the next holder's is higher.
     fn stix_release(&self, tenant_id: &str, collection: &str, holder: &str) -> StoreFuture<'_, ()>;
+
+    /// Tenants with anything in the collection's log or materialiser state
+    /// (object heads, day records or queued IOCs), so the scheduled run
+    /// keeps serving, and purging, a tenant whose events stopped.
+    fn stix_tenants(&self, collection: &str) -> StoreFuture<'_, Vec<String>>;
 
     /// The last tenant the scheduled materialiser served, so the next tick
     /// starts after it.

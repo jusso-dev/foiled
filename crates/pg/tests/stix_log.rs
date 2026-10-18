@@ -6,6 +6,7 @@ use foiled_pg::{
     stix_append, stix_contributions, stix_cron_cursor, stix_day_attempts, stix_day_inputs,
     stix_days, stix_history, stix_lease, stix_pending, stix_pending_move, stix_promote_day,
     stix_published, stix_purge, stix_query, stix_release, stix_set_published, stix_stage_part,
+    stix_tenants,
 };
 use tokio_postgres::{Client, NoTls};
 
@@ -450,6 +451,19 @@ async fn materialiser_state_stages_promotes_and_publishes_days() {
             .unwrap()
             .is_empty()
     );
+    // An IOC that lost a contribution is merged again.
+    assert_eq!(
+        stix_pending(&c, &tenant, coll, "merge", 10).await.unwrap(),
+        vec!["ioc_b".to_string()]
+    );
+    // The scheduled run keeps serving a tenant while anything is queued.
+    assert!(stix_tenants(&c, coll).await.unwrap().contains(&tenant));
+    for step in ["merge", "sighting"] {
+        stix_pending_move(&c, &tenant, coll, &["ioc_b".into()], step, None, g)
+            .await
+            .unwrap();
+    }
+    assert!(!stix_tenants(&c, coll).await.unwrap().contains(&tenant));
 
     put_stix_cron_cursor(&c, &tenant, "t-b").await.unwrap();
     put_stix_cron_cursor(&c, &tenant, "t-c").await.unwrap();

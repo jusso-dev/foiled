@@ -1743,6 +1743,14 @@ impl Store for CfStore {
         })
     }
 
+    fn stix_tenants(&self, collection: &str) -> StoreFuture<'_, Vec<String>> {
+        let c = collection.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::stix_tenants(&client, &c).await.map_err(err)
+        })
+    }
+
     fn tenants_with_events(&self, since: i64) -> StoreFuture<'_, Vec<String>> {
         wrap(async move {
             let client = self.pg().await?;

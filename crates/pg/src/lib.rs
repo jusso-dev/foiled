@@ -1602,6 +1602,11 @@ async fn stix_purge_in_tx(
              ), old_contributions AS (
                  DELETE FROM stix_ioc_contributions
                  WHERE tenant_id = $1 AND collection_id = $2 AND day_ms < $3
+                 RETURNING ioc_id
+             ), requeued AS (
+                 INSERT INTO stix_pending_iocs (tenant_id, collection_id, step, ioc_id)
+                 SELECT DISTINCT $1, $2, 'merge', ioc_id FROM old_contributions
+                 ON CONFLICT DO NOTHING
                  RETURNING 1
              )
              SELECT count(*) AS n FROM gone",
@@ -2089,6 +2094,20 @@ pub async fn event_signature(
 }
 
 /// Tenants with an event received at or after `since`, in id order.
+/// Tenants with object heads, day records or queued IOCs in the collection.
+pub async fn stix_tenants(client: &Client, collection: &str) -> Result<Vec<String>, Error> {
+    let rows = client
+        .query(
+            "SELECT tenant_id FROM stix_object_heads WHERE collection_id = $1
+             UNION SELECT tenant_id FROM stix_materialised_days WHERE collection_id = $1
+             UNION SELECT tenant_id FROM stix_pending_iocs WHERE collection_id = $1
+             ORDER BY tenant_id",
+            &[&collection],
+        )
+        .await?;
+    Ok(rows.iter().map(|r| r.get("tenant_id")).collect())
+}
+
 pub async fn tenants_with_events(client: &Client, since: i64) -> Result<Vec<String>, Error> {
     let rows = client
         .query(

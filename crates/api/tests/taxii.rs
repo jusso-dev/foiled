@@ -1191,7 +1191,6 @@ async fn a_stalled_run_cannot_write_after_a_takeover() {
 /// it, by value or by id, and no reference is left without a target.
 #[tokio::test]
 async fn below_gate_iocs_are_never_named_or_referenced() {
-    use foiled_core::intel::merge::IocContribution;
     use foiled_core::ioc::{IocType, ioc_id};
     let ip = "203.0.113.60";
     let id = ioc_id(IocType::Ip, ip);
@@ -1215,6 +1214,38 @@ async fn below_gate_iocs_are_never_named_or_referenced() {
 
     // An old day's contribution with 16 attempts that sort first and add
     // nothing.
+    stage_weak(&h, &id, ip, day_start(-10)).await;
+
+    let r = materialise(s, "t1").await.unwrap();
+    assert!(!r.incomplete, "{r:?}");
+    let log = history(s).await;
+    assert!(!log.is_empty());
+    let text = serde_json::to_string(&log).unwrap();
+    let sco = stix::observable_for(IocType::Ip, ip).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let ind = stix::foiled_id("indicator", &id);
+    for needle in [ip, sco.as_str(), ind.as_str()] {
+        assert!(!text.contains(needle), "{needle} is below the gate");
+    }
+    // The attempt itself is still published.
+    assert!(
+        log.values()
+            .any(|v| matches!(v[0]["type"].as_str(), Some("observed-data" | "grouping")))
+    );
+    let mut client = BTreeMap::new();
+    merge(&mut client, log.values().flatten().cloned().collect());
+    assert!(dangling(&client).is_empty(), "{:?}", dangling(&client));
+}
+
+/// Stage, for day `old`, a contribution to the IOC `id` (`ip`) with 16
+/// attempts that sort first and add nothing, which pushes later days'
+/// evidence out of the merged view's 16-attempt limit.
+async fn stage_weak(h: &H, id: &str, ip: &str, old: i64) {
+    use foiled_core::intel::merge::IocContribution;
+    use foiled_core::ioc::IocType;
+    let id = id.to_string();
     let weak = IocContribution {
         ioc_id: id.clone(),
         ioc_type: IocType::Ip,
@@ -1223,8 +1254,8 @@ async fn below_gate_iocs_are_never_named_or_referenced() {
         roles: BTreeSet::new(),
         redacted: false,
         file_ioc_limited: false,
-        first_seen: day_start(-10),
-        last_seen: day_start(-10),
+        first_seen: old,
+        last_seen: old,
         sightings: 16,
         attempts: 16,
         campaign_ids: BTreeSet::new(),
@@ -1237,8 +1268,7 @@ async fn below_gate_iocs_are_never_named_or_referenced() {
             .collect(),
         observed: BTreeSet::new(),
     };
-    let fence = seed_lease(&h).await;
-    let old = day_start(-10);
+    let fence = seed_lease(h).await;
     h.store
         .stix_stage_part(
             "t1",
@@ -1266,28 +1296,63 @@ async fn below_gate_iocs_are_never_named_or_referenced() {
         .await
         .unwrap();
     h.store.stix_release("t1", PUBLISHED, "seed").await.unwrap();
+}
 
-    let r = materialise(s, "t1").await.unwrap();
-    assert!(!r.incomplete, "{r:?}");
-    let log = history(s).await;
-    assert!(!log.is_empty());
-    let text = serde_json::to_string(&log).unwrap();
-    let sco = stix::observable_for(IocType::Ip, ip).unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+/// A purge between an IOC's merge and its sighting step that drops the
+/// contribution keeping it below the gate: the sighting step never names
+/// an indicator the merge did not publish, and the purge queues the IOC
+/// for a merge, which then publishes it whole.
+#[tokio::test]
+async fn a_purge_between_merge_and_sighting_never_names_an_unpublished_indicator() {
+    use foiled_core::ioc::{IocType, ioc_id};
+    let ip = "203.0.113.60";
+    let id = ioc_id(IocType::Ip, ip);
     let ind = stix::foiled_id("indicator", &id);
-    for needle in [ip, sco.as_str(), ind.as_str()] {
-        assert!(!text.contains(needle), "{needle} is below the gate");
-    }
-    // The attempt itself is still published.
-    assert!(
-        log.values()
-            .any(|v| matches!(v[0]["type"].as_str(), Some("observed-data" | "grouping")))
-    );
+    let h = harness_with(day_events(0)).await;
+    let s = &h.state;
+    // Past the 90-day attempt TTL, so the first run's purge removes it.
+    stage_weak(&h, &id, ip, day_start(-100)).await;
+    // The merge (below the gate), then the purge, and nothing between.
+    let r = materialise_with(
+        s,
+        "t1",
+        Budget {
+            chunks: 1,
+            ..DEFAULT_BUDGET
+        },
+    )
+    .await
+    .unwrap();
+    assert!(r.incomplete, "{r:?}");
+    let text = serde_json::to_string(&history(s).await).unwrap();
+    assert!(!text.contains(ind.as_str()), "below the gate at the merge");
+    while materialise(s, "t1").await.unwrap().incomplete {}
     let mut client = BTreeMap::new();
-    merge(&mut client, log.values().flatten().cloned().collect());
+    merge(
+        &mut client,
+        history(s).await.into_values().flatten().collect(),
+    );
     assert!(dangling(&client).is_empty(), "{:?}", dangling(&client));
+    assert!(
+        client.contains_key(&ind),
+        "the requeued merge publishes it once the old day is gone"
+    );
+}
+
+/// A tenant whose events stopped is still served by the scheduled run, so
+/// its log is purged once the evidence passes the attempt TTL.
+#[tokio::test]
+async fn quiet_tenants_are_still_purged_by_the_scheduled_run() {
+    let h = harness_with(day_events(0)).await;
+    let s = &h.state;
+    materialise(s, "t1").await.unwrap();
+    assert!(!history(s).await.is_empty());
+    h.now.store(T0 + 100 * DAY, Ordering::SeqCst);
+    for _ in 0..3 {
+        materialise_all(s).await.unwrap();
+    }
+    assert!(history(s).await.is_empty());
+    assert!(h.store.stix_tenants(PUBLISHED).await.unwrap().is_empty());
 }
 
 /// Two writers that planned from the same head cannot both write: the

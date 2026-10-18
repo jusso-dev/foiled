@@ -492,8 +492,17 @@ impl Store for MemoryStore {
         }
         log.days.retain(|d, _| *d >= evidence_before);
         log.attempts.retain(|(_, d, _), _| *d >= evidence_before);
-        log.contributions
-            .retain(|(_, d, _, _), _| *d >= evidence_before);
+        let mut requeue = Vec::new();
+        log.contributions.retain(|(_, d, _, ioc), _| {
+            let keep = *d >= evidence_before;
+            if !keep {
+                requeue.push(ioc.clone());
+            }
+            keep
+        });
+        for ioc in requeue {
+            log.pending.insert((PendingStep::Merge.as_str(), ioc));
+        }
         ready(Ok(removed))
     }
 
@@ -796,6 +805,20 @@ impl Store for MemoryStore {
             log.lease = None;
         }
         ready(Ok(()))
+    }
+
+    fn stix_tenants(&self, collection: &str) -> StoreFuture<'_, Vec<String>> {
+        let tenants: Vec<String> = self
+            .lock()
+            .stix
+            .iter()
+            .filter(|((_, c), log)| {
+                c == collection
+                    && !(log.created.is_empty() && log.days.is_empty() && log.pending.is_empty())
+            })
+            .map(|((t, _), _)| t.clone())
+            .collect();
+        ready(Ok(tenants))
     }
 
     fn stix_cron_cursor(&self, collection: &str) -> StoreFuture<'_, Option<String>> {
