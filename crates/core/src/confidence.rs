@@ -25,7 +25,8 @@ pub enum LinkKind {
 /// vuln_path_hook, vendor_desc, predisclosure_backmatch, catalogue_prior),
 /// #11 (enrichment), #25 (noise_score), #28 (llm), #33 (campaign_cluster),
 /// #26 (rule, for techniques), #29 (actor_ttp_overlap,
-/// actor_indicator_overlap, actor_targeting), analysts (analyst).
+/// actor_indicator_overlap, actor_targeting, actor_payload_overlap,
+/// actor_asn_overlap), analysts (analyst).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceSource {
@@ -49,6 +50,13 @@ pub enum EvidenceSource {
     /// The CVEs or products hit match what a public report says the actor
     /// targets (#29). Never enough on its own.
     ActorTargeting,
+    /// A value the attacker chose and sent (request content, payload or
+    /// file hash) is listed in a public report (#29). Can be planted as a
+    /// false flag, so it is weak and never counts as a shared indicator.
+    ActorPayloadOverlap,
+    /// A source ASN is listed in a public report (#29). Shared by everyone
+    /// on the same host: weak, and never a shared indicator.
+    ActorAsnOverlap,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +156,8 @@ impl Default for ConfidenceConfig {
                 (ActorTtpOverlap, w(25, 30)),
                 (ActorIndicatorOverlap, w(30, 40)),
                 (ActorTargeting, w(10, 10)),
+                (ActorPayloadOverlap, w(10, 15)),
+                (ActorAsnOverlap, w(5, 5)),
                 (Analyst, w(0, 0)),
                 (NoiseScore, w(0, 0)),
             ]),

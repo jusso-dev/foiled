@@ -12,7 +12,7 @@
   "label_kind": "cluster",
   "status": "pending",
   "wording": "possible association",
-  "statement": "Possible association with EXAMPLE-CLUSTER-01 (Example Threat Research (fictional)): TTP, infrastructure and targeting overlap with activity reported in \"Loader waves against demo upload endpoints\" (Example Threat Research (fictional), 2026-09-14) and 1 other source(s). This is not an attribution.",
+  "statement": "Possible association with EXAMPLE-CLUSTER-01 (Example Threat Research (fictional)): TTP, infrastructure and targeting overlap with activity reported by Example Threat Research (fictional) (2026-09-14) and 1 other source(s). This is not an attribution.",
   "score": 63,
   "band": "medium",
   "publishable": false,
@@ -43,6 +43,7 @@
         "ioc_id": "ioc_daf259e5ed85436b18bb7a11",
         "weight": 85,
         "stale": false,
+        "observed": true,
         "source_url": "https://reports.example.com/2026/example-cluster-01"
       },
       {
@@ -52,6 +53,7 @@
         "ioc_id": "ioc_8a63c09854314685b5ec5f02",
         "weight": 70,
         "stale": false,
+        "observed": true,
         "source_url": "https://advisories.example.org/ex-2026-001"
       }
     ],
@@ -105,14 +107,14 @@
         "signal_id": "actor:report:example-cluster-01:indicator:0",
         "source": "actor_indicator_overlap",
         "weight": 85,
-        "summary": "domain stage2[.]example[.]invalid listed in \"Loader waves against demo upload endpoints\" (Example Threat Research (fictional), 2026-09-14)",
+        "summary": "domain stage2[.]example[.]invalid (observed) listed by Example Threat Research (fictional) (2026-09-14)",
         "ref": "https://reports.example.com/2026/example-cluster-01"
       },
       {
         "signal_id": "actor:report:example-cluster-01:indicator:1",
         "source": "actor_indicator_overlap",
         "weight": 70,
-        "summary": "IP address 192[.]0[.]2[.]80 listed in \"Advisory EX-2026-001, upload path traversal exploitation\" (Example National CERT (fictional), 2026-09-20)",
+        "summary": "IP address 192[.]0[.]2[.]80 (observed) listed by Example National CERT (fictional) (2026-09-20)",
         "ref": "https://advisories.example.org/ex-2026-001"
       },
       {

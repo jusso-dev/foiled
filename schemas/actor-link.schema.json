@@ -70,7 +70,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["type", "display", "match", "weight", "stale", "source_url"],
+            "required": ["type", "display", "match", "weight", "stale", "observed", "source_url"],
             "properties": {
               "type": { "enum": ["ip", "cidr", "domain", "url", "sha256", "asn"] },
               "display": { "type": "string", "description": "Defanged and escaped. Never parse this." },
@@ -78,6 +78,7 @@
               "ioc_id": { "type": "string" },
               "weight": { "type": "integer", "minimum": 0, "maximum": 100 },
               "stale": { "type": "boolean" },
+              "observed": { "type": "boolean", "description": "Seen by the defender as infrastructure in use (source or callback). False for values the attacker chose and sent." },
               "source_url": { "type": "string" }
             }
           }
@@ -130,7 +131,7 @@
               "weight": { "type": "integer", "minimum": 0, "maximum": 100 },
               "summary": { "type": "string" },
               "ref": { "type": "string" },
-              "source": { "enum": ["rule", "sequence", "vuln_path_hook", "catalogue_prior", "vendor_desc", "predisclosure_backmatch", "enrichment", "llm", "analyst", "campaign_cluster", "noise_score", "actor_ttp_overlap", "actor_indicator_overlap", "actor_targeting"] }
+              "source": { "enum": ["rule", "sequence", "vuln_path_hook", "catalogue_prior", "vendor_desc", "predisclosure_backmatch", "enrichment", "llm", "analyst", "campaign_cluster", "noise_score", "actor_ttp_overlap", "actor_indicator_overlap", "actor_targeting", "actor_payload_overlap", "actor_asn_overlap"] }
             }
           }
         },

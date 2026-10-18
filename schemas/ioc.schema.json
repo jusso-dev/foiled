@@ -87,7 +87,7 @@
             "required": ["signal_id", "source", "weight", "summary"],
             "properties": {
               "signal_id": { "type": "string" },
-              "source": { "enum": ["rule", "sequence", "vuln_path_hook", "catalogue_prior", "vendor_desc", "predisclosure_backmatch", "enrichment", "llm", "analyst", "campaign_cluster", "noise_score", "actor_ttp_overlap", "actor_indicator_overlap", "actor_targeting"] },
+              "source": { "enum": ["rule", "sequence", "vuln_path_hook", "catalogue_prior", "vendor_desc", "predisclosure_backmatch", "enrichment", "llm", "analyst", "campaign_cluster", "noise_score", "actor_ttp_overlap", "actor_indicator_overlap", "actor_targeting", "actor_payload_overlap", "actor_asn_overlap"] },
               "weight": { "type": "integer", "minimum": 0, "maximum": 100 },
               "summary": { "type": "string" },
               "ref": { "type": "string" }
