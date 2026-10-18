@@ -1027,6 +1027,34 @@ impl Store for CfStore {
         })
     }
 
+    fn campaign_actions(
+        &self,
+        tenant_id: &str,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::CampaignAction>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::campaign_actions(&client, &t, limit as i64)
+                .await
+                .map_err(err)
+        })
+    }
+
+    fn append_campaign_action(
+        &self,
+        tenant_id: &str,
+        action: foiled_core::campaign::CampaignAction,
+    ) -> StoreFuture<'_, ()> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::append_campaign_action(&client, &t, &action)
+                .await
+                .map_err(err)
+        })
+    }
+
     fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()> {
         let t = tenant_id.to_string();
         wrap(async move {

@@ -261,6 +261,20 @@ pub trait Store: Send + Sync {
     /// Record an analyst decision, replacing any earlier one for the link.
     fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()>;
 
+    /// Analyst actions on campaigns (#33): the newest `limit`, oldest first.
+    fn campaign_actions(
+        &self,
+        tenant_id: &str,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::CampaignAction>>;
+
+    /// Append an analyst campaign action. Actions are never edited.
+    fn append_campaign_action(
+        &self,
+        tenant_id: &str,
+        action: foiled_core::campaign::CampaignAction,
+    ) -> StoreFuture<'_, ()>;
+
     /// Source IPs seen since `since` (Unix ms), oldest first.
     fn ip_iocs(&self, tenant_id: &str, since: i64) -> StoreFuture<'_, Vec<IpIocRow>>;
 

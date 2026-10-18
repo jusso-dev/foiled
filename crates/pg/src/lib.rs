@@ -28,6 +28,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         "0004_capture_events_source_key",
         include_str!("../../../migrations/postgres/0004_capture_events_source_key.sql"),
     ),
+    (
+        "0005_campaign_actions",
+        include_str!("../../../migrations/postgres/0005_campaign_actions.sql"),
+    ),
 ];
 
 /// Arbitrary constant key for the migration advisory lock.
@@ -396,4 +400,53 @@ pub async fn link_overrides(
             note: r.get("note"),
         })
         .collect())
+}
+
+/// Append one analyst campaign action (#33). `body` is the whole
+/// `CampaignAction` as JSON; the other columns are copied out of it for
+/// filtering and the CHECK constraint.
+pub async fn append_campaign_action(
+    client: &Client,
+    tenant_id: &str,
+    action: &foiled_core::campaign::CampaignAction,
+) -> Result<(), Error> {
+    let body = serde_json::to_value(action).unwrap_or(serde_json::Value::Null);
+    client
+        .execute(
+            "INSERT INTO campaign_actions (tenant_id, action_id, campaign_id, kind, analyst_id, at, body)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &[
+                &tenant_id,
+                &action.action_id,
+                &action.campaign_id,
+                &action.kind.as_str(),
+                &action.analyst_id,
+                &action.at,
+                &body,
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
+/// The newest `limit` campaign actions for a tenant, oldest first. Rows
+/// whose body no longer parses are skipped rather than failing the read.
+pub async fn campaign_actions(
+    client: &Client,
+    tenant_id: &str,
+    limit: i64,
+) -> Result<Vec<foiled_core::campaign::CampaignAction>, Error> {
+    let rows = client
+        .query(
+            "SELECT body FROM campaign_actions WHERE tenant_id = $1
+             ORDER BY at DESC, action_id DESC LIMIT $2",
+            &[&tenant_id, &limit],
+        )
+        .await?;
+    let mut out: Vec<foiled_core::campaign::CampaignAction> = rows
+        .iter()
+        .filter_map(|r| serde_json::from_value(r.get::<_, serde_json::Value>("body")).ok())
+        .collect();
+    out.reverse();
+    Ok(out)
 }

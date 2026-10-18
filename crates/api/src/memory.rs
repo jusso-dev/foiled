@@ -26,6 +26,7 @@ struct Inner {
     events: Vec<CaptureEvent>,
     heartbeats: HashMap<(String, String), (serde_json::Value, i64)>,
     overrides: Vec<(String, LinkOverride)>,
+    campaign_actions: Vec<(String, foiled_core::campaign::CampaignAction)>,
     /// Audit appends with this action fail, to test storage outages.
     fail_audit_action: Option<String>,
     facts: Vec<(String, ObservedFacts)>,
@@ -467,6 +468,39 @@ impl Store for MemoryStore {
             .map(|(_, o)| o.clone())
             .collect();
         ready(Ok(out))
+    }
+
+    fn campaign_actions(
+        &self,
+        tenant_id: &str,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::CampaignAction>> {
+        let mut out: Vec<_> = self
+            .lock()
+            .campaign_actions
+            .iter()
+            .filter(|(t, _)| t == tenant_id)
+            .map(|(_, a)| a.clone())
+            .collect();
+        out.sort_by(|a, b| (a.at, &a.action_id).cmp(&(b.at, &b.action_id)));
+        let skip = out.len().saturating_sub(limit);
+        ready(Ok(out.split_off(skip)))
+    }
+
+    fn append_campaign_action(
+        &self,
+        tenant_id: &str,
+        action: foiled_core::campaign::CampaignAction,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        if g.campaign_actions
+            .iter()
+            .any(|(t, a)| t == tenant_id && a.action_id == action.action_id)
+        {
+            return ready(Err(StoreError("duplicate campaign action".into())));
+        }
+        g.campaign_actions.push((tenant_id.to_string(), action));
+        ready(Ok(()))
     }
 
     fn put_link_override(&self, tenant_id: &str, o: LinkOverride) -> StoreFuture<'_, ()> {
