@@ -25,6 +25,7 @@ Rules:
 - Never show a CVE id without its chip. In code this is enforced by the `CveRef` component, which requires a confidence prop.
 - Actor links use "possible association with" a named public cluster, never a bare actor name as fact (#29).
 - Attacker-supplied text (paths, headers, user agents, payloads) is quoted as data, never paraphrased into a claim.
+- CVEs a catalogue entry lists describe the software, not an attempt. Label them "catalogue claims" with their sources and show them without a confidence chip (the launch wizard, [console.md](console.md#launch-wizard)).
 
 ## Common labels
 
