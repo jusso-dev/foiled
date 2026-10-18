@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use foiled_core::audit::AuditRecord;
 use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState};
+use foiled_core::enrichment::{Observable, ObservedFacts};
 
 use crate::store::{
     AuditQuery, DecoyQuery, IdentityRecord, IpIocRow, JobRecord, LinkOverride, Store, StoreError,
@@ -25,6 +26,7 @@ struct Inner {
     overrides: Vec<(String, LinkOverride)>,
     /// Audit appends with this action fail, to test storage outages.
     fail_audit_action: Option<String>,
+    facts: Vec<(String, ObservedFacts)>,
 }
 
 #[derive(Default)]
@@ -87,6 +89,12 @@ impl MemoryStore {
         if let Some(d) = self.lock().decoys.iter_mut().find(|d| d.id == id) {
             d.state = state;
         }
+    }
+
+    /// Cached enrichment Facts for a tenant, as the enrichment consumer
+    /// would leave them (#11).
+    pub fn add_facts(&self, tenant_id: &str, facts: ObservedFacts) {
+        self.lock().facts.push((tenant_id.to_string(), facts));
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -389,6 +397,21 @@ impl Store for MemoryStore {
         }
         let mut out: Vec<IpIocRow> = rows.into_values().collect();
         out.sort_by(|a, b| (a.first_seen, &a.ip).cmp(&(b.first_seen, &b.ip)));
+        ready(Ok(out))
+    }
+
+    fn enrichment_facts(
+        &self,
+        tenant_id: &str,
+        observables: Vec<Observable>,
+    ) -> StoreFuture<'_, Vec<ObservedFacts>> {
+        let out = self
+            .lock()
+            .facts
+            .iter()
+            .filter(|(t, f)| t == tenant_id && observables.contains(&f.observable))
+            .map(|(_, f)| f.clone())
+            .collect();
         ready(Ok(out))
     }
 

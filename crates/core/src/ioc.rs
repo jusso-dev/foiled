@@ -478,27 +478,26 @@ pub fn defang(ty: IocType, value: &str) -> String {
     let d = match ty {
         IocType::Ip | IocType::Domain | IocType::DnsQuery => value.replace('.', "[.]"),
         IocType::Ipv6 => value.replace(':', "[:]"),
-        IocType::Url => {
-            let s = defang_schemes(value);
-            match s.find("://") {
-                Some(i) => {
-                    let start = i + 3;
-                    let end = s[start..]
-                        .find(['/', '?', '#'])
-                        .map_or(s.len(), |e| start + e);
-                    format!(
-                        "{}{}{}",
-                        &s[..start],
-                        s[start..end].replace('.', "[.]"),
-                        &s[end..]
-                    )
-                }
-                None => s,
-            }
-        }
-        _ => defang_schemes(value),
+        _ => defang_authorities(&defang_schemes(value)),
     };
     printable(&d)
+}
+
+/// Bracket the dots in the host part of every URL in `s`.
+fn defang_authorities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 16);
+    let mut rest = s;
+    while let Some(i) = rest.find("://") {
+        let (head, tail) = rest.split_at(i + 3);
+        out.push_str(head);
+        let end = tail
+            .find(|c: char| matches!(c, '/' | '?' | '#' | '\'' | '"') || c.is_whitespace())
+            .unwrap_or(tail.len());
+        out.push_str(&tail[..end].replace('.', "[.]"));
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Undo common defanging so a pasted indicator can be searched.
@@ -1606,7 +1605,7 @@ mod tests {
         );
         assert_eq!(
             defang(IocType::Cmdline, "curl HTTPS://a.example.invalid/x\u{202E}"),
-            "curl hxxps://a.example.invalid/x\\u{202e}"
+            "curl hxxps://a[.]example[.]invalid/x\\u{202e}"
         );
         assert_eq!(
             refang("hxxp://stage2[.]example[.]invalid/x.sh"),

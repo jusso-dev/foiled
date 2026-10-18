@@ -1,6 +1,7 @@
 //! `GET /v0/exports/iocs.csv`: source IPs seen at the tenant's decoys (#22).
 //!
-//! The richer IOC model (#34) and STIX/MISP exports (#13) build on this.
+//! The richer IOC model (#34, `/v0/iocs`) and STIX/MISP exports (#13)
+//! build on this.
 //! Reads live rows only, so anything the retention purge removed (#16)
 //! never comes back in an export.
 

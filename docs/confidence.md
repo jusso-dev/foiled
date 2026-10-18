@@ -1,6 +1,6 @@
 # Confidence
 
-One scoring model for every link Foiled asserts (#27): attempt to CVE, attempt to ATT&CK technique, attempt to actor (#29) and attempt to campaign (#33). Producers add evidence; the model turns evidence into a score, a band, wording and publish decisions. Consumers (exports #13, the console #14, the radar and review queue #35) only ever read the result.
+One scoring model for every link Foiled asserts (#27): attempt to CVE, attempt to ATT&CK technique, attempt to actor (#29), attempt to campaign (#33) and attempt to indicator (`attempt_ioc`, scored per IOC, [iocs.md](iocs.md#confidence), #34). Producers add evidence; the model turns evidence into a score, a band, wording and publish decisions. Consumers (exports #13, the console #14, the radar and review queue #35) only ever read the result.
 
 The model is deterministic: the same evidence and config always give the same score. Every contribution and every cap is part of the link, so LLM or pre-disclosure involvement can never be hidden. Code: `foiled_core::confidence`. Contract: [`schemas/confidence-link.schema.json`](../schemas/confidence-link.schema.json). Config: [`configs/confidence.yaml`](../configs/confidence.yaml).
 

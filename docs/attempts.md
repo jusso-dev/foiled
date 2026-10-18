@@ -16,7 +16,8 @@ The contract is [`schemas/attempt.schema.json`](../schemas/attempt.schema.json).
 | `state`, `state_history` | `probe`, `exploit` or `post-exploitation`, and every move with the signal and event that caused it. |
 | `event_ids`, `payload_refs` | The capture events and R2 objects that make up the attempt. |
 | `hook_hits` | Vulnerable-path hooks that fired (#32), with stage and CVE id. |
-| `ioc_refs`, `campaign_id` | Filled by #34 and #33. |
+| `ioc_refs` | Ids of the IOCs extracted from the attempt, in order of first appearance ([iocs.md](iocs.md), #34). Filled by the API read model; `attempt::build` alone leaves it empty. |
+| `campaign_id` | Filled by #33. |
 | `labels` | Analyst labels. |
 | `noise` | Targeted versus mass score for the source (below). |
 
@@ -71,6 +72,7 @@ Examples: one source, one product, a handful of requests scores 10 (`targeted`).
 - `GET /v0/attempts`: filters `since`, `until`, `decoy_id`, `decoy_kind`, `sensor_id`, `src`, `state`, `cve`, `campaign_id`, `technique`, `min_confidence`, `limit`. Newest activity first. `technique` and `min_confidence` match on the attempt's confidence links (#27) as computed, before analyst overrides. Agents use the same filters through the MCP tool `query_attempts` ([mcp/foiled-mcp.md](mcp/foiled-mcp.md)).
 - `GET /v0/attempts/{attempt_id}`.
 - `GET /v0/attempts/{attempt_id}/timeline`: the ordered timeline, JSON or `format=text` ([attempt-timeline.md](attempt-timeline.md)).
+- `GET /v0/attempts/{attempt_id}/iocs`: the attempt's IOCs, with `file_ioc_limited` for memory-only implants ([iocs.md](iocs.md)).
 
 Attempts are a read model built on request from Postgres capture events over a bounded window (default 7 days, at most 31 days and 20,000 events, with `truncated` set when the cap is hit) so request handlers stay inside Workers CPU limits. A table materialised by the ingest consumer can replace this later without changing the contract or the ids.
 
@@ -78,4 +80,5 @@ Attempts are a read model built on request from Postgres capture events over a b
 
 - [attempt-timeline.md](attempt-timeline.md): timeline and pcap extract for one attempt (#10).
 - #12 CVE tiers, #26 ATT&CK techniques, #27 confidence, #28 LLM, #29 actors: links per attempt.
-- #32 hooks, #33 campaigns, #34 IOCs.
+- [iocs.md](iocs.md): IOCs extracted from attempts (#34).
+- #32 hooks, #33 campaigns.

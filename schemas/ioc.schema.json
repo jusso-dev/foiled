@@ -125,8 +125,8 @@
     },
     {
       "if": { "properties": { "type": { "const": "behaviour_fingerprint" } } },
-      "then": { "required": ["fingerprint"], "properties": { "value": { "pattern": "^bf1:[a-f0-9]{32}$" } } },
-      "else": { "not": { "required": ["fingerprint"] } }
+      "then": { "required": ["fingerprint"], "properties": { "fingerprint": { "type": "object" }, "value": { "pattern": "^bf1:[a-f0-9]{32}$" } } },
+      "else": { "properties": { "fingerprint": false } }
     }
   ],
   "$defs": {

@@ -1,6 +1,6 @@
 # Attempt timeline
 
-The timeline answers "what did this source do to this decoy?" without anyone logging in to a dead guest (#10). It is the read model of one [attempt](attempts.md) (#25): the attempt's capture events in time order, the points where its state moved, the payloads (and, with #34, IOCs) linked to it, and a recipe for cutting the matching pcap slice for Wireshark. Earlier drafts called this "session replay"; [session-replay.md](session-replay.md) now points here.
+The timeline answers "what did this source do to this decoy?" without anyone logging in to a dead guest (#10). It is the read model of one [attempt](attempts.md) (#25): the attempt's capture events in time order, the points where its state moved, the payloads and [IOCs](iocs.md) (#34) linked to it, and a recipe for cutting the matching pcap slice for Wireshark. Earlier drafts called this "session replay"; [session-replay.md](session-replay.md) now points here.
 
 The timeline is **read-only**. It never changes or deletes capture events, and Foiled never re-sends captured traffic onto any network. Active replay against live systems is out of scope for this project for good.
 
@@ -28,7 +28,7 @@ curl -sS -H "authorization: Bearer $FOILED_TOKEN" \
 | `attempt_id`, `decoy_id`, `catalogue_id`, `src` | From the attempt. |
 | `first_seen`, `last_seen`, `state` | From the attempt. Unix ms. |
 | `entries[]` | One per event: `seq` (from 1), `ts`, `t_offset_ms` since the first event, `channel`, `severity`, a one-line `summary`, `state_change` when the attempt moved state at this event, and the unchanged capture envelope as `event`. |
-| `payload_refs`, `ioc_refs` | R2 objects linked to the attempt (#9). `ioc_refs` stays empty until IOC extraction (#34) fills it. |
+| `payload_refs`, `ioc_refs` | R2 objects linked to the attempt (#9), and the ids of IOCs extracted from it ([iocs.md](iocs.md), #34). The API fills `ioc_refs`; read the IOCs with `GET /v0/attempts/{attempt_id}/iocs`. |
 | `pcap` | How to cut the pcap slice (below). |
 | `notes` | Caveats for the reader: TLS without keys, a source that is not an IP address, too many egress destinations, or a window that hit the 20,000-event cap. |
 | `missing_event_ids` | Events the attempt lists that are no longer stored, for example after the retention purge (#16). Always empty while the API builds attempts on request from the stored events; it matters once attempts are materialised. |

