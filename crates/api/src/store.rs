@@ -104,6 +104,10 @@ pub struct IpIocRow {
 pub struct DecoyQuery {
     pub state: Option<DecoyState>,
     pub catalogue_id: Option<String>,
+    /// Only decoys created by this principal (token id).
+    pub created_by: Option<String>,
+    /// Only decoys that are not destroyed.
+    pub live: bool,
     pub limit: usize,
     /// Return decoys created strictly before this id in list order.
     pub cursor: Option<String>,
@@ -145,6 +149,9 @@ pub trait Store: Send + Sync {
 
     /// Count a hit in a fixed window and say whether it is within `limit`.
     fn rate_limit(&self, key: &str, window_start: i64, limit: u32) -> StoreFuture<'_, bool>;
+
+    /// The count for one window, without adding a hit. Zero when unseen.
+    fn rate_count(&self, key: &str, window_start: i64) -> StoreFuture<'_, u32>;
 
     fn append_audit(&self, record: AuditRecord) -> StoreFuture<'_, ()>;
 

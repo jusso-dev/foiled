@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 use axum::body::Body;
 use foiled_api::auth::{ClientCert, sha256_hex};
@@ -20,6 +20,7 @@ use foiled_api::{AppState, router};
 use foiled_core::audit::Outcome;
 use foiled_core::auth::{MCP_SCOPES, Role, Scope};
 use foiled_core::capture::CaptureEvent;
+use foiled_core::decoy::DecoyState;
 use foiled_core::mcp::McpConfig;
 use http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -73,7 +74,17 @@ fn injection_event() -> CaptureEvent {
     .unwrap()
 }
 
+struct Harness {
+    state: AppState,
+    store: Arc<MemoryStore>,
+    clock: Arc<AtomicI64>,
+}
+
 async fn state_with(cfg: McpConfig) -> AppState {
+    harness(cfg).await.state
+}
+
+async fn harness(cfg: McpConfig) -> Harness {
     let store = Arc::new(MemoryStore::new());
     let all_mcp: Vec<Scope> = MCP_SCOPES.to_vec();
     store.add_token(token("agent", "t1", Role::Mcp, &all_mcp));
@@ -103,10 +114,18 @@ async fn state_with(cfg: McpConfig) -> AppState {
     events.push(injection_event());
     store.enqueue_events(events).await.unwrap();
     let counter = Arc::new(AtomicU64::new(0));
-    let mut state = AppState::new(store, Arc::new(|| NOW));
+    let clock = Arc::new(AtomicI64::new(NOW));
+    let mut state = AppState::new(store.clone(), {
+        let c = clock.clone();
+        Arc::new(move || c.load(Ordering::SeqCst))
+    });
     state.ids = Arc::new(move || format!("id{:04}", counter.fetch_add(1, Ordering::SeqCst)));
     state.mcp = Arc::new(cfg);
-    state
+    Harness {
+        state,
+        store,
+        clock,
+    }
 }
 
 async fn state() -> AppState {
@@ -975,4 +994,345 @@ async fn arguments_in_audit_are_redacted() {
     let a = audit(&s, "operator").await;
     assert_eq!(a[0]["detail"]["arguments"]["api_token"], "[redacted]");
     assert!(!a[0].to_string().contains("fo_leak"));
+}
+
+/// A 2026-07-28 `tools/call` with the required headers. `extra` is merged
+/// into params (for `_meta`, `inputResponses`, `requestState`).
+async fn modern_tool(state: &AppState, tok: &str, name: &str, args: Value, extra: Value) -> Value {
+    let mut params = json!({"name": name, "arguments": args});
+    for (k, v) in extra.as_object().unwrap() {
+        params[k] = v.clone();
+    }
+    let body = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": params});
+    let req = post(tok, Some(MODERN), &body)
+        .header("mcp-name", name)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (st, _, v) = send(state, req).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    v["result"].clone()
+}
+
+#[tokio::test]
+async fn modern_requests_must_carry_the_metadata_headers() {
+    let s = state().await;
+    let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "list_sandboxes", "arguments": {},
+        "_meta": {"io.modelcontextprotocol/protocolVersion": MODERN}
+    }});
+    let base = || {
+        Request::post("/v0/mcp")
+            .header("authorization", format!("Bearer fo_agent.{SECRET}"))
+            .header("content-type", "application/json")
+    };
+    // Version only in _meta: the header is required.
+    let (st, _, v) = send(&s, base().body(Body::from(call.to_string())).unwrap()).await;
+    assert_eq!(
+        (st, v["error"]["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!(-32020))
+    );
+    // Version header but no Mcp-Method.
+    let r = base()
+        .header("mcp-protocol-version", MODERN)
+        .header("mcp-name", "list_sandboxes")
+        .body(Body::from(call.to_string()))
+        .unwrap();
+    let (st, _, v) = send(&s, r).await;
+    assert_eq!(
+        (st, v["error"]["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!(-32020))
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Mcp-Method")
+    );
+    // No Mcp-Name on tools/call.
+    let r = base()
+        .header("mcp-protocol-version", MODERN)
+        .header("mcp-method", "tools/call")
+        .body(Body::from(call.to_string()))
+        .unwrap();
+    let (st, _, v) = send(&s, r).await;
+    assert_eq!(
+        (st, v["error"]["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!(-32020))
+    );
+    assert!(v["error"]["message"].as_str().unwrap().contains("Mcp-Name"));
+    // All three: served.
+    let r = base()
+        .header("mcp-protocol-version", MODERN)
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "list_sandboxes")
+        .body(Body::from(call.to_string()))
+        .unwrap();
+    let (st, _, v) = send(&s, r).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["result"]["resultType"], "complete");
+
+    // Older revisions did not define Mcp-Method or Mcp-Name: not required.
+    let legacy = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_sandboxes", "arguments": {}}});
+    let r = base()
+        .header("mcp-protocol-version", LEGACY)
+        .body(Body::from(legacy.to_string()))
+        .unwrap();
+    let (st, _, v) = send(&s, r).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["result"]["isError"], false);
+    // A bare discovery probe is still answered.
+    let probe = json!({"jsonrpc": "2.0", "id": 1, "method": "server/discover"});
+    let (st, _, _) = send(&s, base().body(Body::from(probe.to_string())).unwrap()).await;
+    assert_eq!(st, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn refused_calls_over_the_budget_are_not_counted_or_audited_each_time() {
+    let mut cfg = McpConfig::default();
+    cfg.limits.calls_per_hour = 2;
+    let h = harness(cfg).await;
+    for _ in 0..2 {
+        data(&tool(&h.state, "agent", "list_sandboxes", json!({})).await);
+    }
+    for _ in 0..50 {
+        let r = tool(&h.state, "agent", "list_sandboxes", json!({})).await;
+        assert_eq!(error_code(&r), "rate_limited");
+        let r = tool(&h.state, "agent", "no_such_tool", json!({})).await;
+        assert_eq!(error_code(&r), "rate_limited");
+    }
+    let mcp: Vec<_> = h
+        .store
+        .audit()
+        .into_iter()
+        .filter(|r| r.action == AUDIT_ACTION)
+        .collect();
+    // Two accepted calls and one "limit reached" record for the hour.
+    assert_eq!(mcp.len(), 3);
+    assert_eq!(mcp[2].detail["error_code"], "rate_limited");
+    let window = NOW.div_euclid(3_600_000) * 3_600_000;
+    let key = "mcp.call:t1:agent";
+    assert_eq!(h.store.rate_count(key, window).await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn the_call_budget_slides_across_the_hour_boundary() {
+    let mut cfg = McpConfig::default();
+    cfg.limits.calls_per_hour = 3;
+    let h = harness(cfg).await;
+    let hour = 3_600_000;
+    let top = NOW.div_euclid(hour) * hour;
+    // Three calls in the last minute of one hour.
+    h.clock.store(top + hour - 60_000, Ordering::SeqCst);
+    for _ in 0..3 {
+        data(&tool(&h.state, "agent", "list_sandboxes", json!({})).await);
+    }
+    // Two minutes later a fixed window would allow three more. The sliding
+    // estimate still counts most of the previous hour.
+    h.clock.store(top + hour + 60_000, Ordering::SeqCst);
+    let r = tool(&h.state, "agent", "list_sandboxes", json!({})).await;
+    assert_eq!(error_code(&r), "rate_limited");
+    // Once the previous hour has slid mostly out, calls are allowed again.
+    h.clock.store(top + 2 * hour - 60_000, Ordering::SeqCst);
+    data(&tool(&h.state, "agent", "list_sandboxes", json!({})).await);
+}
+
+#[tokio::test]
+async fn live_cap_counts_only_this_tokens_live_sandboxes() {
+    let mut cfg = McpConfig::default();
+    cfg.limits.max_live_sandboxes = 1;
+    let h = harness(cfg).await;
+    let create = json!({"catalogue_entry_id": "foiled/demo-app/1.0.0"});
+    // Sandboxes the operator launched through the REST API do not use the
+    // agent's allowance.
+    for _ in 0..2 {
+        let req = Request::post("/v0/sandboxes")
+            .header("authorization", format!("Bearer fo_operator.{SECRET}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"catalogue_id": "foiled/demo-app/1.0.0"}).to_string(),
+            ))
+            .unwrap();
+        let (st, _, _) = send(&h.state, req).await;
+        assert_eq!(st, StatusCode::CREATED);
+    }
+    let r = tool(&h.state, "agent", "create_sandbox", create.clone()).await;
+    let id = data(&r)["sandbox"]["id"].as_str().unwrap().to_string();
+    let r = tool(&h.state, "agent", "create_sandbox", create.clone()).await;
+    assert_eq!(error_code(&r), "sandbox_cap_reached");
+    // Once the host reports it destroyed, it no longer counts.
+    h.store.set_state(&id, DecoyState::Destroyed);
+    data(&tool(&h.state, "agent", "create_sandbox", create.clone()).await);
+}
+
+#[tokio::test]
+async fn idempotent_retries_bypass_the_agent_caps() {
+    let mut cfg = McpConfig::default();
+    cfg.limits.creates_per_hour = 1;
+    cfg.limits.max_live_sandboxes = 1;
+    let s = state_with(cfg).await;
+    let with_key = json!({"catalogue_entry_id": "foiled/demo-app/1.0.0", "idempotency_key": "k-1"});
+    let first = tool(&s, "agent", "create_sandbox", with_key.clone()).await;
+    let id = data(&first)["sandbox"]["id"].clone();
+    // Same key: the API returns the original sandbox, the caps do not interfere.
+    let again = tool(&s, "agent", "create_sandbox", with_key.clone()).await;
+    assert_eq!(data(&again)["sandbox"]["id"], id);
+    // A new create is still refused.
+    let r = tool(
+        &s,
+        "agent",
+        "create_sandbox",
+        json!({"catalogue_entry_id": "foiled/demo-app/1.0.0", "idempotency_key": "k-2"}),
+    )
+    .await;
+    assert_eq!(error_code(&r), "sandbox_cap_reached");
+}
+
+#[tokio::test]
+async fn audit_failure_does_not_undo_a_finished_action() {
+    let h = harness(McpConfig::default()).await;
+    h.store.fail_audit_for(AUDIT_ACTION);
+    let r = tool(
+        &h.state,
+        "agent",
+        "create_sandbox",
+        json!({"catalogue_entry_id": "foiled/demo-app/1.0.0"}),
+    )
+    .await;
+    assert!(data(&r)["sandbox"]["id"].is_string());
+    assert_eq!(r["structuredContent"]["audit_failed"], true);
+    // The API's own record of the create is still there.
+    assert!(h.store.audit().iter().any(|a| a.action == "decoy.create"));
+}
+
+#[tokio::test]
+async fn elicitation_asks_the_operator_before_destructive_tools() {
+    let s = state().await;
+    let r = tool(
+        &s,
+        "agent",
+        "create_sandbox",
+        json!({"catalogue_entry_id": "foiled/demo-app/1.0.0"}),
+    )
+    .await;
+    let id = data(&r)["sandbox"]["id"].as_str().unwrap().to_string();
+    let args = json!({"sandbox_id": id, "reason": "end of test", "confirm": true});
+    let caps = json!({"_meta": {
+        "io.modelcontextprotocol/protocolVersion": MODERN,
+        "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
+    }});
+
+    // First call: input_required with a form asking for approval.
+    let r = modern_tool(&s, "agent", "destroy_sandbox", args.clone(), caps.clone()).await;
+    assert_eq!(r["resultType"], "input_required");
+    let ask = &r["inputRequests"]["approve"];
+    assert_eq!(ask["method"], "elicitation/create");
+    assert_eq!(ask["params"]["mode"], "form");
+    assert!(ask["params"]["message"].as_str().unwrap().contains(&id));
+    let state_token = r["requestState"].as_str().unwrap().to_string();
+
+    let retry = |answer: Value, st: &str| {
+        let mut e = caps.clone();
+        e["inputResponses"] = json!({"approve": answer});
+        e["requestState"] = json!(st);
+        e
+    };
+    // Declined.
+    let r = modern_tool(
+        &s,
+        "agent",
+        "destroy_sandbox",
+        args.clone(),
+        retry(json!({"action": "decline"}), &state_token),
+    )
+    .await;
+    assert_eq!(error_code(&r), "not_approved");
+    // An approval for different arguments does not carry over.
+    let mut other = args.clone();
+    other["reason"] = json!("something else");
+    let r = modern_tool(
+        &s,
+        "agent",
+        "destroy_sandbox",
+        other,
+        retry(
+            json!({"action": "accept", "content": {"approve": true}}),
+            &state_token,
+        ),
+    )
+    .await;
+    assert_eq!(error_code(&r), "invalid_arguments");
+    // Approved.
+    let r = modern_tool(
+        &s,
+        "agent",
+        "destroy_sandbox",
+        args.clone(),
+        retry(
+            json!({"action": "accept", "content": {"approve": true}}),
+            &state_token,
+        ),
+    )
+    .await;
+    assert_eq!(data(&r)["job_kind"], "decoy.destroy");
+    assert_eq!(r["resultType"], "complete");
+
+    let a = audit(&s, "operator").await;
+    assert_eq!(a[0]["detail"]["approval"], "elicitation");
+    assert_eq!(a[3]["detail"]["status"], "input_required");
+
+    // Without the capability, confirm is all there is, and the audit says so.
+    let r = tool(
+        &s,
+        "agent",
+        "reset_sandbox",
+        json!({"sandbox_id": "nope", "reason": "x", "confirm": true}),
+    )
+    .await;
+    assert_eq!(error_code(&r), "not_found");
+    let a = audit(&s, "operator").await;
+    assert_eq!(a[0]["detail"]["approval"], "confirm_argument");
+}
+
+#[tokio::test]
+async fn destructive_tools_can_be_kept_from_agent_tokens() {
+    let s = state_with(McpConfig {
+        agent_destructive_tools: false,
+        ..McpConfig::default()
+    })
+    .await;
+    let names = |v: &Value| -> Vec<String> {
+        v["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (_, agent) = rpc(&s, "agent", "tools/list", json!({})).await;
+    assert!(!names(&agent).contains(&"destroy_sandbox".to_string()));
+    let (_, v) = rpc(
+        &s,
+        "agent",
+        "tools/call",
+        json!({"name": "destroy_sandbox", "arguments": {"sandbox_id": "x", "reason": "y", "confirm": true}}),
+    )
+    .await;
+    assert_eq!(v["error"]["code"], -32602);
+    // Operator tokens keep them.
+    let (_, op) = rpc(&s, "operator", "tools/list", json!({})).await;
+    assert!(names(&op).contains(&"destroy_sandbox".to_string()));
+}
+
+#[tokio::test]
+async fn audit_output_is_labelled_untrusted() {
+    let s = state().await;
+    data(&tool(&s, "agent", "list_sandboxes", json!({})).await);
+    let r = tool(&s, "agent", "read_audit", json!({})).await;
+    assert_eq!(r["structuredContent"]["trust"], "untrusted_capture");
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("UNTRUSTED")
+    );
 }

@@ -34,6 +34,8 @@ pub fn list_decoys() -> String {
            AND (?2 IS NULL OR state = ?2) \
            AND (?3 IS NULL OR catalogue_id = ?3) \
            AND (?4 IS NULL OR created_at < ?4 OR (created_at = ?4 AND id < ?5)) \
+           AND (?7 IS NULL OR created_by = ?7) \
+           AND (?8 = 0 OR state != 'destroyed') \
          ORDER BY created_at DESC, id DESC LIMIT ?6"
     )
 }
@@ -92,6 +94,9 @@ pub const SET_DECOY_STATE: &str = "UPDATE decoys SET state = ?4, generation = ge
 pub const UPSERT_HEARTBEAT: &str = "INSERT INTO host_heartbeats (tenant_id, host_id, heartbeat, clock_skew_ms, received_at) \
      VALUES (?1, ?2, ?3, ?4, ?5) \
      ON CONFLICT (tenant_id, host_id) DO UPDATE SET heartbeat = ?3, clock_skew_ms = ?4, received_at = ?5";
+
+/// The count for one window, without adding a hit.
+pub const RATE_COUNT: &str = "SELECT count FROM rate_limits WHERE key = ?1 AND window_start = ?2";
 
 /// Increment and return the count for one window in one statement.
 pub const RATE_LIMIT_HIT: &str = "INSERT INTO rate_limits (key, window_start, count) VALUES (?1, ?2, 1) \
@@ -155,11 +160,23 @@ mod tests {
         };
         let none: Option<String> = None;
         let none_i: Option<i64> = None;
-        let all = ids(&list_decoys(), &[&"t1", &none, &none, &none_i, &none, &10]);
+        let all = ids(
+            &list_decoys(),
+            &[&"t1", &none, &none, &none_i, &none, &10, &none, &0],
+        );
         assert_eq!(all, vec!["c", "b", "a"]);
         let healthy = ids(
             &list_decoys(),
-            &[&"t1", &Some("healthy"), &none, &none_i, &none, &10],
+            &[
+                &"t1",
+                &Some("healthy"),
+                &none,
+                &none_i,
+                &none,
+                &10,
+                &none,
+                &0,
+            ],
         );
         assert_eq!(healthy, vec!["b"]);
         // Cursor after "c" (ts 200) must still return "b" (same ts) then "a".
@@ -170,9 +187,19 @@ mod tests {
             .unwrap();
         let next = ids(
             &list_decoys(),
-            &[&"t1", &none, &none, &Some(ts), &Some(id), &10],
+            &[&"t1", &none, &none, &Some(ts), &Some(id), &10, &none, &0],
         );
         assert_eq!(next, vec!["b", "a"]);
+        let live = ids(
+            &list_decoys(),
+            &[&"t1", &none, &none, &none_i, &none, &10, &Some("tok1"), &1],
+        );
+        assert_eq!(live, vec!["b", "a"]);
+        let nobody = ids(
+            &list_decoys(),
+            &[&"t1", &none, &none, &none_i, &none, &10, &Some("other"), &1],
+        );
+        assert!(nobody.is_empty());
         let got: Option<String> = c
             .query_row(&decoy_by_id(), params!["t2", "a"], |r| r.get(0))
             .optional()
@@ -191,8 +218,15 @@ mod tests {
             c.query_row(RATE_LIMIT_HIT, params!["k", w], |r| r.get(0))
                 .unwrap()
         };
+        let count = |w: i64| -> Option<i64> {
+            c.query_row(RATE_COUNT, params!["k", w], |r| r.get(0))
+                .optional()
+                .unwrap()
+        };
+        assert_eq!(count(0), None);
         assert_eq!(hit(0), 1);
         assert_eq!(hit(0), 2);
+        assert_eq!(count(0), Some(2));
         assert_eq!(hit(3600), 1);
     }
 

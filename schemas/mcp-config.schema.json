@@ -5,7 +5,7 @@
   "description": "Limits, output caps and origin policy for the MCP endpoint POST /v0/mcp (#24). See docs/mcp/foiled-mcp.md. Mirrors McpConfig in crates/core/src/mcp.rs.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "enabled", "destructive_tools", "allowed_origins", "limits", "output"],
+  "required": ["version", "enabled", "destructive_tools", "agent_destructive_tools", "allowed_origins", "limits", "output"],
   "properties": {
     "version": { "const": 1 },
     "enabled": {
@@ -15,6 +15,10 @@
     "destructive_tools": {
       "type": "boolean",
       "description": "Offer reset_sandbox and destroy_sandbox. Both still need confirm: true and a reason."
+    },
+    "agent_destructive_tools": {
+      "type": "boolean",
+      "description": "Offer reset_sandbox and destroy_sandbox to agent (role mcp) tokens. When false only operator tokens can use them."
     },
     "allowed_origins": {
       "type": "array",

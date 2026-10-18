@@ -142,6 +142,8 @@ paths:
       parameters:
         - { name: state, in: query, schema: { $ref: "#/components/schemas/DecoyState" } }
         - { name: catalogue_id, in: query, schema: { type: string } }
+        - { name: created_by, in: query, schema: { type: string }, description: "Only decoys created by this token id (the MCP agent cap counts with this, #24)." }
+        - { name: live, in: query, schema: { type: boolean, default: false }, description: "Only decoys that are not destroyed." }
         - { $ref: "#/components/parameters/Limit" }
         - { name: cursor, in: query, schema: { type: string }, description: "`next_cursor` from the previous page." }
       responses:
@@ -823,7 +825,11 @@ paths:
         answer 405). Serves protocol revisions `2026-07-28` (stateless,
         `server/discover`), `2025-11-25` and `2025-06-18` (`initialize`).
         Methods: `initialize`, `server/discover`, `ping`, `tools/list`,
-        `tools/call`.
+        `tools/call`. Under `2026-07-28` the `MCP-Protocol-Version`,
+        `Mcp-Method` and (for `tools/call`) `Mcp-Name` headers are required.
+        Destructive tools ask for the operator's approval through form
+        elicitation (`input_required`) when a `2026-07-28` client declares
+        that capability.
 
         The endpoint is a pure client of this API: each tool call is replayed
         against the REST routes with the caller's own token, so their scopes,
@@ -838,15 +844,15 @@ paths:
       parameters:
         - name: MCP-Protocol-Version
           in: header
-          description: Required on every request except `initialize` and `server/discover`. Must match `params._meta` when both are sent.
+          description: Required on every request except `initialize` and a bare `server/discover` probe. Must match `params._meta` when both are sent.
           schema: { type: string, enum: ["2026-07-28", "2025-11-25", "2025-06-18"] }
         - name: Mcp-Method
           in: header
-          description: When sent, must equal the body's `method`.
+          description: Required under 2026-07-28. When sent, must equal the body's `method`.
           schema: { type: string }
         - name: Mcp-Name
           in: header
-          description: When sent on `tools/call`, must equal `params.name`.
+          description: Required on `tools/call` under 2026-07-28. When sent, must equal `params.name`.
           schema: { type: string }
       requestBody:
         required: true

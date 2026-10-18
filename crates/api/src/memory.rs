@@ -23,6 +23,8 @@ struct Inner {
     events: Vec<CaptureEvent>,
     heartbeats: HashMap<(String, String), (serde_json::Value, i64)>,
     overrides: Vec<(String, LinkOverride)>,
+    /// Audit appends with this action fail, to test storage outages.
+    fail_audit_action: Option<String>,
 }
 
 #[derive(Default)]
@@ -45,6 +47,11 @@ impl MemoryStore {
 
     pub fn jobs(&self) -> Vec<JobRecord> {
         self.lock().jobs.clone()
+    }
+
+    /// Make every later audit append with `action` fail (tests only).
+    pub fn fail_audit_for(&self, action: &str) {
+        self.lock().fail_audit_action = Some(action.to_string());
     }
 
     pub fn audit(&self) -> Vec<AuditRecord> {
@@ -139,6 +146,8 @@ impl Store for MemoryStore {
                     .as_deref()
                     .is_none_or(|c| d.catalogue_id == c)
             })
+            .filter(|d| q.created_by.as_deref().is_none_or(|c| d.created_by == c))
+            .filter(|d| !q.live || d.state != DecoyState::Destroyed)
             .cloned()
             .collect();
         all.sort_by(|a, b| (b.created_at, &b.id).cmp(&(a.created_at, &a.id)));
@@ -187,8 +196,23 @@ impl Store for MemoryStore {
         ready(Ok(*count <= limit))
     }
 
+    fn rate_count(&self, key: &str, window_start: i64) -> StoreFuture<'_, u32> {
+        let n = self
+            .lock()
+            .rate
+            .get(&(key.to_string(), window_start))
+            .copied()
+            .unwrap_or(0);
+        ready(Ok(n))
+    }
+
     fn append_audit(&self, record: AuditRecord) -> StoreFuture<'_, ()> {
-        self.lock().audit.push(record);
+        let mut g = self.lock();
+        if g.fail_audit_action.as_deref() == Some(record.action.as_str()) {
+            return ready(Err(StoreError("audit unavailable".into())));
+        }
+        g.audit.push(record);
+        drop(g);
         ready(Ok(()))
     }
 

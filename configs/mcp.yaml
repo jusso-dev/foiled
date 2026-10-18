@@ -20,6 +20,12 @@ enabled: true
 # and a non-empty reason, and are audited.
 destructive_tools: true
 
+# Offer reset_sandbox and destroy_sandbox to agent (role mcp) tokens. Set to
+# false so only operator tokens can reset or destroy through MCP; agents
+# then do not see the tools at all. The confirm argument is set by the
+# model and is not human approval (see docs/mcp/foiled-mcp.md).
+agent_destructive_tools: true
+
 # Browser origins allowed to call the endpoint. Any request that carries a
 # different Origin header is refused with 403 (DNS rebinding guard).
 # Command-line and desktop MCP clients send no Origin header.
