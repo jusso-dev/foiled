@@ -17,11 +17,17 @@ export interface CveRefProps {
 /**
  * The only way to show a CVE id in the console. The `confidence` prop is
  * required by the type and checked at runtime, so a CVE never renders without
- * its "we assess as" context.
+ * its "we assess as" context. A row that arrives without confidence says so
+ * instead of taking the whole page down.
  */
 export function CveRef({ id, confidence, chipPlacement = "inline" }: CveRefProps) {
   if (!confidence || typeof confidence.score !== "number" || !confidence.level) {
-    throw new Error(`CveRef ${id}: a confidence level and score are required`);
+    return (
+      <span className="cve-ref" data-confidence="missing">
+        <span className="cve-ref__id">{id}</span>{" "}
+        <span className="muted">(confidence missing, not assessed)</span>
+      </span>
+    );
   }
   return (
     <span className="cve-ref" data-confidence={confidence.level}>

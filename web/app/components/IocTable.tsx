@@ -49,8 +49,15 @@ export function IocTable({ rows, caption }: { rows: readonly IocRow[]; caption: 
               <td>
                 <span className="tag">{TYPE_LABEL[r.type]}</span>
               </td>
-              <td className="mono" title={safe}>
-                {middleEllipsis(safe, 40)}
+              <td className="mono">
+                {safe.length > 40 ? (
+                  <details className="ioc-value">
+                    <summary>{middleEllipsis(safe, 40)}</summary>
+                    <span className="ioc-value__full">{safe}</span>
+                  </details>
+                ) : (
+                  safe
+                )}
               </td>
               <td className="mono muted">{r.firstSeen}</td>
               <td className="mono muted">{r.lastSeen}</td>

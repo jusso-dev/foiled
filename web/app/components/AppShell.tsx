@@ -78,7 +78,7 @@ export function AppShell({
   onTimeRangeChange,
   onRegionChange,
   onSearch,
-  live = true,
+  live = false,
   exampleData = false,
 }: AppShellProps) {
   const [range, setRange] = useState<TimeRange>(defaultTimeRange);

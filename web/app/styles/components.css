@@ -1,7 +1,7 @@
 /*
  * Component styles for the Foiled console (v3). Depends on tokens.css.
  * Glow (box-shadow blur or SVG blur) appears only in .live__dot and the
- * attack map hotspot filters. No text-shadow anywhere.
+ * attack map hotspot filter. No text-shadow anywhere.
  */
 
 /* ---------- Shell ---------- */
@@ -589,6 +589,7 @@
 
 .attack-map__svg {
   display: block;
+  background: var(--map-sea);
 }
 
 .attack-map__title {
@@ -1109,4 +1110,30 @@
   .design-detail {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* Reflow (WCAG 1.4.10): below 720px the sidebar stacks above the content. */
+@media (max-width: 720px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .shell__side {
+    position: static;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .shell__main {
+    padding: var(--space-6) var(--space-5) var(--space-8);
+  }
+}
+
+.ioc-value summary {
+  cursor: pointer;
+}
+
+.ioc-value__full {
+  overflow-wrap: anywhere;
 }

@@ -33,6 +33,7 @@ export default function Design() {
   const [demoToggle, setDemoToggle] = useState<"a" | "b" | "c">("a");
   return (
     <AppShell activeNav="live-attacks" counts={ex.navCounts} exampleData>
+      <h1 className="sr-only">Design system showcase</h1>
       <div className="design-kpis">
         {ex.kpis.map((k) => (
           <KpiCard key={k.label} {...k} />

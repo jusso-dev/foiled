@@ -115,10 +115,17 @@ export function AttackMap({
   const [zoom, setZoom] = useState(1);
   const uid = `map${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
+  // Zoom towards the sensors (the operator's own fleet), kept inside the map.
   const w = MAP_W / zoom;
   const h = VIEW_H / zoom;
-  const cx = MAP_W / 2;
-  const cy = VIEW_Y + VIEW_H / 2;
+  const focus = sensors.length
+    ? sensors
+        .map(project)
+        .reduce(([ax, ay], [x, y]) => [ax + x / sensors.length, ay + y / sensors.length], [0, 0])
+    : [MAP_W / 2, VIEW_Y + VIEW_H / 2];
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+  const cx = clamp(focus[0], w / 2, MAP_W - w / 2);
+  const cy = clamp(focus[1], VIEW_Y + h / 2, VIEW_Y + VIEW_H - h / 2);
   const viewBox = `${r1(cx - w / 2)} ${r1(cy - h / 2)} ${r1(w)} ${r1(h)}`;
 
   const hotById = new Map(hotspots.map((p) => [p.id, p]));
@@ -146,7 +153,7 @@ export function AttackMap({
       <svg
         className="attack-map__svg"
         viewBox={viewBox}
-        preserveAspectRatio="xMidYMid slice"
+        preserveAspectRatio="xMidYMid meet"
         width="100%"
         height={height}
         role="img"
@@ -159,12 +166,9 @@ export function AttackMap({
           <clipPath id={`${uid}-land`}>
             <path d={LAND} />
           </clipPath>
-          {/* Glow filters: used on hotspots and sensors only. */}
+          {/* Glow filter: used on hotspots only. */}
           <filter id={`${uid}-glow`} x="-200%" y="-200%" width="500%" height="500%">
             <feGaussianBlur stdDeviation="6" />
-          </filter>
-          <filter id={`${uid}-glow-sm`} x="-200%" y="-200%" width="500%" height="500%">
-            <feGaussianBlur stdDeviation="2" />
           </filter>
         </defs>
         <rect width={MAP_W} height={MAP_H} className="attack-map__sea" />
@@ -214,13 +218,6 @@ export function AttackMap({
           return (
             <g key={s.id} className="attack-map__sensor" data-sensor={s.id}>
               <title>{`${s.label}: ${s.hits} hits`}</title>
-              <circle
-                cx={r1(x)}
-                cy={r1(y)}
-                r={9}
-                className="attack-map__halo"
-                filter={`url(#${uid}-glow-sm)`}
-              />
               <rect x={r1(x - 3)} y={r1(y - 3)} width={6} height={6} className="attack-map__box" />
               {s.callout ? (
                 <g className="attack-map__callout">

@@ -93,7 +93,7 @@ describe("visual rules", () => {
     }
   });
 
-  it("uses the SVG blur filter only on map hotspots and sensors", () => {
+  it("uses the SVG blur filter only on map hotspots", () => {
     for (const [file, src] of Object.entries({ ...componentSources, ...routeSources })) {
       if (file.endsWith("AttackMap.tsx")) continue;
       expect(src, file).not.toContain("feGaussianBlur");

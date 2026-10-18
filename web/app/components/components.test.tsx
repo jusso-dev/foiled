@@ -52,11 +52,13 @@ describe("CveRef", () => {
     expect(out).toContain("chip--assessed");
   });
 
-  it("requires a confidence prop", () => {
+  it("requires a confidence prop and says so when a row lacks one", () => {
     // @ts-expect-error confidence is a required prop: this line must not type-check.
-    expect(() => html(<CveRef id="CVE-2099-EXAMPLE1" />)).toThrow(/confidence/);
+    expect(html(<CveRef id="CVE-2099-EXAMPLE1" />)).toContain("confidence missing");
     const bad = { level: "assessed" } as unknown as { level: "assessed"; score: number };
-    expect(() => html(<CveRef id="CVE-2099-EXAMPLE1" confidence={bad} />)).toThrow(/confidence/);
+    const out = html(<CveRef id="CVE-2099-EXAMPLE1" confidence={bad} />);
+    expect(out).toContain("confidence missing");
+    expect(out).not.toContain("chip--");
   });
 
   it("every CVE in the exploit table has a chip in its row", () => {
@@ -180,6 +182,10 @@ describe("AttackMap", () => {
     const [x, y] = project(hotspots[0]);
     expect(out).toContain(`cx="${Math.round(x * 10) / 10}" cy="${Math.round(y * 10) / 10}"`);
     expect(out).toMatch(/filter="url\(#[^)]+-glow\)"/);
+    // Glow on hotspots only, never on sensors (#39).
+    expect(out.match(/filter="url\(/g)).toHaveLength(2);
+    // Nothing is cropped: the whole map fits whatever the panel width.
+    expect(out).toContain('preserveAspectRatio="xMidYMid meet"');
     expect(out).toContain("SYD-EDGE-03 · 88");
     expect(out.match(/<path d="M[^"]*Q/g)).toHaveLength(1);
   });

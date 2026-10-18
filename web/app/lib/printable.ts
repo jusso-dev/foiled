@@ -4,12 +4,14 @@
  * characters visible so a payload cannot reorder or hide what an analyst sees.
  */
 
-// C0 controls except tab and newline, DEL, C1 controls, and bidi embedding,
-// override and isolate characters (the "Trojan Source" set).
-// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point.
-const UNSAFE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F؜‎‏‪-‮⁦-⁩]/g;
+// C0 controls except tab and newline, DEL, C1 controls, bidi marks, embedding,
+// override and isolate characters (the "Trojan Source" set), zero-width
+// characters, and the Unicode line and paragraph separators.
+const UNSAFE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point.
+  /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF]/g;
 
-/** Replace control and bidi characters with visible `\xNN` or `\u{NNNN}` escapes. */
+/** Replace control, bidi and invisible characters with visible `\xNN` or `\u{NNNN}` escapes. */
 export function toPrintable(text: string): string {
   return text.replace(UNSAFE, (ch) => {
     const cp = ch.codePointAt(0) ?? 0;
