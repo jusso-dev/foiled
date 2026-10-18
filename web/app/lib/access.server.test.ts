@@ -1,5 +1,10 @@
-import { beforeAll, describe, expect, it } from "vitest";
-import { type JwksFetcher, verifyAccess } from "./access.server";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  JWKS_REFRESH_MIN_MS,
+  type JwksFetcher,
+  resetAccessCache,
+  verifyAccess,
+} from "./access.server";
 
 const TEAM = "example.cloudflareaccess.com";
 const AUD = "aud-tag-0001";
@@ -53,9 +58,51 @@ beforeAll(async () => {
   };
 });
 
+beforeEach(() => resetAccessCache());
+
 describe("Cloudflare Access check", () => {
-  it("is skipped when Access is not configured (local development)", async () => {
-    expect(await verifyAccess(req(), {}, jwks, NOW)).toEqual({ ok: true });
+  it("refuses every request when Access is not configured, except in explicit development mode", async () => {
+    expect((await verifyAccess(req(), {}, jwks, NOW)).ok).toBe(false);
+    expect((await verifyAccess(req(), { ACCESS_AUD: AUD }, jwks, NOW)).ok).toBe(false);
+    expect((await verifyAccess(req(), { CONSOLE_ENV: "production" }, jwks, NOW)).ok).toBe(false);
+    expect(await verifyAccess(req(), { CONSOLE_ENV: "development" }, jwks, NOW)).toEqual({
+      ok: true,
+    });
+  });
+
+  it("refetches keys for an unknown kid at most once a minute and remembers misses", async () => {
+    let calls = 0;
+    const counting: JwksFetcher = async (url) => {
+      calls++;
+      return jwks(url);
+    };
+    const forged = await sign(good, "k-forged");
+    expect((await verifyAccess(req(await sign(good)), env, counting, NOW)).ok).toBe(true);
+    expect(calls).toBe(1);
+    for (let i = 0; i < 20; i++) {
+      expect((await verifyAccess(req(forged), env, counting, NOW + i * 1000)).ok).toBe(false);
+    }
+    expect(calls).toBe(1);
+    // After the minute: one refetch, then the miss is cached again.
+    const later = NOW + JWKS_REFRESH_MIN_MS + 1;
+    await verifyAccess(req(forged), env, counting, later);
+    await verifyAccess(req(forged), env, counting, later + 1);
+    expect(calls).toBe(2);
+  });
+
+  it("answers a malformed signing key or signature with a refusal, not an exception", async () => {
+    // A JWK the runtime refuses to import (workerd is stricter than Node here).
+    const spy = vi
+      .spyOn(crypto.subtle, "importKey")
+      .mockRejectedValueOnce(new DOMException("bad key"));
+    expect(await verifyAccess(req(await sign(good)), env, jwks, NOW)).toEqual({
+      ok: false,
+      reason: "unusable Access signing key or signature",
+    });
+    spy.mockRestore();
+    resetAccessCache();
+    const jwt = (await sign(good)).replace(/\.[^.]+$/, ".***");
+    expect((await verifyAccess(req(jwt), env, jwks, NOW)).ok).toBe(false);
   });
 
   it("accepts a valid token", async () => {

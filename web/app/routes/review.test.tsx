@@ -105,12 +105,28 @@ describe("review queue", () => {
     expect(a.calls.some((c) => c.method === "POST")).toBe(false);
     await page(envWith(a), "/review", {
       cookie,
-      form: form(session.csrf, { intent: "snooze", snooze_days: "30" }),
+      form: form(session.csrf, { intent: "snooze", snooze_days: "30", note: "waiting on vendor" }),
     });
     const until = (a.calls.find((c) => c.method === "POST")?.body as { until: number } | undefined)
       ?.until;
     expect(until).toBeLessThanOrEqual(Date.now() + 30 * 24 * 3600_000);
     expect(until).toBeGreaterThan(Date.now() + 29 * 24 * 3600_000);
+  });
+
+  it("needs a note to snooze", async () => {
+    const { cookie, session } = await signIn();
+    const a = reviewApi();
+    const r = expectPage(
+      await page(envWith(a), "/review", {
+        cookie,
+        form: form(session.csrf, { intent: "snooze", snooze_days: "7", note: "" }),
+      }),
+    );
+    expect(r.actionData).toMatchObject({
+      ok: false,
+      message: "Add a note: say why you are snoozing it.",
+    });
+    expect(a.calls.some((c) => c.method === "POST")).toBe(false);
   });
 
   it("claims and promotes to a draft write-up", async () => {

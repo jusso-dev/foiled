@@ -11,6 +11,11 @@
   "workers_dev": false,
   "preview_urls": false,
   "services": [{ "binding": "API", "service": "foiled-api" }],
+  // Signed-out console sessions, one object per session id, deleted at expiry (docs/ui/console.md).
+  "durable_objects": {
+    "bindings": [{ "name": "SESSION_REVOCATIONS", "class_name": "SessionRevocations" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SessionRevocations"] }],
   // The console serves every route and must stay behind Cloudflare Access.
   // Any value other than "console" is treated as the public surface (fail closed).
   "vars": { "FOILED_SURFACE": "console" },

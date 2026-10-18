@@ -4,7 +4,14 @@ import { effectiveTlp, exportFilename } from "./exports";
 import { formatDuration, formatOffset, formatTs } from "./format";
 import { checkLaunch, configQuery, createBody } from "./launch";
 import { campaignSentence, confidenceOf, ledger, levelFor, linkSentence, sortLinks } from "./links";
-import { type FeedItem, MAX_BACKOFF_MS, mergeFeed, nextDelay, POLL_MS } from "./live";
+import {
+  type FeedItem,
+  feedSignedOut,
+  MAX_BACKOFF_MS,
+  mergeFeed,
+  nextDelay,
+  POLL_MS,
+} from "./live";
 import { safeNext, searchTarget } from "./navigation";
 import { SECURITY_HEADERS, withSecurityHeaders } from "./security-headers";
 
@@ -192,6 +199,15 @@ describe("live feed", () => {
 
   it("does not let a stale backfill overwrite newer state", () => {
     expect(mergeFeed([item("a", 9, "exploit")], [item("a", 4)])[0].state).toBe("exploit");
+  });
+
+  it("recognises a signed-out answer so the feed stops instead of backing off", () => {
+    expect(feedSignedOut(401, false, { ok: false, error: "x", signedOut: true })).toBe(true);
+    expect(feedSignedOut(200, true, null)).toBe(true);
+    expect(feedSignedOut(502, false, { ok: false, error: "API down" })).toBe(false);
+    expect(feedSignedOut(200, false, { ok: true, items: [], cursor: 1, gap: false, at: 1 })).toBe(
+      false,
+    );
   });
 
   it("backs off after failures with bounded jitter", () => {

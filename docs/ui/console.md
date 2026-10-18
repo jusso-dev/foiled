@@ -50,12 +50,13 @@ When an API route is not served yet, the API's router falls through with `404 no
 
 ## Sign in and sessions
 
-1. **Cloudflare Access** sits in front of the console hostname (docs/deploy/workers.md). When `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are set, the Worker also verifies the `Cf-Access-Jwt-Assertion` JWT on every request (RS256 against the team's published keys, audience, issuer, expiry) and answers 403 without it, so a missing Access policy fails closed (`web/app/lib/access.server.ts`).
+1. **Cloudflare Access** sits in front of the console hostname (docs/deploy/workers.md). The Worker also verifies the `Cf-Access-Jwt-Assertion` JWT on every request (RS256 against the team's published keys, audience, issuer, expiry) and answers 403 without it, so a missing Access policy fails closed (`web/app/lib/access.server.ts`). `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are required: without them the console refuses every request, unless `CONSOLE_ENV=development` is set for local work. Keys are cached for 10 minutes; an unknown key id refetches them at most once a minute per isolate, so forged key ids cannot drive refetches, and a malformed key or signature is a 403, not an error. `workers_dev` and `preview_urls` are off in `web/wrangler.jsonc`, so there is no hostname that bypasses Access.
 2. **Operator token.** The operator pastes an API token (`fo_<id>.<secret>`) into `/login`. The Worker calls `GET /v0/whoami` with it. Only `human` role tokens may sign in; MCP, host and sensor credentials are refused.
-3. **Session cookie.** The token, the caller's id, tenant and scopes, and a random CSRF token are sealed with AES-256-GCM under a key derived (HKDF-SHA-256) from the `SESSION_SECRET` Worker secret, and set as `__Host-foiled_session` with `HttpOnly`, `Secure`, `SameSite=Strict` and `Path=/`. Sessions last at most 12 hours. The token is never sent to page scripts, never written to browser storage and never put in a loader response (`web/app/lib/session.server.ts`).
+3. **Session cookie.** The token, the caller's id, tenant and scopes, and a random CSRF token are sealed with AES-256-GCM under a key derived (HKDF-SHA-256) from the `SESSION_SECRET` Worker secret, and set as `__Host-foiled_session` with `HttpOnly`, `Secure`, `SameSite=Strict` and `Path=/`. Each session has a random id. Sessions last at most 12 hours. The token is never sent to page scripts, never written to browser storage and never put in a loader response (`web/app/lib/session.server.ts`).
 4. **Every API call** is made by the Worker with the session's token. The console never sends a tenant id: tenant scoping is the API's job, and another tenant's resource is a 404.
 5. **Expiry and revocation.** When the API answers 401 (token expired or revoked), the console clears the cookie and sends the operator to `/login`, keeping the page they were on in `?next=` (same-site paths only).
-6. **Sign out** is a CSRF-checked POST that clears the cookie.
+6. **Sign out** is a CSRF-checked POST that revokes the session server-side, then clears the cookie. The session id is recorded in a `SessionRevocations` Durable Object named after it (one object per signed-out session, deleted by an alarm when the session would have expired), and every request checks it, so a copied cookie stops working at sign-out rather than at expiry. Without the `SESSION_REVOCATIONS` binding the console treats every session as revoked, except in development mode. The check costs one Durable Object call per page load.
+7. **Form bodies** are capped at 64 KB (4 KB for sign-in) while they stream in, so a chunked request without a `Content-Length` is bounded too.
 
 ### CSRF
 
@@ -246,6 +247,7 @@ The overview's "Latest attempts" panel is the live feed.
 
 - **Now (polling):** the browser asks `/live?since=<cursor>` every 15 seconds while the tab is visible. The cursor is the newest `last_seen` the feed holds. The answer is every attempt with activity since then, merged into the feed by attempt id (a returning attempt moves to the top with its new state; a stale answer never overwrites newer state). The newest 20 are kept.
 - **Reconnect:** after a failure the next try waits 30 seconds, then 60, then at most 120, each with up to 20 per cent jitter so many consoles do not return together after a deploy. The indicator shows "Paused" until a poll succeeds again.
+- **Signed out:** when the session has expired or was revoked, `/live` answers `401` with `{"ok": false, "signedOut": true}` instead of redirecting. The feed stops polling and shows "Signed out" with a link to sign in again, rather than backing off forever.
 - **Backfill:** when the tab becomes visible again, or after a failure clears, the feed asks from its cursor at once, so nothing that happened while away is lost. The API reads at most 31 days; a client away longer gets what fits and the feed says some activity could not be backfilled. The same note appears when one read was truncated.
 - **Later (#14 follow-up, `GET /v0/events`):** the Durable Object stream (ADR 0009) pushes events over a hibernating WebSocket. Every deploy drops those connections, so the client keeps the same cursor and on every reconnect first backfills from `/live?since=<cursor>`, then resumes the stream. The polling path stays as the fallback.
 
@@ -274,9 +276,11 @@ Attacker-controlled fields (sources, paths, labels, timeline summaries, IOC valu
 | --- | --- | --- | --- |
 | `SESSION_SECRET` | Worker secret (`wrangler secret put SESSION_SECRET`), or `web/.dev.vars` locally | none: sign-in refused | At least 32 random characters. Rotating it signs everyone out. |
 | `QUARANTINE_DOWNLOADS` | Worker variable | off | `on` enables the double-confirm download flow. |
-| `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | Worker secrets | unset: check skipped | Verify Cloudflare Access JWTs in the console Worker. Set both in production. |
+| `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | Worker secrets | none: every request refused | Verify Cloudflare Access JWTs in the console Worker. Required outside development. |
+| `CONSOLE_ENV` | `web/.dev.vars` only | unset (production) | `development` allows running without Access and without the revocation binding. Never set it on a deployed Worker. |
+| `SESSION_REVOCATIONS` | Durable Object binding in `web/wrangler.jsonc` | configured | Server-side sign-out (class `SessionRevocations`, migration `v1`). |
 
-Local development: put `SESSION_SECRET` in `web/.dev.vars` (ignored by git) and run the API Worker locally so the `API` Service Binding resolves. Sign in with a token from the mock or a local D1. No real tokens belong in the tree.
+Local development: put `SESSION_SECRET` and `CONSOLE_ENV=development` in `web/.dev.vars` (ignored by git) and run the API Worker locally so the `API` Service Binding resolves. Sign in with a token from the mock or a local D1. No real tokens belong in the tree.
 
 ## Tests
 

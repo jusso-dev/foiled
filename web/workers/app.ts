@@ -12,6 +12,8 @@ import { isRateLimited, rateLimitKey } from "../app/lib/rate-limit";
 import { withSecurityHeaders } from "../app/lib/security-headers";
 import { isPublicPath, publicDecision, surfaceFrom } from "../app/lib/surface";
 
+export { SessionRevocations } from "./session-revocations";
+
 const requestHandler = createRequestHandler(
   () => import("virtual:react-router/server-build"),
   import.meta.env.MODE,

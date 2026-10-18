@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { type FeedItem, type LiveResponse, mergeFeed, nextDelay, POLL_MS } from "../../lib/live";
+import {
+  type FeedItem,
+  feedSignedOut,
+  type LiveResponse,
+  mergeFeed,
+  nextDelay,
+  POLL_MS,
+} from "../../lib/live";
 import { toPrintable } from "../../lib/printable";
 import { LiveIndicator } from "../AppShell";
 import { AttemptStateTag, Time } from "./Controls";
@@ -18,16 +25,19 @@ export function LiveFeed({ initial, cursor }: { initial: readonly FeedItem[]; cu
   const [items, setItems] = useState<FeedItem[]>(() => [...initial]);
   const [live, setLive] = useState(false);
   const [gap, setGap] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
   const cursorRef = useRef(cursor);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let failures = 0;
     let inFlight = false;
+    let stopped = false;
     const ctrl = new AbortController();
 
     const schedule = (ms: number) => {
       clearTimeout(timer);
+      if (stopped) return;
       timer = setTimeout(tick, ms);
     };
 
@@ -43,8 +53,16 @@ export function LiveFeed({ initial, cursor }: { initial: readonly FeedItem[]; cu
           credentials: "same-origin",
           signal: ctrl.signal,
         });
-        const body = (await res.json()) as LiveResponse;
-        if (!body.ok) throw new Error(body.error);
+        const json = (res.headers.get("content-type") ?? "").includes("application/json");
+        const body = json ? ((await res.json()) as LiveResponse) : null;
+        // Expired or revoked session: stop polling and say so instead of backing off forever.
+        if (feedSignedOut(res.status, res.redirected, body)) {
+          stopped = true;
+          setSignedOut(true);
+          setLive(false);
+          return;
+        }
+        if (!body?.ok) throw new Error(body?.error ?? "feed failed");
         cursorRef.current = Math.max(cursorRef.current, body.cursor);
         setItems((prev) => mergeFeed(prev, body.items));
         setGap(body.gap);
@@ -80,6 +98,16 @@ export function LiveFeed({ initial, cursor }: { initial: readonly FeedItem[]; cu
         </h2>
         <LiveIndicator live={live} />
       </header>
+      {signedOut ? (
+        <Notice kind="warn" title="Signed out">
+          <p>
+            Your session ended, so the feed stopped.{" "}
+            <a className="link" href="/login">
+              Sign in again
+            </a>
+          </p>
+        </Notice>
+      ) : null}
       {gap ? (
         <Notice kind="warn">
           <p>

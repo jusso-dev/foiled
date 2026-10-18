@@ -7,7 +7,11 @@ import {
   expectPage,
   expectRedirect,
   fakeApi,
+  ORIGIN,
   page,
+  rawQuery,
+  resource,
+  revokedSessions,
   signIn,
   TOKEN,
   text,
@@ -124,6 +128,63 @@ describe("sign out and CSRF", () => {
     const r = await page(envWith(whoami()), "/logout", { cookie, form: { csrf: session.csrf } });
     expect(expectRedirect(r)).toBe("/login");
     if (r.kind === "response") expect(r.response.headers.get("set-cookie")).toContain("Max-Age=0");
+  });
+
+  it("revokes the session server-side, so a copied cookie stops working at sign-out", async () => {
+    const { cookie, session } = await signIn();
+    const env = envWith(whoami());
+    expect(expectPage(await page(env, "/attempts", { cookie })).status).toBe(200);
+    await page(env, "/logout", { cookie, form: { csrf: session.csrf } });
+    expect(revokedSessions.has(`session:${session.sid}`)).toBe(true);
+    const replay = await page(env, "/attempts", { cookie });
+    expect(expectRedirect(replay)).toBe("/login?next=%2Fattempts");
+    // The sign-in page does not treat the revoked cookie as signed in either.
+    expect(expectPage(await page(env, "/login", { cookie })).status).toBe(200);
+  });
+
+  it("treats sessions as revoked when the revocation binding is missing, outside development", async () => {
+    const { cookie } = await signIn();
+    const prod = envWith(whoami(), { SESSION_REVOCATIONS: undefined } as never);
+    expect(expectRedirect(await page(prod, "/attempts", { cookie }))).toBe(
+      "/login?next=%2Fattempts",
+    );
+    const dev = envWith(whoami(), {
+      SESSION_REVOCATIONS: undefined,
+      CONSOLE_ENV: "development",
+    } as never);
+    expect(expectPage(await page(dev, "/attempts", { cookie })).status).toBe(200);
+  });
+
+  it("bounds form bodies while streaming, even without a Content-Length", async () => {
+    const { cookie, session } = await signIn();
+    const big = `csrf=${session.csrf}&note=${"x".repeat(70 * 1024)}`;
+    const chunks = [big.slice(0, 1000), big.slice(1000)];
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        for (const x of chunks) c.enqueue(new TextEncoder().encode(x));
+        c.close();
+      },
+    });
+    const req = new Request(`${ORIGIN}/logout`, {
+      method: "POST",
+      headers: {
+        cookie,
+        origin: ORIGIN,
+        "sec-fetch-site": "same-origin",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    expect(req.headers.get("content-length")).toBeNull();
+    const res = await rawQuery(envWith(whoami()), req);
+    expect(res.status).toBe(413);
+  });
+
+  it("answers the live feed with 401 JSON, not a redirect, when signed out", async () => {
+    const res = await resource(envWith(whoami()), "/live?since=1", "routes/live");
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ ok: false, error: "Signed out.", signedOut: true });
   });
 
   it("refuses a post without the session's CSRF token", async () => {

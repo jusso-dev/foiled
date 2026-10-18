@@ -7,6 +7,7 @@
 import { data, type RouterContextProvider, redirect } from "react-router";
 import { cloudflareContext } from "../context";
 import { ApiError, BadIdError, ConsoleApi } from "./api.server";
+import { isRevoked } from "./revocation.server";
 import {
   clearSessionCookie,
   hasScope,
@@ -45,6 +46,7 @@ export async function requireOperator({ request, context }: RouteArgs): Promise<
   const raw = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
   const session = await openSession(raw, env.SESSION_SECRET, Date.now()).catch(() => null);
   if (!session) throw loginRedirect(request, raw !== null);
+  if (await isRevoked(env, session).catch(() => true)) throw loginRedirect(request, true);
   return {
     session,
     api: new ConsoleApi(env.API, session.token),
@@ -57,15 +59,49 @@ export interface Mutation extends Operator {
   form: FormData;
 }
 
+/**
+ * Read a form body with a byte cap enforced while streaming, so a chunked
+ * request without a Content-Length is bounded too. Over the cap is a 413.
+ */
+export async function readForm(request: Request, max = MAX_FORM_BYTES): Promise<FormData> {
+  const tooLarge = () => data({ message: "Form too large." }, { status: 413 });
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > max) throw tooLarge();
+  const type = request.headers.get("content-type") ?? "";
+  if (!request.body) return new FormData();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) {
+    body.set(c, at);
+    at += c.byteLength;
+  }
+  try {
+    return await new Response(body, { headers: { "content-type": type } }).formData();
+  } catch {
+    throw data({ message: "Unreadable form." }, { status: 400 });
+  }
+}
+
 /** For actions: a valid session, a same-origin POST and the session's CSRF token. */
 export async function requireMutation(args: RouteArgs): Promise<Mutation> {
   const op = await requireOperator(args);
   const { request } = args;
   if (request.method !== "POST") throw data({ message: "Method not allowed." }, { status: 405 });
   if (!sameOrigin(request)) throw data({ message: "Cross-site request refused." }, { status: 403 });
-  const length = Number(request.headers.get("content-length") ?? "0");
-  if (length > MAX_FORM_BYTES) throw data({ message: "Form too large." }, { status: 413 });
-  const form = await request.formData();
+  const form = await readForm(request);
   const csrf = form.get("csrf");
   if (typeof csrf !== "string" || !safeEqual(csrf, op.session.csrf)) {
     throw data(

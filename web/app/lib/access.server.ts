@@ -2,10 +2,14 @@
  * Cloudflare Access check in the console Worker (docs/deploy/workers.md,
  * "Entry points and auth"). Access sits in front of the console hostname;
  * this repeats its check so a missing or misconfigured Access policy fails
- * closed. Enforced when `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are both set.
+ * closed. `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are required: without them
+ * the console refuses every request, unless `CONSOLE_ENV` is `development`
+ * (local development only; docs/ui/console.md#configuration).
  */
 
 export interface AccessEnv {
+  /** `development` lets the console run without Access, for local work only. */
+  CONSOLE_ENV?: string;
   /** For example `example.cloudflareaccess.com`. */
   ACCESS_TEAM_DOMAIN?: string;
   /** The Access application's audience tag. */
@@ -23,7 +27,14 @@ interface Jwk {
 export type JwksFetcher = (url: string) => Promise<{ keys: Jwk[] }>;
 
 const JWKS_TTL_MS = 10 * 60 * 1000;
+/** An unknown `kid` refetches the keys at most this often per isolate. */
+export const JWKS_REFRESH_MIN_MS = 60 * 1000;
 const jwksCache = new Map<string, { at: number; keys: Jwk[] }>();
+
+/** Test hook: forget cached keys. */
+export function resetAccessCache(): void {
+  jwksCache.clear();
+}
 
 const defaultFetcher: JwksFetcher = async (url) => {
   const res = await fetch(url, { headers: { accept: "application/json" } });
@@ -42,13 +53,29 @@ function b64urlJson(s: string): Record<string, unknown> {
   return JSON.parse(new TextDecoder().decode(b64urlBytes(s))) as Record<string, unknown>;
 }
 
-async function keysFor(team: string, fetcher: JwksFetcher, now: number, refresh: boolean) {
+async function fetchKeys(url: string, fetcher: JwksFetcher, now: number): Promise<Jwk[]> {
+  const { keys } = await fetcher(url);
+  const list = Array.isArray(keys) ? keys : [];
+  jwksCache.set(url, { at: now, keys: list });
+  return list;
+}
+
+/**
+ * The signing key for `kid`. Keys are cached for 10 minutes. Access rotates
+ * keys, so an unknown kid triggers a refetch, but at most once a minute per
+ * isolate: within that minute every unknown kid is answered from the cached
+ * miss, so a stream of forged kids cannot drive refetches.
+ */
+async function keyFor(team: string, kid: string, fetcher: JwksFetcher, now: number) {
   const url = `https://${team}/cdn-cgi/access/certs`;
   const hit = jwksCache.get(url);
-  if (hit && !refresh && now - hit.at < JWKS_TTL_MS) return hit.keys;
-  const { keys } = await fetcher(url);
-  jwksCache.set(url, { at: now, keys: Array.isArray(keys) ? keys : [] });
-  return jwksCache.get(url)?.keys ?? [];
+  let keys = hit && now - hit.at < JWKS_TTL_MS ? hit.keys : await fetchKeys(url, fetcher, now);
+  const jwk = keys.find((k) => k.kid === kid);
+  if (jwk) return jwk;
+  const lastFetch = jwksCache.get(url)?.at ?? 0;
+  if (now - lastFetch < JWKS_REFRESH_MIN_MS) return undefined;
+  keys = await fetchKeys(url, fetcher, now);
+  return keys.find((k) => k.kid === kid);
 }
 
 export type AccessResult = { ok: true; email?: string } | { ok: false; reason: string };
@@ -62,7 +89,11 @@ export async function verifyAccess(
 ): Promise<AccessResult> {
   const team = env.ACCESS_TEAM_DOMAIN?.trim();
   const aud = env.ACCESS_AUD?.trim();
-  if (!team || !aud) return { ok: true };
+  if (!team || !aud) {
+    return env.CONSOLE_ENV === "development"
+      ? { ok: true }
+      : { ok: false, reason: "Access is not configured (ACCESS_TEAM_DOMAIN, ACCESS_AUD)" };
+  }
   const jwt = request.headers.get("cf-access-jwt-assertion");
   if (!jwt || jwt.length > 8192) return { ok: false, reason: "missing Access token" };
   const parts = jwt.split(".");
@@ -80,26 +111,30 @@ export async function verifyAccess(
   }
   let jwk: Jwk | undefined;
   try {
-    jwk = (await keysFor(team, fetcher, now, false)).find((k) => k.kid === header.kid);
-    // Access rotates keys: one refresh when the kid is unknown.
-    if (!jwk) jwk = (await keysFor(team, fetcher, now, true)).find((k) => k.kid === header.kid);
+    jwk = await keyFor(team, header.kid, fetcher, now);
   } catch {
     return { ok: false, reason: "Access keys unavailable" };
   }
   if (jwk?.kty !== "RSA") return { ok: false, reason: "unknown Access signing key" };
-  const key = await crypto.subtle.importKey(
-    "jwk",
-    { kty: "RSA", n: jwk.n, e: jwk.e, alg: "RS256", ext: true },
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["verify"],
-  );
-  const valid = await crypto.subtle.verify(
-    "RSASSA-PKCS1-v1_5",
-    key,
-    b64urlBytes(parts[2]),
-    new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
-  );
+  let valid = false;
+  try {
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      { kty: "RSA", n: jwk.n, e: jwk.e, alg: "RS256", ext: true },
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    valid = await crypto.subtle.verify(
+      "RSASSA-PKCS1-v1_5",
+      key,
+      b64urlBytes(parts[2]),
+      new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
+    );
+  } catch {
+    // A malformed key or signature is a refusal, not a server error.
+    return { ok: false, reason: "unusable Access signing key or signature" };
+  }
   if (!valid) return { ok: false, reason: "bad Access token signature" };
   const auds = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   if (!auds.includes(aud)) return { ok: false, reason: "Access token for another application" };

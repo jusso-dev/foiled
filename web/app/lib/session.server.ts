@@ -19,6 +19,8 @@ const AAD = new TextEncoder().encode("foiled-console-session-v1");
 
 export interface SessionData {
   v: 1;
+  /** Random session id, the key for server-side revocation at sign-out. */
+  sid: string;
   token: string;
   principal: Principal;
   csrf: string;
@@ -91,7 +93,15 @@ export function randomToken(): string {
 }
 
 export function newSession(token: string, principal: Principal, now: number): SessionData {
-  return { v: 1, token, principal, csrf: randomToken(), iat: now, exp: now + SESSION_TTL_MS };
+  return {
+    v: 1,
+    sid: randomToken(),
+    token,
+    principal,
+    csrf: randomToken(),
+    iat: now,
+    exp: now + SESSION_TTL_MS,
+  };
 }
 
 export async function sealSession(data: SessionData, secret: string | undefined): Promise<string> {
@@ -113,6 +123,7 @@ function isSession(v: unknown): v is SessionData {
   const p = s.principal as Record<string, unknown> | undefined;
   return (
     s.v === 1 &&
+    typeof s.sid === "string" &&
     typeof s.token === "string" &&
     typeof s.csrf === "string" &&
     typeof s.iat === "number" &&

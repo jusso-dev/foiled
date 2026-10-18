@@ -10,6 +10,23 @@ import type { Route } from "./+types/live";
  * to backfill after a reconnect.
  */
 export async function loader(args: Route.LoaderArgs) {
+  try {
+    return await feed(args);
+  } catch (e) {
+    // A fetch from script cannot follow the sign-in redirect usefully: say
+    // so in JSON and let the feed show "signed out" (expired or revoked session).
+    if (e instanceof Response && e.status >= 300 && e.status < 400) {
+      const body: LiveResponse = { ok: false, error: "Signed out.", signedOut: true };
+      const headers = new Headers({ "cache-control": "no-store" });
+      const cookie = e.headers.get("set-cookie");
+      if (cookie) headers.set("set-cookie", cookie);
+      return Response.json(body, { status: 401, headers });
+    }
+    throw e;
+  }
+}
+
+async function feed(args: Route.LoaderArgs): Promise<Response> {
   const op = await requireOperator(args);
   const now = Date.now();
   const raw = new URL(args.request.url).searchParams.get("since");

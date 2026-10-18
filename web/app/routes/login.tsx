@@ -4,7 +4,9 @@ import { Notice } from "../components/console/Notice";
 import { FoiledMark } from "../components/icons";
 import { cloudflareContext } from "../context";
 import { ApiError, ConsoleApi } from "../lib/api.server";
+import { readForm } from "../lib/console.server";
 import { safeNext } from "../lib/navigation";
+import { isRevoked } from "../lib/revocation.server";
 import {
   MIN_SECRET_LENGTH,
   newSession,
@@ -29,9 +31,8 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const next = safeNext(new URL(request.url).searchParams.get("next"));
   if (configured) {
     const raw = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
-    if (await openSession(raw, env.SESSION_SECRET, Date.now()).catch(() => null)) {
-      throw redirect(next);
-    }
+    const session = await openSession(raw, env.SESSION_SECRET, Date.now()).catch(() => null);
+    if (session && !(await isRevoked(env, session).catch(() => true))) throw redirect(next);
   }
   return { configured, next };
 }
@@ -46,7 +47,7 @@ export async function action({ request, context }: Route.ActionArgs) {
   if ((env.SESSION_SECRET?.length ?? 0) < MIN_SECRET_LENGTH) {
     return data({ error: "The console has no session secret configured." }, { status: 503 });
   }
-  const form = await request.formData();
+  const form = await readForm(request, 4096);
   const token = String(form.get("token") ?? "").trim();
   const next = safeNext(String(form.get("next") ?? "/"));
   if (!TOKEN.test(token)) {

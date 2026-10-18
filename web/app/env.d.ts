@@ -6,6 +6,11 @@ interface Env {
   SESSION_SECRET?: string;
   /** `on` shows quarantine download controls. Absent or anything else means off. */
   QUARANTINE_DOWNLOADS?: string;
+  /**
+   * `development` lets the console run without Cloudflare Access, for local
+   * work only. Anything else (or unset) requires ACCESS_TEAM_DOMAIN and ACCESS_AUD.
+   */
+  CONSOLE_ENV?: string;
   /** Cloudflare Access team domain. With ACCESS_AUD, every request needs a valid Access token. */
   ACCESS_TEAM_DOMAIN?: string;
   /** Cloudflare Access application audience tag. */

@@ -34,7 +34,7 @@ export const FEED_SIZE = 20;
 /** `GET /live?since=` (routes/live.tsx). */
 export type LiveResponse =
   | { ok: true; items: FeedItem[]; cursor: number; gap: boolean; at: number }
-  | { ok: false; error: string };
+  | { ok: false; error: string; signedOut?: boolean };
 
 /**
  * Merge a backfill into the feed: an attempt seen again moves to the top with
@@ -63,4 +63,17 @@ export function nextDelay(failures: number, random: () => number = Math.random):
   if (failures <= 0) return POLL_MS;
   const base = Math.min(MAX_BACKOFF_MS, POLL_MS * 2 ** Math.min(failures, 4));
   return Math.round(base * (1 + 0.2 * random()));
+}
+
+/**
+ * Whether a `/live` answer means the session is gone (expired, revoked or
+ * signed out elsewhere): a 401, a redirect followed to the sign-in page, or
+ * a body that says so.
+ */
+export function feedSignedOut(
+  status: number,
+  redirected: boolean,
+  body: LiveResponse | null,
+): boolean {
+  return status === 401 || redirected || (body !== null && !body.ok && body.signedOut === true);
 }

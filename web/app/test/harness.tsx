@@ -76,8 +76,26 @@ export function fakeApi(handler: Handler) {
 
 export type FakeApi = ReturnType<typeof fakeApi>;
 
+/** Session ids signed out through the fake `SESSION_REVOCATIONS` binding, shared by every env. */
+export const revokedSessions = new Set<string>();
+
+const fakeRevocations = {
+  idFromName: (name: string) => name,
+  get: (name: unknown) => ({
+    isRevoked: async () => revokedSessions.has(String(name)),
+    revoke: async () => {
+      revokedSessions.add(String(name));
+    },
+  }),
+};
+
 export function envWith(api: FakeApi, extra: Partial<Env> = {}): Env {
-  return { API: api as unknown as Fetcher, SESSION_SECRET: SECRET, ...extra } as Env;
+  return {
+    API: api as unknown as Fetcher,
+    SESSION_SECRET: SECRET,
+    SESSION_REVOCATIONS: fakeRevocations,
+    ...extra,
+  } as unknown as Env;
 }
 
 export const ADMIN: Principal = { id: "tok1", role: "human", tenant_id: "t1", scopes: ["admin"] };
@@ -190,6 +208,13 @@ export async function page(env: Env, path: string, opts: RequestOpts = {}): Prom
     actionData,
     loaderData: result.loaderData as Record<string, unknown>,
   };
+}
+
+/** Run a hand-built request through the router; returns the status of the page or response. */
+export async function rawQuery(env: Env, request: Request): Promise<{ status: number }> {
+  const handler = createStaticHandler(routes);
+  const result = await handler.query(request, { requestContext: context(env) });
+  return { status: result instanceof Response ? result.status : result.statusCode };
 }
 
 /** A resource route (no component): the loader or action's own Response. */

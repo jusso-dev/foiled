@@ -103,6 +103,7 @@ export async function action(args: Route.ActionArgs) {
   if (version !== undefined) body.expected_version = version;
   if (note) body.note = note;
   if (act === "reject" && !note) return fail("Add a note: a rejection needs a reason.");
+  if (act === "snooze" && !note) return fail("Add a note: say why you are snoozing it.");
   if (act === "approve" && kind !== "write_up" && !note) {
     return fail("Add a note: say why you approve.");
   }
@@ -332,7 +333,9 @@ function ReviewCard({
               <input type="hidden" name="kind" value={item.kind} />
               <input type="hidden" name="version" value={item.version} />
               <div className="field field--wide">
-                <label htmlFor={`${id}-note`}>Note (audited; required to approve or reject)</label>
+                <label htmlFor={`${id}-note`}>
+                  Note (audited; required to approve, reject or snooze)
+                </label>
                 <textarea id={`${id}-note`} name="note" maxLength={1000} rows={2} />
               </div>
               {item.kind === "campaign_label" ? (
