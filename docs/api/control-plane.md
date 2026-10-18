@@ -10,7 +10,7 @@ The control plane is a **trusted interface only**. It runs as an Axum Worker on 
 | --- | --- | --- | --- |
 | Operator console (#14) | Service Binding from the `web` Worker | Operator session mapped to a bearer token | Operator scopes |
 | CLI and scripts | API hostname, behind Cloudflare Access | `Authorization: Bearer fo_<id>.<secret>` | Operator scopes |
-| MCP server (#24) | API hostname | Bearer token for an `mcp` role | Operator scopes, kept narrow |
+| MCP server (#24), `POST /v0/mcp` | API hostname | Bearer token for an `mcp` role | At most `catalogue:read`, `decoys:read`, `decoys:write`, `decoys:elevate`, `attempts:read`, `audit:read`, `events:read`; never `admin` |
 | Sandbox host agent (#41) | Ingest hostname | mTLS client certificate | `host:*` only |
 | Edge sensor (#31) | Ingest hostname | mTLS client certificate | `sensor:*` only |
 
@@ -42,12 +42,12 @@ Bearer tokens are `fo_<id>.<secret>`. D1 stores only the SHA-256 of the secret, 
 
 ## What is served today
 
-`GET /healthz`, `GET /v0/catalogue/entries`, `GET /v0/catalogue/entries/{id}`, `GET`/`POST /v0/decoys` (alias `/v0/sandboxes`), `GET /v0/decoys/{id}`, the five decoy actions, `GET /v0/audit`, evidence ingest and upload URLs (#9), and the host agent channel: job lease, ack and heartbeat (#41, [protocol](../agent/protocol.md)). Everything else in the spec is `planned` with its owning issue. Mapping to consumers:
+`GET /healthz`, `GET /v0/catalogue/entries`, `GET /v0/catalogue/entries/{id}`, `GET`/`POST /v0/decoys` (alias `/v0/sandboxes`), `GET /v0/decoys/{id}`, the five decoy actions, `GET /v0/audit`, attempts, their timeline and links (#25, #10, #27), the IOC CSV export, evidence ingest and upload URLs (#9), the host agent channel: job lease, ack and heartbeat (#41, [protocol](../agent/protocol.md)), and the MCP endpoint `POST /v0/mcp` (#24, [foiled-mcp.md](../mcp/foiled-mcp.md)). Everything else in the spec is `planned` with its owning issue. Mapping to consumers:
 
 | Consumer | Needs | Status |
 | --- | --- | --- |
 | Dashboard (#14) | Catalogue, decoys, attempts, links, review queue, campaigns, IOCs, exports, events | Catalogue and decoys served; the rest planned with owners |
-| MCP (#24) | Create, list, get, reset, destroy, query attempts, events, audit | Decoy tools served; attempts and events planned |
+| MCP (#24) | Create, list, get, reset, destroy, query attempts, events, audit | Served at `POST /v0/mcp` as a pure client of these routes ([foiled-mcp.md](../mcp/foiled-mcp.md)) |
 | Sensors (#31) and hosts (#41) | Heartbeat, job lease and ack, uploads, ingest | Served for hosts; sensor enrolment planned (#31) |
 | Campaigns (#33), IOCs (#34), radar and review queue (#35) | Their resources | Planned |
 
