@@ -279,5 +279,7 @@
     "split_from": null,
     "action_ids": []
   },
+  "possible_links": [],
+  "bridges": [],
   "notes": []
 }

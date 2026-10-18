@@ -25,6 +25,8 @@
     "confidence",
     "suggested_actor_links",
     "analyst",
+    "possible_links",
+    "bridges",
     "notes"
   ],
   "properties": {
@@ -342,6 +344,56 @@
             "type": "string"
           }
         }
+      }
+    },
+    "possible_links": {
+      "type": "array",
+      "description": "Links refused because one source's attempts alone joined this campaign to another established one (docs/campaigns.md#forged-bridges). An analyst may merge.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "other_campaign_ids",
+          "attempt_ids",
+          "src",
+          "signal_ids"
+        ],
+        "properties": {
+          "other_campaign_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^cmp_[a-f0-9]{24}$"
+            }
+          },
+          "attempt_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^att_[a-f0-9]{24}$"
+            }
+          },
+          "src": {
+            "type": "string"
+          },
+          "signal_ids": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "bridges": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "Provenance of recorded campaigns folded into this one in this read; earlier ones come with the evidence.",
+      "items": {
+        "$ref": "#/$defs/bridge"
       }
     },
     "notes": {
@@ -806,6 +858,48 @@
               "$ref": "#/$defs/counted"
             }
           }
+        }
+      }
+    },
+    "bridge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "campaign_id",
+        "merged_campaign_id",
+        "attempt_id",
+        "with_attempt_id",
+        "signal_id",
+        "feature",
+        "recorded_at"
+      ],
+      "description": "Which attempt and feature folded a recorded campaign into another (a strong or medium bridge).",
+      "properties": {
+        "campaign_id": {
+          "type": "string",
+          "pattern": "^cmp_[a-f0-9]{24}$"
+        },
+        "merged_campaign_id": {
+          "type": "string",
+          "pattern": "^cmp_[a-f0-9]{24}$"
+        },
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^att_[a-f0-9]{24}$"
+        },
+        "with_attempt_id": {
+          "type": "string",
+          "pattern": "^att_[a-f0-9]{24}$"
+        },
+        "signal_id": {
+          "type": "string",
+          "pattern": "^campaign:[a-z0-9_]+:[a-f0-9]{12}$"
+        },
+        "feature": {
+          "$ref": "#/$defs/feature"
+        },
+        "recorded_at": {
+          "type": "integer"
         }
       }
     }

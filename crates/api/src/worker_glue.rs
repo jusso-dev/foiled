@@ -1069,6 +1069,20 @@ impl Store for CfStore {
         })
     }
 
+    fn campaign_bridges(
+        &self,
+        tenant_id: &str,
+        campaign_id: &str,
+    ) -> StoreFuture<'_, Vec<foiled_core::campaign::BridgeRecord>> {
+        let (t, c) = (tenant_id.to_string(), campaign_id.to_string());
+        wrap(async move {
+            let client = self.pg().await?;
+            foiled_pg::campaign_bridges(&client, &t, &c)
+                .await
+                .map_err(err)
+        })
+    }
+
     fn update_campaign_registry(
         &self,
         tenant_id: &str,

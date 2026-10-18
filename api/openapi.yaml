@@ -1263,7 +1263,9 @@ paths:
         The full #27 explanation behind the campaign's `confidence_ref`: the
         campaign link (kind `attempt_campaign`, attempt: the seed) and one
         link per member, each listing the features that joined it, its noise
-        score, and an analyst confirmation when an action put it there.
+        score, and an analyst confirmation when an action put it there. Also
+        the provenance of every recorded campaign folded into this one, and
+        links refused because a single source made them.
       x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [campaigns:read]
@@ -1278,13 +1280,40 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [campaign_id, confidence, members, truncated]
+                required: [campaign_id, confidence, members, bridges, possible_links, truncated]
                 properties:
                   campaign_id: { type: string }
                   confidence: { $ref: "../schemas/confidence-link.schema.json" }
                   members:
                     type: array
                     items: { $ref: "../schemas/confidence-link.schema.json" }
+                  bridges:
+                    type: array
+                    description: Every recorded bridge that folded another campaign into this one, across all windows.
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [campaign_id, merged_campaign_id, attempt_id, with_attempt_id, signal_id, feature, recorded_at]
+                      properties:
+                        campaign_id: { type: string }
+                        merged_campaign_id: { type: string }
+                        attempt_id: { type: string }
+                        with_attempt_id: { type: string }
+                        signal_id: { type: string }
+                        feature: { type: string }
+                        recorded_at: { type: integer }
+                  possible_links:
+                    type: array
+                    description: Links refused because one source alone made them; an analyst may merge.
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [other_campaign_ids, attempt_ids, src, signal_ids]
+                      properties:
+                        other_campaign_ids: { type: array, items: { type: string } }
+                        attempt_ids: { type: array, items: { type: string } }
+                        src: { type: string }
+                        signal_ids: { type: array, items: { type: string } }
                   truncated: { type: boolean }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }

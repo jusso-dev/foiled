@@ -2,12 +2,12 @@
 //! service container).
 
 use foiled_core::campaign::{
-    ActionKind, CampaignAction, MemberRecord, RegistryUpdate, StoredCampaign,
+    ActionKind, BridgeRecord, CampaignAction, Feature, MemberRecord, RegistryUpdate, StoredCampaign,
 };
 use foiled_core::confidence::Feedback;
 use foiled_pg::{
-    append_campaign_action, campaign_actions, campaign_memberships, campaign_records, migrate,
-    update_campaign_registry,
+    append_campaign_action, campaign_actions, campaign_bridges, campaign_memberships,
+    campaign_records, migrate, update_campaign_registry,
 };
 use tokio_postgres::{Client, NoTls};
 
@@ -89,6 +89,7 @@ async fn registry_keeps_created_at_widens_times_and_counts_members() {
     let up = RegistryUpdate {
         campaigns: vec![rec(10, 20, 100)],
         members: vec![member("att_a"), member("att_b")],
+        bridges: vec![],
     };
     update_campaign_registry(&c, &tenant, &up, 100)
         .await
@@ -96,6 +97,7 @@ async fn registry_keeps_created_at_widens_times_and_counts_members() {
     let up = RegistryUpdate {
         campaigns: vec![rec(15, 40, 999)],
         members: vec![member("att_c")],
+        bridges: vec![],
     };
     update_campaign_registry(&c, &tenant, &up, 200)
         .await
@@ -123,6 +125,7 @@ async fn registry_keeps_created_at_widens_times_and_counts_members() {
         &RegistryUpdate {
             campaigns: vec![newer.clone()],
             members: vec![],
+            bridges: vec![],
         },
         300,
     )
@@ -140,6 +143,7 @@ async fn registry_keeps_created_at_widens_times_and_counts_members() {
             campaign_id: newer.campaign_id.clone(),
             ..member("att_a")
         }],
+        bridges: vec![],
     };
     update_campaign_registry(&c, &tenant, &stale, 400)
         .await
@@ -158,6 +162,7 @@ async fn registry_keeps_created_at_widens_times_and_counts_members() {
             ..rec(10, 20, 100)
         }],
         members: vec![],
+        bridges: vec![],
     };
     update_campaign_registry(&c, &tenant, &selfish, 500)
         .await
@@ -188,7 +193,7 @@ async fn registry_keeps_created_at_widens_times_and_counts_members() {
 
 #[tokio::test]
 #[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
-async fn a_first_read_writes_thousands_of_rows_in_two_statements() {
+async fn a_first_read_writes_thousands_of_rows_in_batched_statements() {
     let c = connect().await;
     let tenant = format!("bulk-{}", std::process::id());
     let campaigns: Vec<StoredCampaign> = (0..300)
@@ -208,7 +213,11 @@ async fn a_first_read_writes_thousands_of_rows_in_two_statements() {
             attempt_first_seen: 10,
         })
         .collect();
-    let up = RegistryUpdate { campaigns, members };
+    let up = RegistryUpdate {
+        campaigns,
+        members,
+        bridges: vec![],
+    };
     update_campaign_registry(&c, &tenant, &up, 1).await.unwrap();
     // Replaying the same update is a no-op.
     update_campaign_registry(&c, &tenant, &up, 2).await.unwrap();
@@ -216,4 +225,128 @@ async fn a_first_read_writes_thousands_of_rows_in_two_statements() {
         .await
         .unwrap();
     assert_eq!(got[0].attempts, 20);
+}
+
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn racing_writers_never_leave_a_merge_cycle() {
+    let url = std::env::var("FOILED_TEST_PG_URL").expect("FOILED_TEST_PG_URL");
+    let c0 = connect().await;
+    let rec = |id: &str, created: i64, merged: Option<&str>| StoredCampaign {
+        campaign_id: id.into(),
+        created_at: created,
+        first_seen: 10,
+        last_seen: 20,
+        merged_into: merged.map(str::to_string),
+        attempts: 0,
+    };
+    // Two first writers that disagree on which campaign is older, each
+    // folding the other into the one it thinks is older.
+    let w1 = RegistryUpdate {
+        campaigns: vec![rec("cmp_x", 5, None), rec("cmp_y", 6, Some("cmp_x"))],
+        ..Default::default()
+    };
+    let w2 = RegistryUpdate {
+        campaigns: vec![rec("cmp_y", 3, None), rec("cmp_x", 4, Some("cmp_y"))],
+        ..Default::default()
+    };
+    let base = format!("race-{}", std::process::id());
+    for round in 0..20 {
+        let tenant = format!("{base}-{round}");
+        let mut handles = Vec::new();
+        for up in [w1.clone(), w2.clone()] {
+            let (url, tenant) = (url.clone(), tenant.clone());
+            handles.push(tokio::spawn(async move {
+                let (c, conn) = tokio_postgres::connect(&url, NoTls).await.unwrap();
+                tokio::spawn(conn);
+                // A loser may fail on a lock or the trigger; it retries
+                // once, as the next read would.
+                if update_campaign_registry(&c, &tenant, &up, 1).await.is_err() {
+                    update_campaign_registry(&c, &tenant, &up, 2).await.unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+        let got = campaign_records(&c0, &tenant, &["cmp_x".into(), "cmp_y".into()])
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 2);
+        let (x, y) = (&got[0], &got[1]);
+        assert!(
+            x.merged_into.is_none() || y.merged_into.is_none(),
+            "round {round}: cycle {x:?} {y:?}"
+        );
+        for (from, to) in [(x, y), (y, x)] {
+            if from.merged_into.as_deref() == Some(to.campaign_id.as_str()) {
+                assert!(
+                    (to.created_at, &to.campaign_id) < (from.created_at, &from.campaign_id),
+                    "merges only point strictly older"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn triggers_hold_the_order_and_bridges_follow_applied_merges() {
+    let c = connect().await;
+    let tenant = format!("trg-{}", std::process::id());
+    let rec = |id: &str, created: i64| StoredCampaign {
+        campaign_id: id.into(),
+        created_at: created,
+        first_seen: 10,
+        last_seen: 20,
+        merged_into: None,
+        attempts: 0,
+    };
+    let bridge = |into: &str, from: &str| BridgeRecord {
+        campaign_id: into.into(),
+        merged_campaign_id: from.into(),
+        attempt_id: "att_f".into(),
+        with_attempt_id: "att_b".into(),
+        signal_id: "campaign:payload_sha256:0123456789ab".into(),
+        feature: Feature::PayloadSha256,
+        recorded_at: 7,
+    };
+    let up = RegistryUpdate {
+        campaigns: vec![
+            rec("cmp_old", 1),
+            StoredCampaign {
+                merged_into: Some("cmp_old".into()),
+                ..rec("cmp_new", 2)
+            },
+            // Pointing at a newer campaign is dropped, and so is its bridge.
+            StoredCampaign {
+                merged_into: Some("cmp_new".into()),
+                ..rec("cmp_older", 0)
+            },
+        ],
+        members: vec![],
+        bridges: vec![bridge("cmp_old", "cmp_new"), bridge("cmp_new", "cmp_older")],
+    };
+    update_campaign_registry(&c, &tenant, &up, 1).await.unwrap();
+    assert_eq!(
+        campaign_bridges(&c, &tenant, "cmp_old").await.unwrap(),
+        vec![bridge("cmp_old", "cmp_new")]
+    );
+    assert!(
+        campaign_bridges(&c, &tenant, "cmp_new")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let older = campaign_records(&c, &tenant, &["cmp_older".into()])
+        .await
+        .unwrap();
+    assert_eq!(older[0].merged_into, None);
+    for bad in [
+        "UPDATE campaigns SET created_at = 99 WHERE tenant_id = $1 AND campaign_id = 'cmp_old'",
+        "UPDATE campaigns SET merged_into = NULL WHERE tenant_id = $1 AND campaign_id = 'cmp_new'",
+        "UPDATE campaigns SET merged_into = 'cmp_new' WHERE tenant_id = $1 AND campaign_id = 'cmp_older'",
+    ] {
+        assert!(c.execute(bad, &[&tenant]).await.is_err(), "{bad}");
+    }
 }

@@ -389,11 +389,15 @@ const T0: i64 = 1_792_285_323_000;
 const HASH: &str = "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8";
 
 fn upload(id: &str, ts: i64, decoy: &str, src: &str) -> Value {
+    upload_body(id, ts, decoy, src, HASH)
+}
+
+fn upload_body(id: &str, ts: i64, decoy: &str, src: &str, hash: &str) -> Value {
     json!({
         "event_id": id, "ts": ts, "decoy_id": decoy, "catalogue_id": "foiled/demo-app/1.0.0",
         "decoy_kind": "sandbox", "channel": "application", "severity": "medium",
         "src": {"ip": src}, "tenant_id": "t1", "source": {"kind": "host", "id": "host-1"},
-        "data": {"method": "POST", "path": "/api/upload", "body_sha256": HASH}
+        "data": {"method": "POST", "path": "/api/upload", "body_sha256": hash}
     })
 }
 
@@ -509,4 +513,81 @@ async fn only_the_canonical_window_writes_the_registry() {
     let before = store.campaign_registry("t1");
     let (_, _) = get(&s, "analyst", "/v0/campaigns").await;
     assert_eq!(store.campaign_registry("t1"), before);
+}
+
+#[tokio::test]
+async fn forged_bridges_stay_possible_links_and_real_ones_show_provenance() {
+    let (_, store) = harness().await;
+    let other = "cd".repeat(32);
+    let at = |d: i64| T0 + 30 * DAY + d * 60_000;
+    let base: Vec<Value> = vec![
+        upload("fa1", at(0), "da1", "198.51.100.41"),
+        upload("fa2", at(1), "da2", "198.51.100.42"),
+        upload("fa3", at(2), "da3", "198.51.100.43"),
+        upload_body("fb1", at(3), "db1", "198.51.100.51", &other),
+        upload_body("fb2", at(4), "db2", "198.51.100.52", &other),
+        upload_body("fb3", at(5), "db3", "198.51.100.53", &other),
+    ];
+    let to_events = |vs: Vec<Value>| -> Vec<CaptureEvent> {
+        vs.into_iter()
+            .map(|v| serde_json::from_value(v).unwrap())
+            .collect()
+    };
+    store.enqueue_events(to_events(base)).await.unwrap();
+    let s = AppState::new(store.clone(), Arc::new(move || at(60)));
+    let count = |b: &Value| {
+        items(b)
+            .iter()
+            .filter(|c| {
+                c["attempt_ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a.is_string())
+            })
+            .filter(|c| c["first_seen"].as_i64().unwrap() >= at(0))
+            .count()
+    };
+    let (_, b) = get(&s, "analyst", "/v0/campaigns").await;
+    assert_eq!(count(&b), 2, "A and B recorded apart");
+
+    // One forger sends both public bodies: still two, with a possible link.
+    store
+        .enqueue_events(to_events(vec![
+            upload("fx1", at(10), "dz1", "192.0.2.66"),
+            upload_body("fx2", at(10) + 1, "dz1", "192.0.2.66", &other),
+        ]))
+        .await
+        .unwrap();
+    let (_, b) = get(&s, "analyst", "/v0/campaigns").await;
+    assert_eq!(count(&b), 2, "{b}");
+    assert!(
+        items(&b)
+            .iter()
+            .any(|c| !c["possible_links"].as_array().unwrap().is_empty())
+    );
+
+    // A second, independent source makes it real; the evidence names the
+    // bridging attempts and feature.
+    store
+        .enqueue_events(to_events(vec![
+            upload("fy1", at(20), "dz2", "192.0.2.67"),
+            upload_body("fy2", at(20) + 1, "dz2", "192.0.2.67", &other),
+        ]))
+        .await
+        .unwrap();
+    let (_, b) = get(&s, "analyst", "/v0/campaigns").await;
+    assert_eq!(count(&b), 1, "{b}");
+    let id = items(&b)
+        .iter()
+        .find(|c| c["first_seen"].as_i64().unwrap() >= at(0))
+        .unwrap()["campaign_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (st, e) = get(&s, "analyst", &format!("/v0/campaigns/{id}/evidence")).await;
+    assert_eq!(st, StatusCode::OK, "{e}");
+    let bridges = e["bridges"].as_array().unwrap();
+    assert!(!bridges.is_empty(), "{e}");
+    assert!(bridges.iter().all(|x| x["feature"] == "payload_sha256"));
 }

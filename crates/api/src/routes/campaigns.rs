@@ -89,6 +89,11 @@ pub struct CampaignEvidence {
     pub confidence: ConfidenceLink,
     /// One `attempt_campaign` link per member, in member order.
     pub members: Vec<ConfidenceLink>,
+    /// Every recorded bridge that folded another campaign into this one,
+    /// across all windows: which attempt and feature made the join.
+    pub bridges: Vec<foiled_core::campaign::BridgeRecord>,
+    /// Links refused because one source alone made them.
+    pub possible_links: Vec<foiled_core::campaign::PossibleLink>,
     pub truncated: bool,
 }
 
@@ -337,7 +342,18 @@ async fn evidence(
     let (c, _) = find(m, &campaign_id)?;
     let cfg = ConfidenceConfig::default();
     let confidence = campaign_link(&cfg, &c).ok_or_else(|| ApiError::not_found("campaign"))?;
+    let mut bridges = state
+        .store
+        .campaign_bridges(&who.tenant_id, &campaign_id)
+        .await?;
+    for b in &c.bridges {
+        if !bridges.contains(b) {
+            bridges.push(b.clone());
+        }
+    }
     Ok(Json(CampaignEvidence {
+        bridges,
+        possible_links: c.possible_links.clone(),
         members: member_links(&cfg, &c),
         confidence,
         campaign_id,
