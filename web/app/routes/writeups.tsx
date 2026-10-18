@@ -10,8 +10,7 @@ import { isId } from "../lib/ids";
 import { toPrintable } from "../lib/printable";
 import type { Route } from "./+types/writeups";
 
-// TODO(#35): /v0/write-ups is not on main yet. This page follows PR #84
-// (docs/research-writeups.md there).
+// Research write-ups (docs/research-writeups.md).
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Write-ups · Foiled console" }];

@@ -32,7 +32,7 @@ import { toPrintable } from "../lib/printable";
 import { checklistComplete, checklistFrom } from "../lib/review";
 import type { Route } from "./+types/writeup";
 
-// TODO(#35): /v0/write-ups is not on main yet. This page follows PR #84.
+// One research write-up (docs/research-writeups.md).
 
 export function meta({ params }: Route.MetaArgs) {
   return [{ title: `Write-up ${params.writeupId} · Foiled console` }];

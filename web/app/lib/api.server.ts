@@ -321,7 +321,7 @@ export class ConsoleApi {
     );
   }
 
-  // Review queue, write-ups and radar (#35). TODO(#35): not on main yet; shapes from PR #84.
+  // Review queue, write-ups and radar (#35).
   async listReview(q: Record<string, QueryValue> = {}) {
     return this.json<ReviewList>(`/v0/review-queue${qs(q)}`);
   }

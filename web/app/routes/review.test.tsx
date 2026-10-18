@@ -1,6 +1,6 @@
 /**
- * Review queue, write-ups, radar and actor associations, against the API
- * shapes of PR #84 (#35) and #29, using their golden output.
+ * Review queue, write-ups, radar (#35) and actor associations (#29), against
+ * the API's golden output in testdata/.
  */
 
 import { describe, expect, it } from "vitest";
@@ -69,6 +69,32 @@ describe("review queue", () => {
     expect(t).toContain("hxxp://stage2[.]example[.]invalid");
     expect(r.html).toContain(`/attempts/${reviewItem.subject.attempt_id}`);
     expect(r.html).toContain(`/iocs/${reviewIoc.subject.ioc_id}`);
+    expect(r.html).toContain('value="promote"');
+  });
+
+  it("shows stuck decisions, merge proposals and promote only where the API allows it", async () => {
+    const { cookie } = await signIn();
+    const A = "cmp_0123456789abcdef01234567";
+    const B = "cmp_89abcdef0123456789abcdef";
+    const merge: ReviewItem = {
+      ...reviewItem,
+      item_id: `${RQ}m`,
+      kind: "campaign_merge",
+      subject: { campaign_id: A, other_campaign_id: B },
+      wording: "possible",
+      status: "needs_attention",
+    };
+    const a = reviewApi([merge, reviewIoc]);
+    const r = expectPage(await page(envWith(a), "/review?status=needs_attention", { cookie }));
+    expect(a.calls[0].search.get("status")).toBe("needs_attention");
+    const t = text(r.html);
+    expect(t).toContain("Campaign merge proposal");
+    expect(t).toContain("needs attention");
+    expect(t).toContain("decide it again (after a minute)");
+    expect(r.html).toContain(`/campaigns/${A}`);
+    expect(r.html).toContain(`/campaigns/${B}`);
+    // Neither a merge proposal nor an IOC publication can start a write-up.
+    expect(r.html).not.toContain('value="promote"');
   });
 
   it("approves with a note and the item's version", async () => {

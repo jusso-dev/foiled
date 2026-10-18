@@ -40,8 +40,8 @@ This is the list the issue asks to match against #21, #25, #33, #34 and #35.
 | IOCs | #34 | Served | Served |
 | Campaigns and actions | #33 | Served | Served |
 | Hosts and sensors | #31, #41 | Served | Served |
-| Exports | #13 | IOC CSV served; IOC JSON, STIX and MISP downloads in the #13 pull request | All formats in the form; unserved ones report "not served yet" |
-| Review queue, write-ups, radar | #35 | In PR #84, not on `main` yet | Built against PR #84's API and schemas, checked against copies of its golden output (`web/app/test/pr/`); marked `TODO(#35)` |
+| Exports | #13 | IOC CSV and JSON, STIX 2.1 and MISP served | All formats in the form |
+| Review queue, write-ups, radar | #35 | Served ([review-queue.md](../review-queue.md), [research-writeups.md](../research-writeups.md), [radar.md](../radar.md)) | Served; checked against `schemas/` and the golden output in `testdata/` |
 | Actor associations | #29 | Served ([actor-attribution.md](../actor-attribution.md)) | Served; campaigns and attempt links show actor links the API returns, always "possible association" |
 | Quarantine list and download | #9, #14 | Planned | Built against the proposal in `api-types.ts` (marked `TODO`), downloads off by default |
 | Live event stream, `GET /v0/events` | #14 | Planned | Polling backfill now; see [Live feed](#live-feed) |
@@ -50,7 +50,7 @@ When an API route is not served yet, the API's router falls through with `404 no
 
 ## Sign in and sessions
 
-1. **Cloudflare Access** sits in front of the console hostname (docs/deploy/workers.md). The Worker also verifies the `Cf-Access-Jwt-Assertion` JWT on every request (RS256 against the team's published keys, audience, issuer, expiry) and answers 403 without it, so a missing Access policy fails closed (`web/app/lib/access.server.ts`). `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are required: without them the console refuses every request, unless `CONSOLE_ENV=development` is set for local work. Keys are cached for 10 minutes; an unknown key id refetches them at most once a minute per isolate, so forged key ids cannot drive refetches, and a malformed key or signature is a 403, not an error. `workers_dev` and `preview_urls` are off in `web/wrangler.jsonc`, so there is no hostname that bypasses Access.
+1. **Cloudflare Access** sits in front of the console hostname (docs/deploy/workers.md). The Worker also verifies the `Cf-Access-Jwt-Assertion` JWT on every request (RS256 against the team's published keys, audience, issuer, expiry) and answers 403 without it, so a missing Access policy fails closed (`web/app/lib/access.server.ts`). `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are required: without them the console refuses every request, unless `CONSOLE_ENV=development` is set for local work. Keys are cached for 10 minutes; an unknown key id refetches them at most once a minute per isolate, so forged key ids cannot drive refetches, and a malformed key or signature is a 403, not an error. `workers_dev` and `preview_urls` are off in `web/wrangler.jsonc`, so there is no hostname that bypasses Access. The same build deployed as the public Worker (`FOILED_SURFACE=public`, [ADR 0011](../adr/0011-public-pages-on-the-web-worker.md)) skips this check because it has no Access policy, and instead 404s every path outside the public allow-list, so no console route is reachable there.
 2. **Operator token.** The operator pastes an API token (`fo_<id>.<secret>`) into `/login`. The Worker calls `GET /v0/whoami` with it. Only `human` role tokens may sign in; MCP, host and sensor credentials are refused.
 3. **Session cookie.** The token, the caller's id, tenant and scopes, and a random CSRF token are sealed with AES-256-GCM under a key derived (HKDF-SHA-256) from the `SESSION_SECRET` Worker secret, and set as `__Host-foiled_session` with `HttpOnly`, `Secure`, `SameSite=Strict` and `Path=/`. Each session has a random id. Sessions last at most 12 hours. The token is never sent to page scripts, never written to browser storage and never put in a loader response (`web/app/lib/session.server.ts`).
 4. **Every API call** is made by the Worker with the session's token. The console never sends a tenant id: tenant scoping is the API's job, and another tenant's resource is a 404.
@@ -70,7 +70,7 @@ Sign-in has no session yet, so it relies on the origin check. Export downloads a
 
 ### Response headers
 
-Every response gets `Content-Security-Policy: frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin` and `Cache-Control: no-store` unless the route sets its own. A `script-src` policy needs per-request nonces for React Router's hydration script and is left for later.
+Every console response gets `Content-Security-Policy: frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin`, `Cache-Control: private, no-store` and `X-Robots-Tag: noindex`. The public exploit pages keep their own headers and cache policy (`web/app/lib/http-headers.ts`). A `script-src` policy needs per-request nonces for React Router's hydration script and is left for later.
 
 ## Launch wizard
 
@@ -181,7 +181,7 @@ Status [pending v]  Kind [Any v]  Window [7 days v]  [ ] Mine  [ ] Overdue only 
 +--------------------------------------------------------------------------------+
 ```
 
-One queue over pending CVE and technique links, pre-disclosure candidates, IOC publication candidates, campaign labels, actor possible-associations and write-ups in review (#35, PR #84). Each item is worded like the link it stands for. Claim and release take an item; approve needs a note (a campaign label also needs the title, a write-up the full second-reviewer checklist); reject needs a note; snooze is 1, 7 or 30 days (the API's limit is 30); "Start a write-up" promotes the item to a draft and opens it. Every action sends the item's `version`, so a stale page gets a 409 instead of overwriting someone else's decision, and is audited by the API as `review.<action>`. An item claimed by someone else shows who holds it and offers no actions.
+One queue over pending CVE and technique links, pre-disclosure candidates, IOC publication candidates, campaign labels and merge proposals, false-positive feedback, actor possible-associations and write-ups in review ([review-queue.md](../review-queue.md), #35). Each item is worded like the link it stands for; a merge proposal links both campaigns. Claim and release take an item; approve needs a note (a campaign label also needs the title, a write-up the full second-reviewer checklist); reject needs a note; snooze is 1, 7 or 30 days (the API's limit is 30); "Start a write-up" promotes a CVE, pre-disclosure, technique or campaign label item to a draft and opens it. An item whose decision did not finish shows as "needs attention" (its own filter) with a prompt to check the audit log before deciding it again. Every action sends the item's `version`, so a stale page gets a 409 instead of overwriting someone else's decision, and is audited by the API as `review.<action>`. An item claimed by someone else shows who holds it and offers no actions.
 
 ## Write-ups
 
@@ -290,7 +290,6 @@ Route tests (`web/app/routes/*.test.tsx`) run the real route config, loaders, ac
 
 - `GET /v0/events` and its Durable Object: the polling feed and its reconnect and backfill rules above are what the stream will plug into.
 - The quarantine list and download endpoints in the API (#9, #14 follow-up): the console is built against a proposal and says "not served yet".
-- The review queue, write-up and radar API (#35, PR #84) is not on `main` yet: the console is built against that pull request and says "not served yet" until it merges. Swap the copies in `web/app/test/pr/` for imports from `testdata/` and `schemas/` when they do.
 - Attempt labelling, merge and split (`PATCH /v0/attempts/{id}`, #25, planned).
 - Forwarding the Access JWT to the API Worker: the API does not validate Access tokens yet.
 - Full RBAC, mobile layouts beyond reflow, and MCP (#24) are out of scope for #14.

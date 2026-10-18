@@ -16,6 +16,10 @@ import campaignWave from "../../../testdata/campaigns/expected/fleet-wave-00.jso
 import hookLink from "../../../testdata/confidence-links/hook-and-sequence-high.json";
 import llmLink from "../../../testdata/confidence-links/llm-only-capped.json";
 import iocIp from "../../../testdata/iocs/expected/file-drop-00.json";
+import radarJson from "../../../testdata/radar/expected/tenant-edge-d.json";
+import reviewCve from "../../../testdata/review/expected/fleet-wave-00.json";
+import reviewIocPub from "../../../testdata/review/expected/fleet-wave-05.json";
+import writeUpJson from "../../../testdata/write-ups/examples/demo-app-upload-traversal.json";
 import type {
   ActorLinkRecord,
   AgentRecord,
@@ -31,10 +35,6 @@ import type {
   ReviewItem,
   WriteUp,
 } from "../lib/api-types";
-import radarJson from "./pr/radar-tenant.json";
-import reviewCve from "./pr/review-cve-link.json";
-import reviewIocPub from "./pr/review-ioc-publication.json";
-import writeUpJson from "./pr/write-up.json";
 
 const as = <T>(v: unknown) => structuredClone(v) as T;
 
@@ -154,11 +154,7 @@ export function decoy(over: Partial<Decoy> = {}): Decoy {
   };
 }
 
-/**
- * Review queue, write-up, radar and actor shapes. TODO(#35): the review,
- * write-up and radar shapes are copied from PR #84's golden output (test/pr/);
- * import them from testdata/ once it lands. The actor link is #29's golden output.
- */
+/** Review queue, write-up, radar (#35) and actor (#29) shapes: golden output from testdata/. */
 export const reviewItem = as<ReviewItem>(reviewCve);
 export const reviewIoc = as<ReviewItem>(reviewIocPub);
 export const writeUp = as<WriteUp>(writeUpJson);

@@ -12,8 +12,7 @@ import { isId } from "../lib/ids";
 import { toPrintable } from "../lib/printable";
 import type { Route } from "./+types/radar";
 
-// TODO(#35): /v0/radar is not on main yet. This is the trusted-side operator
-// radar from PR #84 (docs/radar.md there); there is no public radar.
+// The trusted-side operator radar (docs/radar.md); there is no public radar.
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Radar · Foiled console" }];
@@ -126,8 +125,7 @@ export default function Radar({ loaderData: d }: Route.ComponentProps) {
                 ? `Fleet counts need at least ${f.policy.min_sources} sources, ${f.policy.min_sensors} sensors and ${f.policy.min_edge_tenants} edge tenants per bucket; no tenant is named.`
                 : "Your tenant's own data."}{" "}
               Links below {f.policy.min_confidence} confidence never count; headlines use
-              publishable counts only. Days shown: <Time ms={f.since} /> to <Time ms={f.until} />
-              {f.policy.delay_days ? `, held back ${f.policy.delay_days} days` : ""}.
+              publishable counts only. Days shown: <Time ms={f.since} /> to <Time ms={f.until} />.
               {f.suppressed_buckets
                 ? ` ${f.suppressed_buckets} buckets held back by the thresholds.`
                 : ""}

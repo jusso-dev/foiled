@@ -15,10 +15,9 @@ import actionSchema from "../../../schemas/campaign-action.schema.json";
 import linkSchema from "../../../schemas/confidence-link.schema.json";
 import iocSchema from "../../../schemas/ioc.schema.json";
 import quarantineSchema from "../../../schemas/quarantine-meta.schema.json";
-// TODO(#35): copies from PR #84; import from schemas/ once it lands.
-import radarSchema from "../test/pr/radar-feed-schema.json";
-import reviewSchema from "../test/pr/review-item-schema.json";
-import writeUpSchema from "../test/pr/write-up-schema.json";
+import radarSchema from "../../../schemas/radar-feed.schema.json";
+import reviewSchema from "../../../schemas/review-item.schema.json";
+import writeUpSchema from "../../../schemas/write-up.schema.json";
 import type {
   ActorLinkRecord,
   AgentRecord,
@@ -279,6 +278,8 @@ const actorLink: Keys<ActorLinkRecord> = {
   review_queue: true,
   matched: true,
   not_counted: true,
+  confirmed_attempt_ids: true,
+  new_since_confirmation: true,
   sources: true,
   attack_version: true,
   example: true,
@@ -294,9 +295,9 @@ const CASES: [string, Record<string, true>, { required: string[]; properties: ob
   ["campaign-action", action, actionSchema],
   ["agent-record", agent, agentSchema],
   ["quarantine-meta", quarantine, quarantineSchema],
-  ["review-item (PR #84)", review, reviewSchema],
-  ["write-up (PR #84)", writeUp, writeUpSchema],
-  ["radar-feed (PR #84)", radar, radarSchema],
+  ["review-item", review, reviewSchema],
+  ["write-up", writeUp, writeUpSchema],
+  ["radar-feed", radar, radarSchema],
   ["actor-link", actorLink, actorLinkSchema],
 ];
 

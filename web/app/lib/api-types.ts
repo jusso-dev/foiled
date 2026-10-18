@@ -643,10 +643,8 @@ export interface Page<T> {
 
 // ---------- Review queue, write-ups and radar (#35) ----------
 //
-// TODO(#35): these routes are not on main yet. The shapes follow PR #84
-// (schemas/review-item.schema.json, write-up.schema.json and
-// radar-feed.schema.json there). Until the API serves them the console
-// shows "not served yet".
+// schemas/review-item.schema.json, write-up.schema.json and
+// radar-feed.schema.json (docs/review-queue.md, research-writeups.md, radar.md).
 
 export type ReviewKind =
   | "cve_link"
@@ -654,10 +652,22 @@ export type ReviewKind =
   | "technique_link"
   | "ioc_publication"
   | "campaign_label"
+  | "campaign_merge"
+  | "false_positive_feedback"
   | "actor_association"
   | "write_up";
 
-export type ReviewStatus = "open" | "claimed" | "snoozed" | "approved" | "rejected";
+/**
+ * `needs_attention`: a decision did not finish or its rollback failed. It is
+ * listed first and can be decided again after a minute.
+ */
+export type ReviewStatus =
+  | "open"
+  | "claimed"
+  | "snoozed"
+  | "approved"
+  | "rejected"
+  | "needs_attention";
 export type ReviewAction =
   | "claim"
   | "assign"
@@ -686,7 +696,11 @@ export interface ReviewItem {
     target?: string;
     ioc_id?: string;
     campaign_id?: string;
+    /** campaign_merge: the campaign to fold into campaign_id. */
+    other_campaign_id?: string;
     writeup_id?: string;
+    /** actor_association: a confirmed link that needs another look. */
+    revision?: string;
     submitted_at?: number;
   };
   /** Escaped one-line summary. */
@@ -837,7 +851,8 @@ export interface RadarCard {
 }
 
 export interface RadarFeed {
-  audience: "public" | "fleet" | "tenant";
+  /** Trusted side only: there is no public radar. */
+  audience: "fleet" | "tenant";
   generated_at: number;
   since: number;
   until: number;
@@ -845,13 +860,12 @@ export interface RadarFeed {
     min_sources: number;
     min_sensors: number;
     min_edge_tenants: number;
-    delay_days: number;
     min_confidence: Band;
-    publishable_only: boolean;
   };
   series: RadarSeries[];
   cards: RadarCard[];
-  suppressed_buckets?: number;
+  /** Buckets, or filtered slices of buckets, held back by the thresholds. */
+  suppressed_buckets: number;
   notes: string[];
 }
 
@@ -865,6 +879,10 @@ export interface ActorLinkRecord {
   subject_kind: "campaign" | "attempt";
   subject_id: string;
   attempt_ids: string[];
+  /** Confirmed links: the attempts the confirmation covers. Only these export as confirmed. */
+  confirmed_attempt_ids?: string[];
+  /** Confirmed links: attempts that joined since. Not covered; the link is back in review. */
+  new_since_confirmation?: string[];
   actor_id: string;
   label: string;
   label_kind: "nexus" | "cluster" | "named_group";

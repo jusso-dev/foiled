@@ -23,21 +23,29 @@ import {
   checklistComplete,
   checklistFrom,
   itemWording,
+  PROMOTABLE,
   REVIEW_KIND_LABEL,
   reviewSentence,
 } from "../lib/review";
 import type { Route } from "./+types/review";
 
-// TODO(#35): /v0/review-queue is not on main yet. This page follows the API
-// in PR #84 (docs/review-queue.md there) and shows "not served yet" until
-// the route answers.
+// The analyst review queue (docs/review-queue.md).
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Review queue · Foiled console" }];
 }
 
 const KINDS = Object.keys(REVIEW_KIND_LABEL) as ReviewKind[];
-const STATUSES = ["pending", "open", "claimed", "snoozed", "approved", "rejected", "all"] as const;
+const STATUSES = [
+  "pending",
+  "needs_attention",
+  "open",
+  "claimed",
+  "snoozed",
+  "approved",
+  "rejected",
+  "all",
+] as const;
 const ACTIONS: readonly ReviewAction[] = [
   "claim",
   "release",
@@ -159,7 +167,11 @@ export default function Review({ loaderData: d, actionData }: Route.ComponentPro
             <select id={`${id}-status`} name="status" defaultValue={d.filters.status}>
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
-                  {s === "pending" ? "pending (open, claimed, snoozed)" : s}
+                  {s === "pending"
+                    ? "pending (open, claimed, snoozed)"
+                    : s === "needs_attention"
+                      ? "needs attention"
+                      : s}
                 </option>
               ))}
             </select>
@@ -239,8 +251,18 @@ function SubjectLinks({ item }: { item: ReviewItem }) {
   if (s.writeup_id && isId("writeup", s.writeup_id)) {
     out.push({ to: `/writeups/${s.writeup_id}`, text: `write-up ${s.writeup_id}` });
   }
-  if (item.kind === "actor_association" && s.campaign_id) {
-    out.push({ to: `/actors?subject_id=${s.campaign_id}`, text: "actor evidence" });
+  if (s.other_campaign_id && isId("campaign", s.other_campaign_id)) {
+    out.push({
+      to: `/campaigns/${s.other_campaign_id}`,
+      text: `merge into ${s.other_campaign_id}`,
+    });
+  }
+  const actorSubject = s.campaign_id ?? s.attempt_id;
+  if (
+    item.kind === "actor_association" &&
+    (isId("campaign", actorSubject) || isId("attempt", actorSubject))
+  ) {
+    out.push({ to: `/actors?subject_id=${actorSubject}`, text: "actor evidence" });
   }
   if (!out.length) return null;
   return (
@@ -271,6 +293,7 @@ function ReviewCard({
   const id = useId();
   const sentence = reviewSentence(item);
   const decided = item.status === "approved" || item.status === "rejected";
+  const stuck = item.status === "needs_attention";
   const claimedByOther =
     item.status === "claimed" && item.assignee !== null && item.assignee !== me;
   return (
@@ -281,7 +304,9 @@ function ReviewCard({
           <span className="mono muted">{toPrintable(item.item_id)}</span>
         </h2>
         <span>
-          <span className={decided ? "tag" : "tag tag--warn"}>{item.status}</span>{" "}
+          <span className={decided ? "tag" : stuck ? "tag tag--bad" : "tag tag--warn"}>
+            {stuck ? "needs attention" : item.status}
+          </span>{" "}
           {item.sla_breached && !decided ? <span className="tag tag--bad">overdue</span> : null}
         </span>
       </header>
@@ -312,6 +337,14 @@ function ReviewCard({
           ) : null}
           <SubjectLinks item={item} />
         </p>
+        {stuck ? (
+          <Notice kind="warn">
+            <p>
+              A decision on this item did not finish, or putting it back failed. Check the audit log
+              for the effect, then decide it again (after a minute).
+            </p>
+          </Notice>
+        ) : null}
         {decided ? (
           <Notice kind="info">
             <p>
@@ -368,7 +401,7 @@ function ReviewCard({
                   Reject
                 </SubmitButton>
                 <SubmitButton intent="snooze">Snooze</SubmitButton>
-                {item.kind !== "write_up" ? (
+                {PROMOTABLE.has(item.kind) ? (
                   <SubmitButton intent="promote">Start a write-up</SubmitButton>
                 ) : null}
               </div>

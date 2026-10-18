@@ -13,6 +13,8 @@ export const REVIEW_KIND_LABEL: Record<ReviewKind, string> = {
   technique_link: "Technique link",
   ioc_publication: "IOC publication",
   campaign_label: "Campaign label",
+  campaign_merge: "Campaign merge proposal",
+  false_positive_feedback: "False-positive feedback",
   actor_association: "Actor possible association",
   write_up: "Write-up in review",
 };
@@ -30,10 +32,21 @@ export function itemWording(item: Pick<ReviewItem, "wording" | "kind">): LinkWor
   if (KNOWN.has(item.wording)) return item.wording as LinkWording;
   return item.kind === "actor_association"
     ? "possible association"
-    : item.kind === "campaign_label"
+    : item.kind === "campaign_label" || item.kind === "campaign_merge"
       ? "possible"
       : "we assess as";
 }
+
+/** ATT&CK technique ids, so false-positive feedback is worded as the link it stands for. */
+const TECHNIQUE = /^T\d{4}(\.\d{3})?$/;
+
+/** Items `promote` can start a draft write-up from (docs/research-writeups.md#from-the-queue). */
+export const PROMOTABLE: ReadonlySet<ReviewKind> = new Set([
+  "cve_link",
+  "predisclosure_candidate",
+  "technique_link",
+  "campaign_label",
+]);
 
 /** One sentence for an item, or null when it has no score to word (write-ups). */
 export function reviewSentence(
@@ -48,11 +61,17 @@ export function reviewSentence(
       return linkSentence({ ...base, kind: "attempt_cve" });
     case "technique_link":
       return linkSentence({ ...base, kind: "attempt_technique" });
+    case "false_positive_feedback":
+      return linkSentence({
+        ...base,
+        kind: TECHNIQUE.test(target) ? "attempt_technique" : "attempt_cve",
+      });
     case "actor_association":
       return linkSentence({ ...base, kind: "attempt_actor" });
     case "ioc_publication":
       return linkSentence({ ...base, kind: "attempt_ioc" });
     case "campaign_label":
+    case "campaign_merge":
       return campaignSentence(item.score, wording);
     case "write_up":
       return null;

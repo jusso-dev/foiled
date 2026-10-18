@@ -236,6 +236,9 @@ function ActorCard({
           )}{" "}
           ({l.attempt_ids.length} attempts).{" "}
           {l.publishable ? "Publishable." : "Not publishable until confirmed."}
+          {l.new_since_confirmation?.length
+            ? ` ${l.new_since_confirmation.length} attempts joined since the confirmation and are not covered by it.`
+            : ""}
         </p>
         <h3 className="explain__h">What matched</h3>
         <ul className="bullets">
