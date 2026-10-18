@@ -365,6 +365,13 @@ async fn decisions_are_audited_scoped_and_change_the_link() {
     assert_eq!(rec.target.as_deref(), Some(id.as_str()));
     assert_eq!(rec.actor_id, "reviewer");
     assert_eq!(rec.detail["score_before"], items(&b)[0]["score"]);
+    // The confirmation records the members the analyst saw, and covers
+    // exactly those.
+    assert_eq!(rec.detail["attempt_ids"], items(&b)[0]["attempt_ids"]);
+    assert_eq!(l["confirmed_attempt_ids"], items(&b)[0]["attempt_ids"]);
+    assert_eq!(l["new_since_confirmation"], json!([]));
+    let stored = store.actor_decisions_for_tests();
+    assert_eq!(stored[0].attempt_ids.len(), 2);
 
     // Persisted: later reads see it, and the campaign suggestion says so.
     let (_, c) = get(&s, "analyst", "/v0/campaigns?include=actors").await;

@@ -44,6 +44,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         "0008_actor_link_decisions",
         include_str!("../../../migrations/postgres/0008_actor_link_decisions.sql"),
     ),
+    (
+        "0009_actor_decision_attempts",
+        include_str!("../../../migrations/postgres/0009_actor_decision_attempts.sql"),
+    ),
 ];
 
 /// Arbitrary constant key for the migration advisory lock.
@@ -464,6 +468,8 @@ pub struct ActorDecisionRow {
     pub analyst_id: String,
     pub at: i64,
     pub note: String,
+    /// The attempts the decision covered when it was made.
+    pub attempt_ids: Vec<String>,
 }
 
 pub async fn put_actor_decision(
@@ -473,11 +479,11 @@ pub async fn put_actor_decision(
 ) -> Result<(), Error> {
     client
         .execute(
-            "INSERT INTO actor_link_decisions (tenant_id, subject_id, actor_id, feedback, analyst_id, at, note)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "INSERT INTO actor_link_decisions (tenant_id, subject_id, actor_id, feedback, analyst_id, at, note, attempt_ids)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              ON CONFLICT (tenant_id, subject_id, actor_id)
-             DO UPDATE SET feedback = $4, analyst_id = $5, at = $6, note = $7",
-            &[&tenant_id, &r.subject_id, &r.actor_id, &r.feedback, &r.analyst_id, &r.at, &r.note],
+             DO UPDATE SET feedback = $4, analyst_id = $5, at = $6, note = $7, attempt_ids = $8",
+            &[&tenant_id, &r.subject_id, &r.actor_id, &r.feedback, &r.analyst_id, &r.at, &r.note, &r.attempt_ids],
         )
         .await?;
     Ok(())
@@ -491,7 +497,7 @@ pub async fn actor_decisions(
 ) -> Result<Vec<ActorDecisionRow>, Error> {
     let rows = client
         .query(
-            "SELECT subject_id, actor_id, feedback, analyst_id, at, note FROM actor_link_decisions
+            "SELECT subject_id, actor_id, feedback, analyst_id, at, note, attempt_ids FROM actor_link_decisions
              WHERE tenant_id = $1 AND subject_id = ANY($2) ORDER BY subject_id, actor_id",
             &[&tenant_id, &subject_ids],
         )
@@ -505,6 +511,7 @@ pub async fn actor_decisions(
             analyst_id: r.get("analyst_id"),
             at: r.get("at"),
             note: r.get("note"),
+            attempt_ids: r.get("attempt_ids"),
         })
         .collect())
 }

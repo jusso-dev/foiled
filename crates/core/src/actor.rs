@@ -39,6 +39,7 @@ use sha2::{Digest, Sha256};
 use crate::attack::AttackSidecar;
 use crate::attempt::Attempt;
 use crate::campaign::{ActorSuggestion, AttemptSignals, Campaign};
+use crate::capture::{CaptureEvent, Channel};
 use crate::confidence::{
     Band, ConfidenceConfig, ConfidenceLink, Evidence, EvidenceSource, Feedback, LinkKind, Override,
     score,
@@ -801,15 +802,105 @@ pub struct SubjectIndicator {
 pub struct SubjectInput<'a> {
     pub tenant_id: &'a str,
     pub campaigns: &'a [Campaign],
-    /// Every attempt in the window. Those in no listed campaign become
-    /// attempt subjects.
+    /// Every attempt in the window, to read what each one sent.
     pub attempts: &'a [Attempt],
+    /// Also match the attempts in no listed campaign, as attempt subjects.
+    pub lone_attempts: bool,
     pub signals: &'a BTreeMap<String, AttemptSignals>,
     pub iocs: &'a Extraction,
     /// Source address to ASN number (#11).
     pub asns: &'a BTreeMap<String, u32>,
     /// Source address to two-letter country code (#11).
     pub countries: &'a BTreeMap<String, String>,
+    /// The window's capture events, to tell callbacks the attacker named in
+    /// its own request or payload from ones it did not.
+    pub events: &'a [CaptureEvent],
+}
+
+/// What the attacker sent in one attempt, lowercased: `data` and `hook` of
+/// its application, network and hook events (never addresses).
+fn attacker_text(a: &Attempt, events: &BTreeMap<&str, &CaptureEvent>) -> String {
+    let mut out = String::new();
+    for id in &a.event_ids {
+        let Some(e) = events.get(id.as_str()) else {
+            continue;
+        };
+        if !matches!(
+            e.channel,
+            Channel::Application | Channel::Network | Channel::Hook
+        ) {
+            continue;
+        }
+        out.push_str(&serde_json::to_string(&e.data).unwrap_or_default());
+        if let Some(h) = &e.hook {
+            out.push_str(&serde_json::to_string(h).unwrap_or_default());
+        }
+        out.push('\n');
+    }
+    out.to_lowercase()
+}
+
+/// What one attempt sent, and the hosts it steered the decoy to.
+struct Sent {
+    /// [`attacker_text`].
+    text: String,
+    /// Addresses the decoy connected to for a host the attacker named: the
+    /// attacker chose where the decoy went, even if not the address.
+    directed: BTreeSet<String>,
+}
+
+impl Sent {
+    fn of(a: &Attempt, events: &BTreeMap<&str, &CaptureEvent>) -> Self {
+        let text = attacker_text(a, events);
+        let mut directed = BTreeSet::new();
+        for id in &a.event_ids {
+            let Some(e) = events.get(id.as_str()) else {
+                continue;
+            };
+            if e.channel != Channel::Egress {
+                continue;
+            }
+            let named = ["host", "url"].iter().any(|k| {
+                e.data.get(*k).and_then(|v| v.as_str()).is_some_and(|v| {
+                    let v = v.to_lowercase();
+                    let host = host_of(IndicatorType::Url, &v)
+                        .filter(|_| v.contains("://"))
+                        .unwrap_or(&v)
+                        .to_string();
+                    !host.is_empty() && text.contains(&host)
+                })
+            });
+            if named && let Some(d) = &e.dst {
+                directed.insert(d.ip.to_lowercase());
+            }
+        }
+        Sent { text, directed }
+    }
+
+    /// True when the attacker named this host or steered the decoy to it.
+    fn chose(&self, host: &str) -> bool {
+        self.text.contains(host) || self.directed.contains(host)
+    }
+}
+
+/// The host part of an indicator value, for matching against what the
+/// attacker sent.
+fn host_of(kind: IndicatorType, value: &str) -> Option<&str> {
+    match kind {
+        IndicatorType::Ip | IndicatorType::Domain => Some(value),
+        IndicatorType::Url => value
+            .split_once("://")
+            .and_then(|(_, r)| r.split(['/', '?', '#']).next())
+            .map(|h| h.rsplit('@').next().unwrap_or(h))
+            .map(|h| {
+                if h.starts_with('[') {
+                    h.trim_start_matches('[').split(']').next().unwrap_or(h)
+                } else {
+                    h.split(':').next().unwrap_or(h)
+                }
+            }),
+        _ => None,
+    }
 }
 
 fn indicator_type(t: IocType) -> Option<IndicatorType> {
@@ -876,7 +967,7 @@ pub fn subjects(input: &SubjectInput<'_>) -> Vec<Subject> {
         }
         out.push(s);
     }
-    for (id, a) in &attempts {
+    for (id, a) in attempts.iter().filter(|_| input.lone_attempts) {
         if by_attempt.contains_key(id) {
             continue;
         }
@@ -906,6 +997,13 @@ pub fn subjects(input: &SubjectInput<'_>) -> Vec<Subject> {
             countries: input.countries.get(&a.src).cloned().into_iter().collect(),
         });
     }
+    let event_by_id: BTreeMap<&str, &CaptureEvent> = input
+        .events
+        .iter()
+        .map(|e| (e.event_id.as_str(), e))
+        .collect();
+    // Built only for attempts with a callback indicator.
+    let mut sent: BTreeMap<&str, Sent> = BTreeMap::new();
     let mut seen: Vec<BTreeSet<&str>> = vec![BTreeSet::new(); out.len()];
     for ioc in &input.iocs.iocs {
         let Some(kind) = indicator_type(ioc.ioc_type) else {
@@ -915,16 +1013,27 @@ pub fn subjects(input: &SubjectInput<'_>) -> Vec<Subject> {
             continue;
         };
         // Observed: the attack came from it, or the decoy itself contacted
-        // it (egress or DNS events, whatever the role: a stage-2 GET the
-        // decoy made is observed, a stage-2 URL in a request is not).
-        let observed = ioc
-            .roles
-            .iter()
-            .any(|r| matches!(r, IocRole::Source | IocRole::Callback))
+        // it (egress or DNS events, whatever the role). A callback to a host
+        // the attacker named in its own request or payload (JNDI, SSRF, a
+        // download command), or to the address the decoy reached for such a
+        // name, was chosen by the attacker, so it counts as sent.
+        let source = ioc.roles.contains(&IocRole::Source);
+        let callback = ioc.roles.contains(&IocRole::Callback)
             || ioc
                 .extracted_from
                 .iter()
                 .any(|f| f.starts_with("egress:") || f.starts_with("dns:"));
+        let observed = source
+            || (callback
+                && !host_of(kind, &v).is_some_and(|host| {
+                    ioc.attempt_ids.iter().any(|a| {
+                        attempts.get(a.as_str()).is_some_and(|att| {
+                            sent.entry(att.attempt_id.as_str())
+                                .or_insert_with(|| Sent::of(att, &event_by_id))
+                                .chose(host)
+                        })
+                    })
+                }));
         for a in &ioc.attempt_ids {
             let Some(&i) = by_attempt.get(a.as_str()) else {
                 continue;
@@ -989,6 +1098,11 @@ pub struct ActorDecision {
     pub subject_id: String,
     pub actor_id: String,
     pub decision: Override,
+    /// The subject's attempts when the analyst decided. A confirmation
+    /// covers these only: attempts that join a campaign later are not
+    /// confirmed by it (see [`ActorLink::new_since_confirmation`]).
+    #[serde(default)]
+    pub attempt_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1066,9 +1180,19 @@ pub struct ActorLink {
     pub score: u8,
     pub band: Band,
     pub publishable: bool,
-    /// At or above `radar_queue_min` and pending: a review queue candidate
-    /// (#35).
+    /// A review queue candidate (#35): pending and at or above
+    /// `radar_queue_min`, or confirmed with attempts that joined since.
     pub review_queue: bool,
+    /// Confirmed links: the attempts the analyst's confirmation covers (the
+    /// subject's attempts at decision time that are still in it). Only
+    /// these export as confirmed.
+    #[serde(default)]
+    pub confirmed_attempt_ids: Vec<String>,
+    /// Confirmed links: attempts that joined after the confirmation. They
+    /// are not covered by it, never export as confirmed, and put the link
+    /// back in the review queue.
+    #[serde(default)]
+    pub new_since_confirmation: Vec<String>,
     pub matched: Matched,
     /// Overlaps that were seen and deliberately not counted.
     pub not_counted: Vec<String>,
@@ -1311,8 +1435,9 @@ fn evaluate(
     s: &Subject,
     pi: usize,
     hits: &[Hit],
-    decision: Option<&Override>,
+    decided: Option<&ActorDecision>,
 ) -> Option<ActorLink> {
+    let decision = decided.map(|d| &d.decision);
     let p = &cat.profiles[pi];
     let shared: Vec<&String> = p
         .techniques
@@ -1510,6 +1635,26 @@ fn evaluate(
         Some(Feedback::FalsePositive) => LinkStatus::Rejected,
         _ => LinkStatus::Pending,
     };
+    // A confirmation covers the attempts the analyst saw, not later joiners.
+    let (confirmed_attempt_ids, new_since_confirmation): (Vec<String>, Vec<String>) =
+        if status == LinkStatus::Confirmed {
+            let covered: BTreeSet<&str> = decided
+                .map(|d| d.attempt_ids.iter().map(String::as_str).collect())
+                .unwrap_or_default();
+            s.attempt_ids
+                .iter()
+                .cloned()
+                .partition(|a| covered.contains(a.as_str()))
+        } else {
+            (Vec::new(), Vec::new())
+        };
+    let mut text = statement(&p.label, status, &overlap, &p.sources);
+    if !new_since_confirmation.is_empty() {
+        text.push_str(&format!(
+            " {} attempt(s) joined since the confirmation and are not covered by it.",
+            new_since_confirmation.len()
+        ));
+    }
     Some(ActorLink {
         link_id: link_id(&s.tenant_id, &s.id, &p.actor_id),
         tenant_id: s.tenant_id.clone(),
@@ -1521,11 +1666,14 @@ fn evaluate(
         label_kind: p.label_kind,
         status,
         wording: link.wording.clone(),
-        statement: statement(&p.label, status, &overlap, &p.sources),
+        statement: text,
         score: link.score,
         band: link.band,
         publishable: link.publishable,
-        review_queue: link.radar_queue && status == LinkStatus::Pending,
+        review_queue: (link.radar_queue && status == LinkStatus::Pending)
+            || !new_since_confirmation.is_empty(),
+        confirmed_attempt_ids,
+        new_since_confirmation,
         matched,
         not_counted,
         sources: p.sources.clone(),
@@ -1543,7 +1691,7 @@ pub fn suggest(
     cat: &ActorCatalogue,
     cfg: &ConfidenceConfig,
     subjects: &[Subject],
-    decisions: &BTreeMap<(String, String), Override>,
+    decisions: &BTreeMap<(String, String), ActorDecision>,
 ) -> Vec<ActorLink> {
     let mut out = Vec::new();
     for s in subjects {
@@ -1629,7 +1777,14 @@ pub fn export_links(links: &[ActorLink]) -> BTreeMap<String, Vec<ConfidenceLink>
         {
             continue;
         }
-        for a in &l.attempt_ids {
+        // A confirmation covers only the attempts the analyst saw; later
+        // members fall back to the unconfirmed link, which never exports.
+        let attempts = if l.status == LinkStatus::Confirmed {
+            &l.confirmed_attempt_ids
+        } else {
+            &l.attempt_ids
+        };
+        for a in attempts {
             let mut c = l.confidence.clone();
             c.attempt_id = a.clone();
             out.entry(a.clone()).or_default().push(c);
@@ -2052,15 +2207,20 @@ mod tests {
         );
 
         let mut d = BTreeMap::new();
-        let o = |f| Override {
-            feedback: f,
-            analyst_id: "lead".into(),
-            at: 1,
-            note: "same loader hash as the report".into(),
+        let o = |f, attempts: &[&str]| ActorDecision {
+            subject_id: s.id.clone(),
+            actor_id: "report:cluster-01".into(),
+            decision: Override {
+                feedback: f,
+                analyst_id: "lead".into(),
+                at: 1,
+                note: "same loader hash as the report".into(),
+            },
+            attempt_ids: attempts.iter().map(|a| a.to_string()).collect(),
         };
         d.insert(
             (s.id.clone(), "report:cluster-01".to_string()),
-            o(Feedback::TruePositive),
+            o(Feedback::TruePositive, &["att_1", "att_2"]),
         );
         let confirmed = suggest(&cat, &cfg, std::slice::from_ref(&s), &d);
         let l = &confirmed[0];
@@ -2076,9 +2236,34 @@ mod tests {
         assert_eq!(ex["att_2"][0].attempt_id, "att_2");
         assert_eq!(ex["att_2"][0].kind, LinkKind::AttemptActor);
 
+        // An attempt joins the campaign after the confirmation: it is not
+        // covered, never exports as confirmed, and puts the link back in the
+        // review queue.
+        let mut grown = s.clone();
+        grown.attempt_ids.push("att_3".into());
+        let l = &suggest(&cat, &cfg, std::slice::from_ref(&grown), &d)[0];
+        assert_eq!(l.status, LinkStatus::Confirmed);
+        assert_eq!(l.confirmed_attempt_ids, ["att_1", "att_2"]);
+        assert_eq!(l.new_since_confirmation, ["att_3"]);
+        assert!(l.review_queue, "new members since confirmation");
+        assert!(
+            l.statement
+                .ends_with("1 attempt(s) joined since the confirmation and are not covered by it.")
+        );
+        let ex = export_links(std::slice::from_ref(l));
+        assert!(ex.contains_key("att_1") && ex.contains_key("att_2"));
+        assert!(!ex.contains_key("att_3"), "later members are not confirmed");
+        // A confirmation recorded with no attempts covers none.
         d.insert(
             (s.id.clone(), "report:cluster-01".to_string()),
-            o(Feedback::FalsePositive),
+            o(Feedback::TruePositive, &[]),
+        );
+        let l = &suggest(&cat, &cfg, std::slice::from_ref(&s), &d)[0];
+        assert!(export_links(std::slice::from_ref(l)).is_empty());
+
+        d.insert(
+            (s.id.clone(), "report:cluster-01".to_string()),
+            o(Feedback::FalsePositive, &["att_1", "att_2"]),
         );
         let rejected = suggest(&cat, &cfg, &[s], &d);
         assert_eq!(rejected[0].status, LinkStatus::Rejected);

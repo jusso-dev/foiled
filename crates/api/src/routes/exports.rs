@@ -313,18 +313,18 @@ pub(crate) async fn selection_capped(
     // Actor links (#29) only when the export opts in. Pending and rejected
     // links never leave, even with `include_unreviewed`: `export_links`
     // keeps confirmed links only.
-    let actor_links = match m.inputs.as_ref() {
+    let actor_links = match m.inputs.take() {
         Some(inputs) if opts.include_actors => {
-            let (links, _, _) = crate::routes::actors::match_window(
-                state,
-                &who.tenant_id,
-                &mut m.campaigns.campaigns,
-                &m.attempts,
-                &m.iocs,
-                inputs,
-            )
-            .await?;
-            foiled_core::actor::export_links(&links)
+            let mut campaigns = std::mem::take(&mut m.campaigns.campaigns);
+            let window = crate::routes::actors::Window {
+                lone_attempts: true,
+                ..crate::routes::actors::Window::campaigns_of(&m, &inputs)
+            };
+            let matched =
+                crate::routes::actors::match_window(state, &who.tenant_id, &mut campaigns, window)
+                    .await;
+            m.campaigns.campaigns = campaigns;
+            foiled_core::actor::export_links(&matched?.0)
         }
         _ => BTreeMap::new(),
     };

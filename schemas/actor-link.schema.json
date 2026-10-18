@@ -47,6 +47,16 @@
     "band": { "enum": ["low", "medium", "high"] },
     "publishable": { "type": "boolean" },
     "review_queue": { "type": "boolean" },
+    "confirmed_attempt_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Confirmed links: the attempts the analyst's confirmation covers. Only these export as confirmed."
+    },
+    "new_since_confirmation": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Confirmed links: attempts that joined after the confirmation. Not covered by it; the link goes back to the review queue."
+    },
     "matched": {
       "type": "object",
       "additionalProperties": false,

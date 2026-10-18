@@ -120,6 +120,15 @@ impl MemoryStore {
         g.cache.push(entry);
     }
 
+    /// Stored actor link decisions, every tenant (tests).
+    pub fn actor_decisions_for_tests(&self) -> Vec<foiled_core::actor::ActorDecision> {
+        self.lock()
+            .actor_decisions
+            .iter()
+            .map(|(_, d)| d.clone())
+            .collect()
+    }
+
     /// The campaign registry recorded for a tenant (tests).
     pub fn campaign_registry(&self, tenant_id: &str) -> foiled_core::campaign::Registry {
         self.lock()
