@@ -71,7 +71,7 @@ TTLs are whole days counted from when the control plane received the item (or R2
 - **Request bodies are hashed.** For HTTP and protocol requests the capture layer stores a SHA-256 of the body, its length and content type, not the body. CVE matchers and vulnerable-path hooks (#12, #32) run on the body in flight, before it is dropped, so detection does not depend on keeping it.
 - **Quarantine still happens.** Files an attacker writes to the decoy are the core malware evidence, so they are still quarantined under the `quarantine_file` TTL. Set that TTL to `0` if you want none kept.
 - **Pcaps still contain bodies.** Turning payload storage off does not strip packet captures. Use a short pcap TTL, a short snap length on the host (see [deploy/vps.md](deploy/vps.md#pcap-disk-caps)), or metadata-only mode.
-- **The LLM sees redacted text.** Correlation (#28) sends hashes and short redacted extracts through AI Gateway, with gateway logging set per #28. Payload bytes never go to a provider.
+- **The LLM sees redacted text.** Correlation (#28) sends hashes and short redacted extracts through AI Gateway, with gateway logging and caching off ([llm-correlation.md](llm-correlation.md#redaction-rules)). Payload bytes never go to a provider.
 
 Set `store_payloads: true` only with a reason you can explain, for example a time-boxed investigation. Full bodies then follow the TTL of the class that holds them.
 
@@ -142,7 +142,7 @@ The purge job deletes live data. These copies need separate handling:
 - **D1 Time Travel** can restore a database to any point in the last 30 days, which includes rows the purge deleted.
 - **Postgres backups and point-in-time recovery** at your Postgres host. Set backup retention no longer than your longest Postgres TTL, or accept that backups hold purged rows until they expire.
 - **Host buffers.** The host agent deletes local capture and quarantine copies once R2 confirms the upload (#9, #41). A host that cannot upload keeps its buffer up to the spool cap. Volume snapshots and provider backups of the capture volume need the same retention as the data on it ([deploy/cloud-sketch.md](deploy/cloud-sketch.md)).
-- **AI Gateway logs**, per the logging policy in #28. Logging can be off.
+- **AI Gateway logs** are off for the LLM correlation gateway, so the gateway keeps no prompt text ([ADR 0010](adr/0010-llm-provider-and-ai-gateway.md#ai-gateway-setup)). An operator who turns logging on for debugging owns that retention.
 - **Queues** hold messages until the consumer acknowledges them (up to 14 days if consumers fall behind). Large evidence is never in a message.
 
 ## Access and encryption

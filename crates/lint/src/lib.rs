@@ -66,6 +66,14 @@ pub const BINDINGS: &[Binding] = &[
         schema: "schemas/enrichment-config.schema.json",
     },
     Binding {
+        data_dir: "configs/llm.yaml",
+        schema: "schemas/llm-config.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/llm-eval/expected",
+        schema: "schemas/llm-correlation-result.schema.json",
+    },
+    Binding {
         data_dir: "testdata/enrichment/facts",
         schema: "schemas/fact.schema.json",
     },

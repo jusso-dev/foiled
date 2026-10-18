@@ -37,6 +37,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [enrichment.md](enrichment.md) | Enrichment providers, the Fact schema, the async `foiled-enrich` pipeline and D1 cache, YARA on quarantine, and the never-resell rule. |
 | [alerting.md](alerting.md) | Alert event types and severities, routes, dedupe and rate limits, the payload, webhook signing and the delivery worker. |
 | [privacy-and-retention.md](privacy-and-retention.md) | Personal information in capture data, default TTLs, the purge job and metadata-only mode. |
+| [llm-correlation.md](llm-correlation.md) | Optional LLM correlation: provider interface, AI Gateway settings, retrieval, redaction, prompt-injection defences, cost caps, the eval set and why LLM-only links never auto-publish. Decision record: [ADR 0010](adr/0010-llm-provider-and-ai-gateway.md). |
 | [deploy/workers.md](deploy/workers.md), [deploy/cloudflare.md](deploy/cloudflare.md), [deploy/cloud-sketch.md](deploy/cloud-sketch.md) | The control plane on Workers, Cloudflare-in-front trade-offs, multi-region sketch. |
 
 ## Planned
@@ -45,7 +46,7 @@ These docs do not exist yet. Each is owned by the issue listed.
 
 | Path | What it will cover | Issue |
 | --- | --- | --- |
-| Remaining ADRs | One file per decision under `docs/adr/` (`NNNN-slug.md`). | #28, #31 |
+| Remaining ADRs | One file per decision under `docs/adr/` (`NNNN-slug.md`). | #31 |
 | `docs/deploy/edge-sensor.md` | Enrolling and running an edge sensor. | #31 |
 | `docs/radar.md` | Radar feed, review queue and research write-ups. | #35 |
 | `docs/compliance/licence-register.md` | Licence and data-terms compliance register. | #38 |

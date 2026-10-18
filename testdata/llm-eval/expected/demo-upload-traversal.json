@@ -1,0 +1,7 @@
+{
+  "attempt_id": "att-demo-1",
+  "cve_ids": ["FOILED-DEMO-0001"],
+  "technique_ids": ["T1190", "T1505.003"],
+  "rationale": "The attempt evidence shares /api/upload, foiled/demo-app/1.0.0 with matcher:foiled-demo-0001-upload-traversal, catalogue:foiled/demo-app/1.0.0. The cited documents name FOILED-DEMO-0001, T1190, T1505.003.",
+  "citations": ["matcher:foiled-demo-0001-upload-traversal", "catalogue:foiled/demo-app/1.0.0"]
+}

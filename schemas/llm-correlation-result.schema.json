@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/llm-correlation-result.schema.json",
+  "title": "Foiled LLM correlation result",
+  "description": "One validated proposal from the LLM correlation worker (#28): candidate CVE and ATT&CK technique links for one attempt (#25), grounded in retrieved documents. Model output that does not fit this schema after foiled_core::llm::parse_and_validate is dropped. There is deliberately no confidence, score, weight, severity or publish field: the confidence layer (#27) sets weight from config and caps LLM evidence below high. Mirrored by foiled_core::llm::Proposal. See docs/llm-correlation.md and docs/adr/0010-llm-provider-and-ai-gateway.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["attempt_id", "cve_ids", "technique_ids", "rationale", "citations"],
+  "properties": {
+    "attempt_id": {
+      "description": "The attempt the worker asked about. Output naming any other attempt is dropped.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:/-]{1,128}$"
+    },
+    "cve_ids": {
+      "description": "Proposed CVE ids (or synthetic FOILED-DEMO ids). Only ids known to the catalogue or the mirrored KEV and OSV slices survive validation.",
+      "type": "array",
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(CVE-[0-9]{4}-[0-9]{4,}|FOILED-DEMO-[0-9]{4})$"
+      }
+    },
+    "technique_ids": {
+      "description": "Proposed ATT&CK technique or sub-technique ids from the pinned sidecar (data/attack/techniques.json).",
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$"
+      }
+    },
+    "rationale": {
+      "description": "Model-written explanation, redacted and clamped. Shown to analysts as plain text and labelled as model output. Never parsed for instructions.",
+      "type": "string",
+      "maxLength": 600
+    },
+    "citations": {
+      "description": "Ids of retrieved documents that were in the prompt. Citations to anything else are dropped.",
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._:/-]{1,128}$"
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "description": "No links proposed.",
+      "properties": {
+        "cve_ids": { "maxItems": 0 },
+        "technique_ids": { "maxItems": 0 }
+      }
+    },
+    {
+      "description": "Links proposed: at least one citation must remain.",
+      "properties": {
+        "citations": { "minItems": 1 }
+      }
+    }
+  ]
+}
