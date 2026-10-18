@@ -103,6 +103,19 @@ impl<'de> Deserialize<'de> for Scope {
     }
 }
 
+/// The only scopes an `mcp` token can hold (#24). Agents get least
+/// privilege: no `admin`, no writes outside decoys, and no quarantine
+/// download, so a misled agent cannot fetch malware or change intel.
+pub const MCP_SCOPES: &[Scope] = &[
+    Scope::CatalogueRead,
+    Scope::DecoysRead,
+    Scope::DecoysWrite,
+    Scope::DecoysElevate,
+    Scope::AttemptsRead,
+    Scope::AuditRead,
+    Scope::EventsRead,
+];
+
 impl Scope {
     /// Whether a principal with `role` may hold this scope at all.
     pub fn allowed_for(self, role: Role) -> bool {
@@ -110,7 +123,8 @@ impl Scope {
         match role {
             Role::Host => name.starts_with("host:"),
             Role::Sensor => name.starts_with("sensor:"),
-            Role::Human | Role::Mcp => !name.starts_with("host:") && !name.starts_with("sensor:"),
+            Role::Human => !name.starts_with("host:") && !name.starts_with("sensor:"),
+            Role::Mcp => MCP_SCOPES.contains(&self),
         }
     }
 }
@@ -198,6 +212,24 @@ mod tests {
         assert!(p.scopes.iter().all(|s| s.as_str().starts_with("sensor:")));
         assert!(p.has(Scope::SensorIngest));
         assert!(!p.has(Scope::HostLease));
+    }
+
+    #[test]
+    fn mcp_tokens_get_least_privilege() {
+        let p = Principal::new("agent", Role::Mcp, "t1", Scope::ALL.iter().copied());
+        assert_eq!(p.scopes, {
+            let mut s = MCP_SCOPES.to_vec();
+            s.sort();
+            s
+        });
+        assert!(!p.has(Scope::Admin));
+        assert!(!p.has(Scope::QuarantineDownload));
+        assert!(!p.has(Scope::AttemptsWrite));
+        assert!(!p.has(Scope::HostLease));
+        // `admin` in the token table grants an agent nothing.
+        let a = Principal::new("agent", Role::Mcp, "t1", [Scope::Admin]);
+        assert!(a.scopes.is_empty());
+        assert!(!a.has(Scope::DecoysRead));
     }
 
     #[test]

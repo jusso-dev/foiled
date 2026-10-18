@@ -94,9 +94,21 @@ pub fn printable(s: &str) -> String {
             out.push('…');
             break;
         }
-        // Bidi marks and overrides, zero-width characters, and the Unicode
-        // line and paragraph separators, none of which `is_control` covers.
-        let invisible = matches!(
+        if needs_escape(c) {
+            out.push_str(&c.escape_unicode().to_string());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Control characters, plus bidi marks and overrides, zero-width characters
+/// and the Unicode line and paragraph separators, none of which
+/// `is_control` covers.
+pub fn needs_escape(c: char) -> bool {
+    c.is_control()
+        || matches!(
             c,
             '\u{061C}'
                 | '\u{180E}'
@@ -104,14 +116,7 @@ pub fn printable(s: &str) -> String {
                 | '\u{2028}'..='\u{202E}'
                 | '\u{2060}'..='\u{2069}'
                 | '\u{FEFF}'
-        );
-        if c.is_control() || invisible {
-            out.push_str(&c.escape_unicode().to_string());
-        } else {
-            out.push(c);
-        }
-    }
-    out
+        )
 }
 
 fn text(v: Option<&Value>) -> Option<String> {

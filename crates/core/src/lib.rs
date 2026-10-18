@@ -20,6 +20,7 @@ pub mod enrichment;
 pub mod honeyscore;
 pub mod hooks;
 pub mod llm;
+pub mod mcp;
 pub mod retention;
 pub mod share;
 pub mod sigv4;
