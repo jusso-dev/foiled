@@ -43,7 +43,7 @@
         "additionalProperties": false,
         "required": ["kind", "publisher", "title", "url", "published", "retrieved", "licence"],
         "properties": {
-          "kind": { "enum": ["vendor_report", "government_advisory", "misp_galaxy"] },
+          "kind": { "enum": ["attack_group", "vendor_report", "government_advisory", "misp_galaxy"] },
           "publisher": { "type": "string", "minLength": 1 },
           "title": { "type": "string", "minLength": 1 },
           "url": { "type": "string", "pattern": "^https://" },
@@ -102,6 +102,19 @@
         }
       }
     },
-    "notes": { "type": "string", "maxLength": 1000 }
+    "notes": { "type": "string", "maxLength": 1000 },
+    "imported": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Set only on entries imported from an intel hub (ThreatSieve) into a snapshot, never on curated files. Imported entries need no sha256 pin and may cite an ATT&CK group source.",
+      "required": ["from", "entity_id", "restricted", "publishers"],
+      "properties": {
+        "from": { "type": "string" },
+        "entity_id": { "type": "string" },
+        "attack_id": { "type": "string", "pattern": "^[GC][0-9]{4}$" },
+        "restricted": { "type": "boolean", "description": "A source does not allow redistribution or commercial use: matched and shown, never exported." },
+        "publishers": { "type": "integer", "minimum": 0, "description": "Distinct publishers. With one, the entry is never a named group and counts at half weight." }
+      }
+    }
   }
 }

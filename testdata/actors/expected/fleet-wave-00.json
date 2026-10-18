@@ -19,6 +19,7 @@
   "review_queue": true,
   "confirmed_attempt_ids": [],
   "new_since_confirmation": [],
+  "restricted": false,
   "matched": {
     "techniques": [
       {

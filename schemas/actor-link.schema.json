@@ -47,6 +47,7 @@
     "band": { "enum": ["low", "medium", "high"] },
     "publishable": { "type": "boolean" },
     "review_queue": { "type": "boolean" },
+    "restricted": { "type": "boolean", "description": "From a source that does not allow redistribution or commercial use: shown in the console, never exported." },
     "confirmed_attempt_ids": {
       "type": "array",
       "items": { "type": "string" },

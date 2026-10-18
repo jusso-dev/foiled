@@ -1,0 +1,977 @@
+{
+  "description": "Fake ThreatSieve answers for the actor catalogue sync (#29). Fictional except the shape: two ATT&CK groups (G0106 is already in the pinned sidecar, so the sidecar wins; G9001 is new), a TAXII-sourced cluster named by two more publishers and a report (not redistributable), an entity whose name claims responsibility (dropped), one removed since listing (404), a malware entity (ignored) and an ATT&CK campaign. Keys are request paths on the THREATSIEVE binding.",
+  "now": 1792800000000,
+  "responses": {
+    "/v1/actors?limit=100": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "intrusion-set--00000000-0000-4000-8000-000000000106",
+            "type": "threat-actor",
+            "name": "Rocke",
+            "description": "",
+            "aliases": [],
+            "data": {},
+            "provenance": {
+              "sourceId": "mitre",
+              "sourceName": "MITRE ATT&CK",
+              "retrievedAt": "2026-10-10T00:00:00.000Z",
+              "publishedAt": "2026-10-01T00:00:00.000Z",
+              "redistributable": true,
+              "sourceUrl": "https://attack.mitre.org/groups/G0106/",
+              "license": "ATT&CK Terms of Use"
+            },
+            "externalId": "G0106"
+          },
+          {
+            "id": "intrusion-set--00000000-0000-4000-8000-000000009001",
+            "type": "threat-actor",
+            "name": "EXAMPLE New Group",
+            "description": "",
+            "aliases": [
+              "EXAMPLE-NG"
+            ],
+            "data": {},
+            "provenance": {
+              "sourceId": "mitre",
+              "sourceName": "MITRE ATT&CK",
+              "retrievedAt": "2026-10-10T00:00:00.000Z",
+              "publishedAt": "2026-10-01T00:00:00.000Z",
+              "redistributable": true,
+              "sourceUrl": "https://attack.mitre.org/groups/G9001/",
+              "license": "ATT&CK Terms of Use"
+            },
+            "externalId": "G9001"
+          },
+          {
+            "id": "malware--1",
+            "type": "malware",
+            "name": "EXAMPLE loader",
+            "description": "",
+            "aliases": [],
+            "data": {},
+            "provenance": {
+              "sourceId": "taxii-acme",
+              "sourceName": "Example ACME feed (fictional)",
+              "retrievedAt": "2026-10-10T00:00:00.000Z",
+              "publishedAt": "2026-10-01T00:00:00.000Z",
+              "redistributable": false,
+              "sourceUrl": "https://feeds.example.net/acme/7",
+              "license": "ACME feed terms (fictional)"
+            }
+          }
+        ],
+        "next_cursor": "m1"
+      }
+    },
+    "/v1/actors?limit=100&cursor=m1": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "threat-actor_ex7",
+            "type": "threat-actor",
+            "name": "EXAMPLE-TS-CLUSTER-7",
+            "description": "",
+            "aliases": [
+              "EXAMPLE-SEVEN",
+              "the crew responsible for it"
+            ],
+            "data": {},
+            "provenance": {
+              "sourceId": "taxii-acme",
+              "sourceName": "Example ACME feed (fictional)",
+              "retrievedAt": "2026-10-10T00:00:00.000Z",
+              "publishedAt": "2026-10-01T00:00:00.000Z",
+              "redistributable": false,
+              "sourceUrl": "https://feeds.example.net/acme/7",
+              "license": "ACME feed terms (fictional)"
+            }
+          },
+          {
+            "id": "threat-actor_bad",
+            "type": "threat-actor",
+            "name": "EXAMPLE crew responsible for the outage",
+            "description": "",
+            "aliases": [],
+            "data": {},
+            "provenance": {
+              "sourceId": "taxii-acme",
+              "sourceName": "Example ACME feed (fictional)",
+              "retrievedAt": "2026-10-10T00:00:00.000Z",
+              "publishedAt": "2026-10-01T00:00:00.000Z",
+              "redistributable": false,
+              "sourceUrl": "https://feeds.example.net/acme/7",
+              "license": "ACME feed terms (fictional)"
+            }
+          },
+          {
+            "id": "intrusion-set--00000000-0000-4000-8000-00000000dead",
+            "type": "threat-actor",
+            "name": "EXAMPLE gone",
+            "description": "",
+            "aliases": [],
+            "data": {},
+            "provenance": {
+              "sourceId": "taxii-acme",
+              "sourceName": "Example ACME feed (fictional)",
+              "retrievedAt": "2026-10-10T00:00:00.000Z",
+              "publishedAt": "2026-10-01T00:00:00.000Z",
+              "redistributable": false,
+              "sourceUrl": "https://feeds.example.net/acme/7",
+              "license": "ACME feed terms (fictional)"
+            }
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    "/v1/campaigns?limit=100": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "campaign--00000000-0000-4000-8000-000000009001",
+            "type": "campaign",
+            "name": "EXAMPLE campaign wave",
+            "description": "",
+            "aliases": [],
+            "data": {},
+            "provenance": {
+              "sourceId": "mitre",
+              "sourceName": "MITRE ATT&CK",
+              "retrievedAt": "2026-10-10T00:00:00.000Z",
+              "publishedAt": "2026-10-01T00:00:00.000Z",
+              "redistributable": true,
+              "sourceUrl": "https://attack.mitre.org/campaigns/C9001/",
+              "license": "ATT&CK Terms of Use"
+            },
+            "externalId": "C9001"
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    "/v1/entities?type=report&limit=100": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "report--00000000-0000-4000-8000-000000000007",
+            "type": "report",
+            "name": "EXAMPLE report on cluster seven",
+            "description": "",
+            "aliases": [],
+            "data": {
+              "stix": {
+                "published": "2026-09-30T00:00:00Z",
+                "object_refs": [
+                  "threat-actor_ex7"
+                ],
+                "external_references": [
+                  {
+                    "source_name": "example",
+                    "url": "https://reports.example.com/ts/7"
+                  }
+                ]
+              }
+            },
+            "provenance": {
+              "sourceId": "otx",
+              "sourceName": "Example OTX pulse (fictional)",
+              "retrievedAt": "2026-10-10T00:00:00.000Z",
+              "publishedAt": null,
+              "redistributable": false,
+              "license": "OTX terms (fictional)"
+            }
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    "/v1/entities/intrusion-set--00000000-0000-4000-8000-000000000106": {
+      "status": 200,
+      "body": {
+        "entity": {
+          "id": "intrusion-set--00000000-0000-4000-8000-000000000106",
+          "type": "threat-actor",
+          "name": "Rocke",
+          "description": "",
+          "aliases": [],
+          "data": {},
+          "provenance": {
+            "sourceId": "mitre",
+            "sourceName": "MITRE ATT&CK",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": true,
+            "sourceUrl": "https://attack.mitre.org/groups/G0106/",
+            "license": "ATT&CK Terms of Use"
+          },
+          "externalId": "G0106"
+        },
+        "canonical_id": "intrusion-set--00000000-0000-4000-8000-000000000106",
+        "alias_ids": [],
+        "sources": [
+          {
+            "sourceId": "mitre",
+            "sourceName": "MITRE ATT&CK",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": true,
+            "sourceUrl": "https://attack.mitre.org/groups/G0106/",
+            "license": "ATT&CK Terms of Use",
+            "mirrored": false
+          }
+        ],
+        "source_assertions": [
+          {
+            "sourceId": "mitre",
+            "sourceName": "MITRE ATT&CK",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": true,
+            "sourceUrl": "https://attack.mitre.org/groups/G0106/",
+            "license": "ATT&CK Terms of Use",
+            "mirrored": false
+          }
+        ],
+        "source_count": 1,
+        "mirror_count": 0,
+        "independent_corroboration_count": 1,
+        "relationships": [
+          {
+            "id": "relationship--attack-pattern--T1496.001",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1496.001",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1496.001",
+              "type": "attack-technique",
+              "name": "T1496.001",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1496.001"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/entities/intrusion-set--00000000-0000-4000-8000-000000009001": {
+      "status": 200,
+      "body": {
+        "entity": {
+          "id": "intrusion-set--00000000-0000-4000-8000-000000009001",
+          "type": "threat-actor",
+          "name": "EXAMPLE New Group",
+          "description": "",
+          "aliases": [
+            "EXAMPLE-NG"
+          ],
+          "data": {},
+          "provenance": {
+            "sourceId": "mitre",
+            "sourceName": "MITRE ATT&CK",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": true,
+            "sourceUrl": "https://attack.mitre.org/groups/G9001/",
+            "license": "ATT&CK Terms of Use"
+          },
+          "externalId": "G9001"
+        },
+        "canonical_id": "intrusion-set--00000000-0000-4000-8000-000000009001",
+        "alias_ids": [],
+        "sources": [
+          {
+            "sourceId": "mitre",
+            "sourceName": "MITRE ATT&CK",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": true,
+            "sourceUrl": "https://attack.mitre.org/groups/G9001/",
+            "license": "ATT&CK Terms of Use",
+            "mirrored": false
+          }
+        ],
+        "source_assertions": [
+          {
+            "sourceId": "mitre",
+            "sourceName": "MITRE ATT&CK",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": true,
+            "sourceUrl": "https://attack.mitre.org/groups/G9001/",
+            "license": "ATT&CK Terms of Use",
+            "mirrored": false
+          }
+        ],
+        "source_count": 1,
+        "mirror_count": 0,
+        "independent_corroboration_count": 1,
+        "relationships": [
+          {
+            "id": "relationship--attack-pattern--T1496.001",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1496.001",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1496.001",
+              "type": "attack-technique",
+              "name": "T1496.001",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1496.001"
+            }
+          },
+          {
+            "id": "relationship--attack-pattern--T1053.003",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1053.003",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1053.003",
+              "type": "attack-technique",
+              "name": "T1053.003",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1053.003"
+            }
+          },
+          {
+            "id": "relationship--attack-pattern--T1059.004",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1059.004",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1059.004",
+              "type": "attack-technique",
+              "name": "T1059.004",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1059.004"
+            }
+          },
+          {
+            "id": "relationship--attack-pattern--T1105",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1105",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1105",
+              "type": "attack-technique",
+              "name": "T1105",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1105"
+            }
+          },
+          {
+            "id": "relationship--attack-pattern--T9999",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T9999",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T9999",
+              "type": "attack-technique",
+              "name": "T9999",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T9999"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/entities/threat-actor_ex7": {
+      "status": 200,
+      "body": {
+        "entity": {
+          "id": "threat-actor_ex7",
+          "type": "threat-actor",
+          "name": "EXAMPLE-TS-CLUSTER-7",
+          "description": "",
+          "aliases": [
+            "EXAMPLE-SEVEN",
+            "the crew responsible for it"
+          ],
+          "data": {},
+          "provenance": {
+            "sourceId": "taxii-acme",
+            "sourceName": "Example ACME feed (fictional)",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": false,
+            "sourceUrl": "https://feeds.example.net/acme/7",
+            "license": "ACME feed terms (fictional)"
+          }
+        },
+        "canonical_id": "threat-actor_ex7",
+        "alias_ids": [],
+        "sources": [
+          {
+            "sourceId": "taxii-acme",
+            "sourceName": "Example ACME feed (fictional)",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": false,
+            "sourceUrl": "https://feeds.example.net/acme/7",
+            "license": "ACME feed terms (fictional)",
+            "mirrored": false
+          },
+          {
+            "sourceId": "misp",
+            "sourceName": "MISP galaxy",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": false,
+            "sourceUrl": "https://galaxy.example.org/ex7",
+            "license": "CC0-1.0",
+            "mirrored": false
+          },
+          {
+            "sourceId": "misp-feed",
+            "sourceName": "MISP galaxy mirror",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": false,
+            "sourceUrl": "https://mirror.example.org/ex7",
+            "mirrored": true
+          }
+        ],
+        "source_assertions": [
+          {
+            "sourceId": "taxii-acme",
+            "sourceName": "Example ACME feed (fictional)",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": false,
+            "sourceUrl": "https://feeds.example.net/acme/7",
+            "license": "ACME feed terms (fictional)",
+            "mirrored": false
+          },
+          {
+            "sourceId": "misp",
+            "sourceName": "MISP galaxy",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": false,
+            "sourceUrl": "https://galaxy.example.org/ex7",
+            "license": "CC0-1.0",
+            "mirrored": false
+          },
+          {
+            "sourceId": "misp-feed",
+            "sourceName": "MISP galaxy mirror",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": false,
+            "sourceUrl": "https://mirror.example.org/ex7",
+            "mirrored": true
+          }
+        ],
+        "source_count": 3,
+        "mirror_count": 0,
+        "independent_corroboration_count": 3,
+        "relationships": [
+          {
+            "id": "relationship--obs_domain_stage2.example.invalid",
+            "sourceEntityId": "x",
+            "targetEntityId": "obs_domain_stage2.example.invalid",
+            "relationshipType": "INDICATES",
+            "assertionType": "observed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "obs_domain_stage2.example.invalid",
+              "type": "observable",
+              "name": "stage2.example.invalid",
+              "description": "",
+              "aliases": [],
+              "data": {
+                "observableType": "domain"
+              },
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              }
+            }
+          },
+          {
+            "id": "relationship--obs_ipv4_192.0.2.80",
+            "sourceEntityId": "x",
+            "targetEntityId": "obs_ipv4_192.0.2.80",
+            "relationshipType": "INDICATES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "obs_ipv4_192.0.2.80",
+              "type": "observable",
+              "name": "192.0.2.80",
+              "description": "",
+              "aliases": [],
+              "data": {
+                "observableType": "ipv4"
+              },
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              }
+            }
+          },
+          {
+            "id": "relationship--obs_ipv4_203.0.113.9",
+            "sourceEntityId": "x",
+            "targetEntityId": "obs_ipv4_203.0.113.9",
+            "relationshipType": "INDICATES",
+            "assertionType": "model_inferred",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "obs_ipv4_203.0.113.9",
+              "type": "observable",
+              "name": "203.0.113.9",
+              "description": "",
+              "aliases": [],
+              "data": {
+                "observableType": "ipv4"
+              },
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              }
+            }
+          },
+          {
+            "id": "relationship--attack-pattern--T1190",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1190",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1190",
+              "type": "attack-technique",
+              "name": "T1190",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1190"
+            }
+          },
+          {
+            "id": "relationship--attack-pattern--T1059.004",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1059.004",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1059.004",
+              "type": "attack-technique",
+              "name": "T1059.004",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1059.004"
+            }
+          },
+          {
+            "id": "relationship--attack-pattern--T1105",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1105",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1105",
+              "type": "attack-technique",
+              "name": "T1105",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1105"
+            }
+          },
+          {
+            "id": "relationship--vulnerability_1",
+            "sourceEntityId": "x",
+            "targetEntityId": "vulnerability_1",
+            "relationshipType": "TARGETS",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "vulnerability_1",
+              "type": "vulnerability",
+              "name": "CVE-2099-0001",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "CVE-2099-0001"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/entities/threat-actor_bad": {
+      "status": 200,
+      "body": {
+        "entity": {
+          "id": "threat-actor_bad",
+          "type": "threat-actor",
+          "name": "EXAMPLE crew responsible for the outage",
+          "description": "",
+          "aliases": [],
+          "data": {},
+          "provenance": {
+            "sourceId": "taxii-acme",
+            "sourceName": "Example ACME feed (fictional)",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": false,
+            "sourceUrl": "https://feeds.example.net/acme/7",
+            "license": "ACME feed terms (fictional)"
+          }
+        },
+        "canonical_id": "threat-actor_bad",
+        "alias_ids": [],
+        "sources": [
+          {
+            "sourceId": "taxii-acme",
+            "sourceName": "Example ACME feed (fictional)",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": false,
+            "sourceUrl": "https://feeds.example.net/acme/7",
+            "license": "ACME feed terms (fictional)",
+            "mirrored": false
+          }
+        ],
+        "source_assertions": [
+          {
+            "sourceId": "taxii-acme",
+            "sourceName": "Example ACME feed (fictional)",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": false,
+            "sourceUrl": "https://feeds.example.net/acme/7",
+            "license": "ACME feed terms (fictional)",
+            "mirrored": false
+          }
+        ],
+        "source_count": 1,
+        "mirror_count": 0,
+        "independent_corroboration_count": 1,
+        "relationships": [
+          {
+            "id": "relationship--attack-pattern--T1190",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1190",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1190",
+              "type": "attack-technique",
+              "name": "T1190",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1190"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/entities/intrusion-set--00000000-0000-4000-8000-00000000dead": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "NOT_FOUND",
+          "message": "Entity not found",
+          "request_id": "r1"
+        }
+      }
+    },
+    "/v1/entities/campaign--00000000-0000-4000-8000-000000009001": {
+      "status": 200,
+      "body": {
+        "entity": {
+          "id": "campaign--00000000-0000-4000-8000-000000009001",
+          "type": "campaign",
+          "name": "EXAMPLE campaign wave",
+          "description": "",
+          "aliases": [],
+          "data": {},
+          "provenance": {
+            "sourceId": "mitre",
+            "sourceName": "MITRE ATT&CK",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": true,
+            "sourceUrl": "https://attack.mitre.org/campaigns/C9001/",
+            "license": "ATT&CK Terms of Use"
+          },
+          "externalId": "C9001"
+        },
+        "canonical_id": "campaign--00000000-0000-4000-8000-000000009001",
+        "alias_ids": [],
+        "sources": [
+          {
+            "sourceId": "mitre",
+            "sourceName": "MITRE ATT&CK",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": true,
+            "sourceUrl": "https://attack.mitre.org/campaigns/C9001/",
+            "license": "ATT&CK Terms of Use",
+            "mirrored": false
+          }
+        ],
+        "source_assertions": [
+          {
+            "sourceId": "mitre",
+            "sourceName": "MITRE ATT&CK",
+            "retrievedAt": "2026-10-10T00:00:00.000Z",
+            "publishedAt": "2026-10-01T00:00:00.000Z",
+            "redistributable": true,
+            "sourceUrl": "https://attack.mitre.org/campaigns/C9001/",
+            "license": "ATT&CK Terms of Use",
+            "mirrored": false
+          }
+        ],
+        "source_count": 1,
+        "mirror_count": 0,
+        "independent_corroboration_count": 1,
+        "relationships": [
+          {
+            "id": "relationship--attack-pattern--T1190",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1190",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1190",
+              "type": "attack-technique",
+              "name": "T1190",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1190"
+            }
+          },
+          {
+            "id": "relationship--attack-pattern--T1105",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1105",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1105",
+              "type": "attack-technique",
+              "name": "T1105",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1105"
+            }
+          },
+          {
+            "id": "relationship--attack-pattern--T1059.004",
+            "sourceEntityId": "x",
+            "targetEntityId": "attack-pattern--T1059.004",
+            "relationshipType": "USES",
+            "assertionType": "source_claimed",
+            "confidence": 0.9,
+            "sourceIds": [
+              "mitre"
+            ],
+            "entity": {
+              "id": "attack-pattern--T1059.004",
+              "type": "attack-technique",
+              "name": "T1059.004",
+              "description": "",
+              "aliases": [],
+              "data": {},
+              "provenance": {
+                "sourceId": "mitre",
+                "sourceName": "MITRE ATT&CK",
+                "retrievedAt": "2026-10-10T00:00:00.000Z",
+                "publishedAt": "2026-10-01T00:00:00.000Z",
+                "redistributable": true
+              },
+              "externalId": "T1059.004"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
