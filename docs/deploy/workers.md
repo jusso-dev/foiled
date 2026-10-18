@@ -41,6 +41,7 @@ Every binding the Workers use, with the issue that owns the code that reads or w
 | `foiled-api` | `LIVE_STREAM` | Durable Object namespace (class `LiveStream`) | migration tag `v1` | #14 | Live attempt stream to console clients over hibernating WebSockets. |
 | `foiled-api` | `AI` | Workers AI, called through AI Gateway (`AI_GATEWAY_ID` var) | gateway created in the dashboard | #28 | LLM correlation, with the logging policy from #16 and #28. |
 | `foiled-api` | `RADAR` | Analytics Engine dataset | `foiled_radar` | #35 | High-volume radar counters (3 months retention). |
+| `foiled-api` | `CF_CACHE_PURGE_API_TOKEN` (optional) | #35 | Cloudflare API token with only *Zone, Cache Purge* on the public site zone. Purges withdrawn pages; without it they leave caches within 60 seconds ([research-writeups.md](../research-writeups.md#caching-and-withdrawal)). |
 | `foiled-web` | `API` | Service Binding to `foiled-api` | `foiled-api` | #14 (decision in #40) | Every console call to the API. No public API call from the browser is needed. |
 | `foiled-public` | `API` | Service Binding to `foiled-api` | `foiled-api` | #35 | Reads published, confidence-gated data only: the loaders refuse any API path outside `/v0/public/`, and those routes take no credentials ([research-writeups.md](../research-writeups.md#what-the-public-routes-can-read)). |
 
@@ -76,8 +77,8 @@ Proposed names. The owning issue finalises each one.
 | `foiled-api` | `THREATSIEVE_API_KEY` | #11 | A ThreatSieve API key with scope `intel:read` only. Read by the `foiled-enrich` consumer and sent only over the `THREATSIEVE` Service Binding as a bearer token. Source keys (GreyNoise, CrowdSec and so on) live in ThreatSieve, not here ([enrichment.md](../enrichment.md#deploying-the-consumer)). |
 | `foiled-api` | `LLM_PROVIDER_API_KEY` (if an external model is used) | #28 | Key for an external model behind AI Gateway. |
 | `foiled-api` | `SHODAN_API_KEY` (optional) | #18 | Operator-supplied Shodan key for the Honeyscore self-check. Only set it if you enable the check ([fingerprint-resistance.md](../fingerprint-resistance.md)). |
-| `foiled-web` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #14 | Same Access check in the console Worker. |
-| `foiled-api` | `CF_CACHE_PURGE_API_TOKEN` (optional) | #35 | Cloudflare API token with only *Zone, Cache Purge* on the public site zone. Purges withdrawn pages; without it they leave caches within 60 seconds ([research-writeups.md](../research-writeups.md#caching-and-withdrawal)). |
+| `foiled-web` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #14 | Same Access check in the console Worker, on every request. Required: without them the console refuses every request unless `CONSOLE_ENV=development` (local only) ([console.md](../ui/console.md#sign-in-and-sessions)). |
+| `foiled-web` | `SESSION_SECRET` | #14 | At least 32 random characters. Encrypts the operator session cookie that holds the API token. Sign-in is refused without it; rotating it signs everyone out. |
 
 Postgres credentials are not a Worker secret: they live in the Hyperdrive configuration, set when you create it.
 

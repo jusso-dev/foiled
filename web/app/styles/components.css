@@ -1450,3 +1450,579 @@ h4.article__h {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---------- Operator console (#14, docs/ui/console.md) ---------- */
+.skip-link {
+  position: absolute;
+  left: var(--space-5);
+  top: -100px;
+  z-index: 10;
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.skip-link:focus {
+  top: var(--space-5);
+}
+
+.console-user {
+  margin-left: auto;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-5);
+}
+
+.page-head__title {
+  font-size: 20px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.page-head__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.section-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.section-title--sub {
+  font-size: var(--text-md);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--gap);
+  align-items: start;
+}
+
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--gap);
+}
+
+.panel__body {
+  padding: 0 var(--space-7) var(--space-4);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.link {
+  color: var(--blue-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+.link:hover {
+  color: var(--text);
+}
+
+.pager {
+  padding: var(--space-4) var(--space-7);
+}
+
+.bullets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-left: var(--space-7);
+  list-style: disc;
+}
+
+ol.bullets {
+  list-style: decimal;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.wrap-any {
+  overflow-wrap: anywhere;
+}
+
+/* Tags with a tone. The word always carries the meaning; colour repeats it. */
+.tag--ok {
+  color: var(--green);
+}
+
+.tag--warn {
+  color: var(--amber);
+}
+
+/* The bad tone uses the badge fill so it reads as stronger than warn, not by colour alone. */
+.tag--bad {
+  background: var(--red-deep);
+  border-color: var(--red-line);
+  color: var(--red-bright);
+}
+
+/* ---------- Buttons and fields ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 32px;
+  padding: var(--space-3) var(--space-6);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  border-color: var(--muted);
+}
+
+.btn:disabled {
+  color: var(--muted);
+  border-color: var(--line);
+}
+
+.btn--primary {
+  background: var(--red-deep);
+  border-color: var(--red);
+  color: #fff;
+}
+
+.btn--danger {
+  border-color: var(--red);
+  color: var(--red-bright);
+}
+
+/* Scoped to .field so the top bar search and region selector keep their own look. */
+.field :is(input:not([type="checkbox"], [type="radio"], [type="hidden"]), select, textarea) {
+  min-height: 32px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  max-width: 100%;
+}
+
+.field textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+textarea:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.field [aria-invalid="true"] {
+  border-color: var(--red-bright);
+}
+
+.shell__content input[type="checkbox"],
+.shell__content input[type="radio"] {
+  accent-color: var(--red);
+  width: 16px;
+  height: 16px;
+  vertical-align: -3px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.field label,
+.fieldset legend {
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.field--grow {
+  flex: 1 1 260px;
+}
+
+.field__error {
+  color: var(--red-bright);
+  font-size: var(--text-sm);
+}
+
+.fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+
+.fieldset--inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.radios {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.radio,
+.check {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  color: var(--text-2);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-5);
+  padding: 0 var(--space-7) var(--space-6);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: end;
+  gap: var(--space-5);
+  padding: var(--space-2) var(--space-7) var(--space-6);
+}
+
+.form-grid .field--wide,
+.form-grid > .fieldset {
+  grid-column: 1 / -1;
+}
+
+.actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.action-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.action-forms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--gap);
+  margin-top: var(--space-6);
+}
+
+.card-inset {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+}
+
+.row-actions summary {
+  cursor: pointer;
+}
+
+.row-actions .form-grid {
+  min-width: 320px;
+  padding: var(--space-4) 0;
+  white-space: normal;
+}
+
+/* ---------- Notices ---------- */
+.notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 var(--space-7) var(--space-5);
+  padding: var(--space-5) var(--space-6);
+  border: 1px solid var(--line-2);
+  border-left: 3px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  color: var(--text-2);
+}
+
+.shell__content > .notice,
+.stack > .notice {
+  margin: 0;
+}
+
+.notice__title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.notice--error {
+  border-left-color: var(--red-bright);
+}
+
+.notice--error .notice__title {
+  color: var(--red-bright);
+}
+
+.notice--warn {
+  border-left-color: var(--amber);
+}
+
+.notice--ok {
+  border-left-color: var(--green);
+}
+
+.notice--info {
+  border-left-color: var(--blue);
+}
+
+.notice--empty {
+  border-style: dashed;
+  border-left-style: solid;
+  color: var(--muted);
+}
+
+/* A plain top rule while a page loads; no animation, so nothing moves for reduced-motion users. */
+.progress {
+  height: 2px;
+  background: var(--line);
+}
+
+.progress__bar {
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: var(--red);
+}
+
+/* ---------- Facts, wizard, explainability ---------- */
+.facts {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+.facts__row {
+  display: grid;
+  grid-template-columns: minmax(120px, 30%) minmax(0, 1fr);
+  gap: var(--space-5);
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.facts dd {
+  overflow-wrap: anywhere;
+}
+
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.wizard-steps__step {
+  padding: var(--space-3) var(--space-6);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+}
+
+.wizard-steps__step--on {
+  border-color: var(--red);
+  background: var(--red-deep);
+  color: var(--text);
+}
+
+.risk {
+  border-color: var(--conf-assessed-line);
+}
+
+.risk__draft {
+  margin-top: var(--space-4);
+  color: var(--amber);
+}
+
+.explain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-bottom: var(--space-5);
+}
+
+.explain .meter {
+  border: 0;
+}
+
+.explain__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: 0 var(--space-7);
+}
+
+.explain__h {
+  margin-top: var(--space-5);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: var(--tracking-title);
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.explain__target {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+.explain__override {
+  color: var(--text-2);
+}
+
+.flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.override .fieldset {
+  margin-bottom: var(--space-4);
+}
+
+.join {
+  display: inline-flex;
+  gap: var(--space-2);
+  margin-right: var(--space-5);
+}
+
+/* ---------- Live feed ---------- */
+.feed {
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--space-7) var(--space-4);
+}
+
+.feed__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+}
+
+.feed__link {
+  margin-left: auto;
+}
+
+/* ---------- Sign in and one-time tokens ---------- */
+.login {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--space-9);
+}
+
+.login__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  width: min(480px, 100%);
+  padding: var(--space-9);
+}
+
+.login__title {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.login__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.login__form input {
+  width: 100%;
+}
+
+.login .notice {
+  margin: 0;
+}
+
+.token-once {
+  display: block;
+  padding: var(--space-4);
+  border: 1px dashed var(--amber);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+@media (max-width: 1280px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .kpis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .console-user {
+    margin-left: 0;
+    white-space: normal;
+  }
+
+  .facts__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}

@@ -8,7 +8,7 @@ The control plane is a **trusted interface only**. It runs as an Axum Worker on 
 
 | Client | Hostname | Credential | Scopes |
 | --- | --- | --- | --- |
-| Operator console (#14) | Service Binding from the `web` Worker | Operator session mapped to a bearer token | Operator scopes |
+| Operator console (#14) | Service Binding from the `web` Worker | Operator session mapped to a bearer token ([console.md](../ui/console.md#sign-in-and-sessions)) | Operator scopes |
 | CLI and scripts | API hostname, behind Cloudflare Access | `Authorization: Bearer fo_<id>.<secret>` | Operator scopes |
 | MCP server (#24), `POST /v0/mcp` | API hostname | Bearer token for an `mcp` role | At most `catalogue:read`, `decoys:read`, `decoys:write`, `decoys:elevate`, `attempts:read`, `audit:read`, `events:read`; never `admin` |
 | Sandbox host agent (#41) | Ingest hostname | mTLS client certificate | `host:*` only |
@@ -42,11 +42,11 @@ Bearer tokens are `fo_<id>.<secret>`. D1 stores only the SHA-256 of the secret, 
 
 ## What is served today
 
-`GET /healthz`, `GET /v0/catalogue/entries`, `GET /v0/catalogue/entries/{id}`, `GET`/`POST /v0/decoys` (alias `/v0/sandboxes`), `GET /v0/decoys/{id}`, the five decoy actions, `GET /v0/audit`, attempts, their timeline and links (#25, #10, #27), the intel exports (STIX 2.1, MISP, IOC CSV and JSON) and the read-only TAXII 2.1 server under `/taxii2/` with its materialiser (#13, [intel-outputs.md](../intel-outputs.md)), evidence ingest and upload URLs (#9), the host agent channel: job lease, ack and heartbeat (#41, [protocol](../agent/protocol.md)), the sensor and host registry with enrolment, renewal, re-enrolment, revocation and the sensor agent channel (#31, [edge-sensor.md](../deploy/edge-sensor.md)), the MCP endpoint `POST /v0/mcp` (#24, [foiled-mcp.md](../mcp/foiled-mcp.md)), the IOC reads `GET /v0/iocs`, `GET /v0/iocs/{id}` and `GET /v0/attempts/{id}/iocs` (#34), and campaigns: `GET /v0/campaigns`, `GET /v0/campaigns/{id}` with its attempts, evidence and analyst actions (#33, [campaigns.md](../campaigns.md)). Everything else in the spec is `planned` with its owning issue. Mapping to consumers:
+`GET /healthz`, `GET /v0/whoami` (the caller's id, role, tenant and scopes, used by the console at sign-in, #14), `GET /v0/catalogue/entries`, `GET /v0/catalogue/entries/{id}`, `GET`/`POST /v0/decoys` (alias `/v0/sandboxes`), `GET /v0/decoys/{id}`, the five decoy actions, `GET /v0/audit`, attempts, their timeline and links (#25, #10, #27), the intel exports (STIX 2.1, MISP, IOC CSV and JSON) and the read-only TAXII 2.1 server under `/taxii2/` with its materialiser (#13, [intel-outputs.md](../intel-outputs.md)), evidence ingest and upload URLs (#9), the host agent channel: job lease, ack and heartbeat (#41, [protocol](../agent/protocol.md)), the sensor and host registry with enrolment, renewal, re-enrolment, revocation and the sensor agent channel (#31, [edge-sensor.md](../deploy/edge-sensor.md)), the MCP endpoint `POST /v0/mcp` (#24, [foiled-mcp.md](../mcp/foiled-mcp.md)), the IOC reads `GET /v0/iocs`, `GET /v0/iocs/{id}` and `GET /v0/attempts/{id}/iocs` (#34), and campaigns: `GET /v0/campaigns`, `GET /v0/campaigns/{id}` with its attempts, evidence and analyst actions (#33, [campaigns.md](../campaigns.md)). Everything else in the spec is `planned` with its owning issue. Mapping to consumers:
 
 | Consumer | Needs | Status |
 | --- | --- | --- |
-| Dashboard (#14) | Catalogue, decoys, attempts, links, review queue, campaigns, IOCs, exports, events | Catalogue and decoys served; the rest planned with owners |
+| Dashboard (#14) | Catalogue, decoys, attempts, links, review queue, campaigns, IOCs, exports, events | Served except quarantine (#9) and events, and the review queue, write-ups and radar (#35) until its pull request merges; the console says "not served yet" for those ([console.md](../ui/console.md#api-coverage)) |
 | MCP (#24) | Create, list, get, reset, destroy, query attempts, events, audit | Served at `POST /v0/mcp` as a pure client of these routes ([foiled-mcp.md](../mcp/foiled-mcp.md)) |
 | Sensors (#31) and hosts (#41) | Registry, enrolment, renewal, revocation, heartbeat, job lease and ack, uploads, ingest | Served |
 | IOCs (#34) | Search, get, per attempt | Served ([iocs.md](../iocs.md)) |

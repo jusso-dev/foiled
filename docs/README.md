@@ -21,6 +21,7 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [research/lessons.md](research/lessons.md) | Lessons from commercial honeypot platforms. |
 | [design/design-direction.md](design/design-direction.md) | Design direction for the operator console. |
 | [ui/design-system.md](ui/design-system.md) | The v3 design system as built: tokens, components, contrast results and review against mockup-v3. UI source of truth for #14 and #35. |
+| [ui/console.md](ui/console.md) | The operator console (#14): routes, sign-in and sessions, CSRF, the launch wizard, attempt triage and confidence explainability, review queue, campaigns, IOC browser, exports, quarantine downloads, the live feed's reconnect and backfill rules, and wireframes. |
 | [ui/voice.md](ui/voice.md) | UI copy rules: Australian English, flat tone, "we assess as" confidence wording, example data labels. |
 | [threat-model.md](threat-model.md) | Containment, egress, breakout and Australian legal and ethical limits. |
 | [adr/README.md](adr/README.md) | Architecture Decision Records index, including [ADR 0002](adr/0002-sandbox-runtime.md) on the sandbox and emulation runtime and [ADR 0009](adr/0009-axum-workers-and-front-end.md) on Axum and Workers. |

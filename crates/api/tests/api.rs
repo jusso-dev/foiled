@@ -157,6 +157,28 @@ async fn missing_bad_revoked_and_expired_credentials_are_401() {
 }
 
 #[tokio::test]
+async fn whoami_returns_the_caller_and_needs_a_token() {
+    let h = harness();
+    let (s, b) = call(&h, get("/v0/whoami", "reader1")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        b,
+        json!({
+            "id": "reader1",
+            "role": "human",
+            "tenant_id": "t1",
+            "scopes": ["catalogue:read", "decoys:read"],
+        })
+    );
+    let (s, _) = call(&h, Request::get("/v0/whoami").body(Body::empty()).unwrap()).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        call(&h, get("/v0/whoami", "revoked1")).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
 async fn scopes_are_enforced() {
     let h = harness();
     let (s, b) = call(&h, post("/v0/decoys", "reader1", create_demo())).await;

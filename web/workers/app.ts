@@ -1,5 +1,6 @@
 import { createRequestHandler, RouterContextProvider } from "react-router";
 import { cloudflareContext } from "../app/context";
+import { verifyAccess } from "../app/lib/access.server";
 import {
   publicNotFound,
   publicRateLimited,
@@ -8,12 +9,20 @@ import {
   withPublicDefaults,
 } from "../app/lib/http-headers";
 import { isRateLimited, rateLimitKey } from "../app/lib/rate-limit";
+import { withSecurityHeaders } from "../app/lib/security-headers";
 import { isPublicPath, publicDecision, surfaceFrom } from "../app/lib/surface";
+
+export { SessionRevocations } from "./session-revocations";
 
 const requestHandler = createRequestHandler(
   () => import("virtual:react-router/server-build"),
   import.meta.env.MODE,
 );
+
+/** Console responses: never framed, never stored, never indexed. */
+function consoleResponse(res: Response): Response {
+  return withConsoleHeaders(withSecurityHeaders(res));
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -31,11 +40,21 @@ export default {
         return publicRateLimited();
       }
       if (decision.action === "redirect") return publicRedirect(decision.location);
+    } else {
+      // Defence in depth behind Cloudflare Access. Fails closed: the Access settings are
+      // required unless CONSOLE_ENV=development (app/lib/access.server.ts).
+      const access = await verifyAccess(request, env);
+      if (!access.ok) {
+        console.warn(`console: Access check failed: ${access.reason}`);
+        return consoleResponse(
+          new Response("Forbidden: sign in through Cloudflare Access.", { status: 403 }),
+        );
+      }
     }
 
     const context = new RouterContextProvider();
     context.set(cloudflareContext, { env, ctx });
     const response = await requestHandler(request, context);
-    return isPublicPath(pathname) ? withPublicDefaults(response) : withConsoleHeaders(response);
+    return isPublicPath(pathname) ? withPublicDefaults(response) : consoleResponse(response);
   },
 } satisfies ExportedHandler<Env>;

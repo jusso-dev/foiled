@@ -38,6 +38,8 @@ security:
 tags:
   - name: health
     description: "Liveness."
+  - name: auth
+    description: "The authenticated caller (#14)."
   - name: catalogue
     description: "Read-only decoy catalogue (#5)."
   - name: decoys
@@ -86,6 +88,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
+
+  /v0/whoami:
+    get:
+      tags: [auth]
+      operationId: whoami
+      summary: The authenticated caller
+      description: |
+        Id, role, tenant and scopes of the token or certificate on the
+        request. The console (#14) calls it at sign-in to check a token and
+        to hide actions the token cannot take; the API still enforces every
+        scope. Needs no particular scope.
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: []
+      responses:
+        "200":
+          description: The caller.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Principal" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
 
   /v0/catalogue/entries:
     get:
@@ -3123,6 +3146,14 @@ components:
           properties:
             code: { type: string, examples: [forbidden, entry_draft, rate_limited] }
             message: { type: string }
+    Principal:
+      type: object
+      required: [id, role, tenant_id, scopes]
+      properties:
+        id: { type: string, description: "Token id, host id or sensor id." }
+        role: { type: string, enum: [human, mcp, host, sensor] }
+        tenant_id: { type: string }
+        scopes: { type: array, items: { type: string }, description: "Sorted. `admin` implies every operator scope." }
     Health:
       type: object
       required: [status, service, version]
