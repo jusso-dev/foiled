@@ -9,8 +9,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use foiled_api::actor_sync::{
-    Blobs, MemoryBlobs, SyncDeps, SyncOutcome, bundled_config, current_snapshot, load_catalogue,
-    run_sync,
+    BlobFuture, Blobs, MemoryBlobs, SyncDeps, SyncOutcome, bundled_config, current_snapshot,
+    load_catalogue, refresh_catalogue, run_sync,
 };
 use foiled_api::enrich_consumer::{HttpFuture, HttpReply, ProviderHttp, ProviderRequest};
 use foiled_core::actor::{
@@ -101,7 +101,7 @@ fn now() -> i64 {
 }
 
 async fn sync(
-    blobs: &MemoryBlobs,
+    blobs: &dyn Blobs,
     http: Option<&FakeThreatSieve>,
     cfg: &CatalogueConfig,
     at: i64,
@@ -296,7 +296,7 @@ async fn stale_or_tampered_snapshots_fall_back_to_the_bundled_catalogue() {
 }
 
 #[tokio::test]
-async fn rate_limits_wait_and_refusals_start_over() {
+async fn rate_limits_and_refusals_keep_progress() {
     let blobs = MemoryBlobs::default();
     let http = FakeThreatSieve::new();
     let cfg = config(4);
@@ -321,19 +321,146 @@ async fn rate_limits_wait_and_refusals_start_over() {
         http.seen.borrow()[before - 1],
         "the refused call again"
     );
+    // A refused key stalls the sync; it does not throw progress away.
     *http.force.borrow_mut() = Some(401);
     assert!(matches!(
         sync(&blobs, Some(&http), &cfg, now()).await,
-        SyncOutcome::Restarted(_)
+        SyncOutcome::Stalled { calls: 1, .. }
     ));
     *http.force.borrow_mut() = None;
     let start = http.seen.borrow().len();
     sync(&blobs, Some(&http), &cfg, now()).await;
     assert_eq!(
         http.seen.borrow()[start],
+        http.seen.borrow()[start - 1],
+        "the refused call again, not a new sync"
+    );
+}
+
+#[tokio::test]
+async fn a_sync_making_progress_is_never_restarted() {
+    let blobs = MemoryBlobs::default();
+    let http = FakeThreatSieve::new();
+    let cfg = config(1);
+    let cap = i64::from(cfg.threatsieve.max_sync_hours) * HOUR;
+    // One call a day: far past max_sync_hours in total, progress every run.
+    let mut at = now();
+    let mut last = SyncOutcome::Disabled;
+    for _ in 0..20 {
+        last = sync(&blobs, Some(&http), &cfg, at).await;
+        if matches!(last, SyncOutcome::Completed { .. }) {
+            break;
+        }
+        at += cap / 2;
+    }
+    assert!(matches!(last, SyncOutcome::Completed { .. }), "{last:?}");
+    assert_eq!(http.seen.borrow().len(), 10, "no call made twice");
+}
+
+#[tokio::test]
+async fn a_sync_with_no_progress_past_the_cap_starts_over() {
+    let blobs = MemoryBlobs::default();
+    let http = FakeThreatSieve::new();
+    let cfg = config(4);
+    let cap = i64::from(cfg.threatsieve.max_sync_hours) * HOUR;
+    sync(&blobs, Some(&http), &cfg, now()).await;
+    *http.force.borrow_mut() = Some(429);
+    sync(&blobs, Some(&http), &cfg, now() + HOUR).await;
+    *http.force.borrow_mut() = None;
+    let start = http.seen.borrow().len();
+    sync(&blobs, Some(&http), &cfg, now() + cap + 2 * HOUR).await;
+    assert_eq!(
+        http.seen.borrow()[start],
         "/v1/actors?limit=100",
         "a new sync"
     );
+}
+
+/// [`MemoryBlobs`] that can fail writes to one key and records reads.
+#[derive(Default)]
+struct FlakyBlobs {
+    inner: MemoryBlobs,
+    fail_put: RefCell<Option<String>>,
+    reads: RefCell<Vec<String>>,
+}
+
+impl Blobs for FlakyBlobs {
+    fn get(&self, key: &str) -> BlobFuture<'_, Option<String>> {
+        self.reads.borrow_mut().push(key.to_string());
+        self.inner.get(key)
+    }
+
+    fn put(&self, key: &str, body: String) -> BlobFuture<'_, ()> {
+        if self
+            .fail_put
+            .borrow()
+            .as_deref()
+            .is_some_and(|k| key.ends_with(k))
+        {
+            return Box::pin(std::future::ready(Err("R2 unavailable".into())));
+        }
+        self.inner.put(key, body)
+    }
+}
+
+#[tokio::test]
+async fn a_failed_pointer_write_is_retried_without_resyncing() {
+    let blobs = FlakyBlobs::default();
+    let http = FakeThreatSieve::new();
+    let cfg = config(50);
+    *blobs.fail_put.borrow_mut() = Some("current.json".into());
+    assert!(matches!(
+        sync(&blobs, Some(&http), &cfg, now()).await,
+        SyncOutcome::Waiting { .. }
+    ));
+    assert_eq!(http.seen.borrow().len(), 10);
+    assert!(current_snapshot(&blobs, &cfg, now()).await.is_none());
+    *blobs.fail_put.borrow_mut() = None;
+    let o = sync(&blobs, Some(&http), &cfg, now() + HOUR).await;
+    assert!(matches!(o, SyncOutcome::Completed { .. }), "{o:?}");
+    assert_eq!(
+        http.seen.borrow().len(),
+        10,
+        "published from the saved state"
+    );
+    let (_, snap) = current_snapshot(&blobs, &cfg, now() + HOUR).await.unwrap();
+    assert_eq!(snap.synced_at, now(), "synced when the last call answered");
+    assert_eq!(
+        sync(&blobs, Some(&http), &cfg, now() + 2 * HOUR).await,
+        SyncOutcome::UpToDate
+    );
+}
+
+#[tokio::test]
+async fn an_unchanged_pointer_skips_the_snapshot_body() {
+    let blobs = FlakyBlobs::default();
+    let http = FakeThreatSieve::new();
+    let cfg = config(50);
+    sync(&blobs, Some(&http), &cfg, now()).await;
+    blobs.reads.borrow_mut().clear();
+    let first = refresh_catalogue(&blobs, &cfg, now(), None).await;
+    assert!(first.sha256.is_some());
+    assert!(
+        blobs
+            .reads
+            .borrow()
+            .iter()
+            .any(|k| k.contains("/snapshots/"))
+    );
+    blobs.reads.borrow_mut().clear();
+    let again = refresh_catalogue(&blobs, &cfg, now() + HOUR, Some(&first)).await;
+    assert_eq!(again.sha256, first.sha256);
+    assert!(std::sync::Arc::ptr_eq(&again.catalogue, &first.catalogue));
+    assert_eq!(
+        *blobs.reads.borrow(),
+        ["actors/threatsieve/current.json"],
+        "the pointer only"
+    );
+    // Once stale, the same pointer no longer serves the imports.
+    let week = i64::from(cfg.threatsieve.stale_after_hours) * HOUR;
+    let stale = refresh_catalogue(&blobs, &cfg, now() + week + HOUR, Some(&first)).await;
+    assert!(stale.sha256.is_none());
+    assert!(stale.catalogue.get("attack:G9001").is_none());
 }
 
 #[tokio::test]

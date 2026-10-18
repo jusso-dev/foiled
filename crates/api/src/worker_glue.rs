@@ -290,9 +290,8 @@ impl crate::actor_sync::Blobs for R2Blobs {
 }
 
 thread_local! {
-    /// The served actor catalogue, the snapshot digest it was built from
-    /// and when R2 was last checked, for the life of the isolate.
-    static ACTORS: std::cell::RefCell<Option<(i64, Option<String>, Arc<foiled_core::actor::ActorCatalogue>)>> =
+    /// The served actor catalogue for the life of the isolate.
+    static ACTORS: std::cell::RefCell<Option<crate::actor_sync::CachedCatalogue>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -300,26 +299,27 @@ thread_local! {
 const ACTOR_RECHECK_MS: i64 = 300_000;
 
 /// The actor catalogue to serve (#29): the bundled one, or the bundled one
-/// plus a fresh ThreatSieve snapshot. Rechecked every five minutes.
+/// plus a fresh ThreatSieve snapshot. The pointer is rechecked every five
+/// minutes; the snapshot is read again only when its digest changed.
 async fn actor_catalogue(env: &Env) -> Arc<foiled_core::actor::ActorCatalogue> {
     let now = now_ms();
     let Some(config) = crate::actor_sync::bundled_config().filter(|c| c.threatsieve.enabled) else {
         return crate::links::bundled_actor_catalogue();
     };
-    if let Some(c) = ACTORS.with(|a| {
-        a.borrow()
-            .as_ref()
-            .filter(|(at, _, _)| now - at < ACTOR_RECHECK_MS)
-            .map(|(_, _, c)| c.clone())
-    }) {
-        return c;
+    let prev = ACTORS.with(|a| a.borrow().clone());
+    if let Some(c) = prev
+        .as_ref()
+        .filter(|c| now - c.checked_at < ACTOR_RECHECK_MS)
+    {
+        return c.catalogue.clone();
     }
     let Ok(bucket) = env.bucket("EVIDENCE") else {
         return crate::links::bundled_actor_catalogue();
     };
     let blobs = R2Blobs { bucket };
-    let (sha, catalogue) = crate::actor_sync::load_catalogue(&blobs, config, now).await;
-    ACTORS.with(|a| *a.borrow_mut() = Some((now, sha, catalogue.clone())));
+    let fresh = crate::actor_sync::refresh_catalogue(&blobs, config, now, prev.as_ref()).await;
+    let catalogue = fresh.catalogue.clone();
+    ACTORS.with(|a| *a.borrow_mut() = Some(fresh));
     catalogue
 }
 

@@ -6,8 +6,10 @@
 //! `THREATSIEVE` service binding, opt-in), saves the state, and on
 //! completion writes a versioned snapshot plus a pointer holding its
 //! SHA-256. Readers refuse a snapshot whose digest differs from the
-//! pointer, and serve imports only while the snapshot is fresh; otherwise
-//! the catalogue is the bundled ATT&CK groups and curated reports.
+//! pointer (a torn or corrupt write; it is not a defence against someone
+//! who can write the bucket), and serve imports only while the snapshot is
+//! fresh; otherwise the catalogue is the bundled ATT&CK groups and curated
+//! reports.
 //!
 //! Storage sits behind [`Blobs`] (R2 on Workers, [`MemoryBlobs`] in tests)
 //! and HTTP behind [`ProviderHttp`], so the whole flow runs on the host
@@ -26,6 +28,8 @@ use foiled_core::actor_sync::{
 use foiled_core::enrich_pipeline::retry_after_secs;
 
 use crate::enrich_consumer::ProviderHttp;
+
+const HOUR_MS: i64 = 3_600_000;
 
 static CONFIG: &str = include_str!(concat!(env!("OUT_DIR"), "/actor_catalogue_config.json"));
 
@@ -93,12 +97,19 @@ pub enum SyncOutcome {
     Progress {
         calls: u32,
     },
-    /// ThreatSieve asked to wait; the sync goes on next run.
+    /// ThreatSieve asked to wait, or R2 failed; the sync goes on next run.
     Waiting {
         calls: u32,
         retry_after_secs: Option<u32>,
     },
-    /// ThreatSieve refused or answered nonsense; the next run starts over.
+    /// ThreatSieve refused or answered nonsense; the same call is made
+    /// again next run, and the sync starts over only after
+    /// `max_sync_hours` without progress.
+    Stalled {
+        calls: u32,
+        why: String,
+    },
+    /// The sync finished without a single entity; the next run starts over.
     Restarted(String),
     /// A new snapshot is current.
     Completed {
@@ -127,6 +138,11 @@ async fn save_state(d: &SyncDeps<'_>, state: &SyncState) -> Result<(), String> {
 
 /// One cron run of the sync. Never panics and never fails the cron: what
 /// happened is in the outcome, to log.
+///
+/// Progress is never thrown away: a sync resumes where it stopped until it
+/// has made no progress for `max_sync_hours`, and a finished sync whose
+/// snapshot or pointer write failed is published again from the saved
+/// state, without calling ThreatSieve.
 pub async fn run_sync(d: &SyncDeps<'_>) -> SyncOutcome {
     let t = &d.config.threatsieve;
     if !t.enabled {
@@ -138,21 +154,31 @@ pub async fn run_sync(d: &SyncDeps<'_>) -> SyncOutcome {
     let Some(api_key) = (d.secret)(&t.api_key_env).filter(|k| !k.is_empty()) else {
         return SyncOutcome::NotConfigured("no ThreatSieve API key secret");
     };
-    let saved: Option<SyncState> = read_json(d.blobs, &key(d.config, "state.json")).await;
-    let in_progress = saved
-        .as_ref()
-        .filter(|s| s.format == foiled_core::actor_sync::FORMAT && !s.is_done())
-        .filter(|s| d.now_ms - s.started_at <= i64::from(t.max_sync_hours) * 3_600_000);
-    let mut state = match in_progress {
-        Some(s) => s.clone(),
-        None => {
-            let current = pointer(d.blobs, d.config).await;
-            if current.is_some_and(|p| {
-                d.now_ms - p.synced_at < i64::from(t.refresh_after_hours) * 3_600_000
-            }) {
+    let saved: Option<SyncState> = read_json::<SyncState>(d.blobs, &key(d.config, "state.json"))
+        .await
+        .filter(|s| s.format == foiled_core::actor_sync::FORMAT);
+    let max_idle = i64::from(t.max_sync_hours) * HOUR_MS;
+    let mut state = match saved {
+        Some(s) if s.is_done() && !s.published => s,
+        Some(s) if !s.is_done() && d.now_ms - s.last_progress() <= max_idle => s,
+        saved => {
+            let last_sync = match saved.as_ref().filter(|s| s.is_done()) {
+                Some(s) => s.finished_at,
+                None => pointer(d.blobs, d.config).await.map(|p| p.synced_at),
+            };
+            if last_sync
+                .is_some_and(|at| d.now_ms - at < i64::from(t.refresh_after_hours) * HOUR_MS)
+            {
                 return SyncOutcome::UpToDate;
             }
-            SyncState::new(d.now_ms)
+            let mut fresh = SyncState::new(d.now_ms);
+            if saved.is_some_and(|s| !s.is_done()) {
+                fresh.last_error = Some(format!(
+                    "the previous sync made no progress for {} hours",
+                    t.max_sync_hours
+                ));
+            }
+            fresh
         }
     };
     let mut calls = 0;
@@ -176,7 +202,7 @@ pub async fn run_sync(d: &SyncDeps<'_>) -> SyncOutcome {
             .as_deref()
             .map(|h| retry_after_secs(Some(h)));
         match state.apply(t, reply.status, &reply.body, wait) {
-            Ok(()) => {}
+            Ok(()) => state.progress_at = d.now_ms,
             Err(SyncError::Later { retry_after_secs }) => {
                 let _ = save_state(d, &state).await;
                 return SyncOutcome::Waiting {
@@ -184,12 +210,10 @@ pub async fn run_sync(d: &SyncDeps<'_>) -> SyncOutcome {
                     retry_after_secs,
                 };
             }
-            Err(SyncError::Fatal(why)) => {
-                let mut fresh = SyncState::new(d.now_ms);
-                fresh.last_error = Some(why.clone());
-                // A finished-looking state would hold back the next run.
-                let _ = save_state(d, &fresh).await;
-                return SyncOutcome::Restarted(why);
+            Err(SyncError::Refused(why)) => {
+                state.last_error = Some(why.clone());
+                let _ = save_state(d, &state).await;
+                return SyncOutcome::Stalled { calls, why };
             }
         }
     }
@@ -197,9 +221,22 @@ pub async fn run_sync(d: &SyncDeps<'_>) -> SyncOutcome {
         let _ = save_state(d, &state).await;
         return SyncOutcome::Progress { calls };
     }
-    let snap = snapshot(&state, crate::links::attack_sidecar(), d.now_ms);
+    if state.details.is_empty() && !state.queue.is_empty() {
+        // Every detail fetch failed: never replace a good snapshot with that.
+        let why = "every detail fetch failed or was missing".to_string();
+        let mut fresh = SyncState::new(d.now_ms);
+        fresh.last_error = Some(why.clone());
+        let _ = save_state(d, &fresh).await;
+        return SyncOutcome::Restarted(why);
+    }
+    let synced_at = *state.finished_at.get_or_insert(d.now_ms);
+    let snap = snapshot(&state, crate::links::attack_sidecar(), synced_at);
     let Ok(body) = serde_json::to_string(&snap) else {
-        return SyncOutcome::Restarted("snapshot did not serialise".into());
+        let _ = save_state(d, &state).await;
+        return SyncOutcome::Stalled {
+            calls,
+            why: "snapshot did not serialise".into(),
+        };
     };
     let snap_key = key(d.config, &format!("snapshots/{}.json", snap.synced_at));
     let p = SnapshotPointer {
@@ -210,26 +247,26 @@ pub async fn run_sync(d: &SyncDeps<'_>) -> SyncOutcome {
         imported: snap.counts.imported,
     };
     // Snapshot first, pointer last: a reader never sees a pointer to a
-    // snapshot that is not there.
-    if d.blobs.put(&snap_key, body).await.is_err() {
-        let _ = save_state(d, &state).await;
-        return SyncOutcome::Waiting {
-            calls,
-            retry_after_secs: None,
-        };
-    }
+    // snapshot that is not there. If either write fails the finished state
+    // is kept and the next run writes both again.
     let pointer_body = serde_json::to_string(&p).unwrap_or_default();
-    if d.blobs
-        .put(&key(d.config, "current.json"), pointer_body)
-        .await
-        .is_err()
-    {
+    let written = d.blobs.put(&snap_key, body).await.is_ok()
+        && d.blobs
+            .put(&key(d.config, "current.json"), pointer_body)
+            .await
+            .is_ok();
+    if !written {
         let _ = save_state(d, &state).await;
         return SyncOutcome::Waiting {
             calls,
             retry_after_secs: None,
         };
     }
+    // Published: the entities are in the snapshot now.
+    state.published = true;
+    state.queue.clear();
+    state.details.clear();
+    state.reports.clear();
     let _ = save_state(d, &state).await;
     SyncOutcome::Completed {
         imported: p.imported,
@@ -245,7 +282,16 @@ pub async fn current_snapshot(
     now: i64,
 ) -> Option<(String, Snapshot)> {
     let p = pointer(blobs, cfg).await?;
-    if !p.key.starts_with(&cfg.threatsieve.blob_prefix) {
+    snapshot_at(blobs, cfg, &p, now).await
+}
+
+async fn snapshot_at(
+    blobs: &dyn Blobs,
+    cfg: &CatalogueConfig,
+    p: &SnapshotPointer,
+    now: i64,
+) -> Option<(String, Snapshot)> {
+    if !p.key.starts_with(&cfg.threatsieve.blob_prefix) || !p.is_fresh(&cfg.threatsieve, now) {
         return None;
     }
     let body = blobs.get(&p.key).await.ok()??;
@@ -254,7 +300,7 @@ pub async fn current_snapshot(
     }
     let snap: Snapshot = serde_json::from_str(&body).ok()?;
     snap.is_fresh(&cfg.threatsieve, now)
-        .then_some((p.sha256, snap))
+        .then(|| (p.sha256.clone(), snap))
 }
 
 /// The catalogue to serve: the bundled ATT&CK groups and curated reports,
@@ -272,18 +318,60 @@ pub fn catalogue(snapshot: Option<&Snapshot>, cfg: &CatalogueConfig, now: i64) -
     ActorCatalogue::from_source(&source, crate::links::attack_sidecar())
 }
 
-/// [`catalogue`] from what `blobs` holds now, with the snapshot digest it
-/// used (`None` for the bundled catalogue alone).
+/// A served catalogue, the snapshot digest it was built from (`None` for
+/// the bundled catalogue alone) and when the pointer was last read.
+#[derive(Clone)]
+pub struct CachedCatalogue {
+    pub checked_at: i64,
+    pub sha256: Option<String>,
+    pub catalogue: Arc<ActorCatalogue>,
+}
+
+/// [`catalogue`] from what `blobs` holds now. With `prev`, only the small
+/// pointer is read when its digest is unchanged and the snapshot still
+/// fresh; the snapshot body is read and parsed only when it changed.
+pub async fn refresh_catalogue(
+    blobs: &dyn Blobs,
+    cfg: &CatalogueConfig,
+    now: i64,
+    prev: Option<&CachedCatalogue>,
+) -> CachedCatalogue {
+    let bundled = || CachedCatalogue {
+        checked_at: now,
+        sha256: None,
+        catalogue: crate::links::bundled_actor_catalogue(),
+    };
+    if !cfg.threatsieve.enabled {
+        return bundled();
+    }
+    let Some(p) = pointer(blobs, cfg).await else {
+        return bundled();
+    };
+    if let Some(prev) = prev
+        && prev.sha256.as_deref() == Some(p.sha256.as_str())
+        && p.is_fresh(&cfg.threatsieve, now)
+    {
+        return CachedCatalogue {
+            checked_at: now,
+            ..prev.clone()
+        };
+    }
+    match snapshot_at(blobs, cfg, &p, now).await {
+        Some((sha, snap)) => CachedCatalogue {
+            checked_at: now,
+            sha256: Some(sha),
+            catalogue: Arc::new(catalogue(Some(&snap), cfg, now)),
+        },
+        None => bundled(),
+    }
+}
+
+/// [`refresh_catalogue`] with nothing cached.
 pub async fn load_catalogue(
     blobs: &dyn Blobs,
     cfg: &CatalogueConfig,
     now: i64,
 ) -> (Option<String>, Arc<ActorCatalogue>) {
-    if !cfg.threatsieve.enabled {
-        return (None, crate::links::bundled_actor_catalogue());
-    }
-    match current_snapshot(blobs, cfg, now).await {
-        Some((sha, snap)) => (Some(sha), Arc::new(catalogue(Some(&snap), cfg, now))),
-        None => (None, crate::links::bundled_actor_catalogue()),
-    }
+    let c = refresh_catalogue(blobs, cfg, now, None).await;
+    (c.sha256, c.catalogue)
 }

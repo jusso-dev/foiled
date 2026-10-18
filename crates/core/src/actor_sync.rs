@@ -29,7 +29,7 @@ use sha2::{Digest, Sha256};
 use crate::actor::{
     ActorReport, AttackGroups, CatalogueSource, Geo, Imported, Indicator, IndicatorType, Label,
     LabelKind, MAX_REPORT_INDICATORS, MAX_REPORT_TECHNIQUES, MAX_SOURCES, ReportTargeting, Source,
-    SourceKind, https_host, normalise, wording_problems,
+    SourceKind, https_host, normalise, served_title, wording_problems,
 };
 use crate::enrich_pipeline::{HttpMethod, ProviderRequest};
 
@@ -48,6 +48,10 @@ const MAX_REFS: usize = 8;
 /// Most dropped-entry notes kept in a snapshot.
 const MAX_DROPPED_NOTES: usize = 100;
 const DAY_MS: i64 = 86_400_000;
+/// Most calls per cron run. Workers Paid allows 10,000 subrequests per
+/// invocation and 15 minutes of CPU for an hourly cron; this leaves room
+/// for the purge and the R2 writes in the same run.
+pub const MAX_CALLS_PER_RUN: u32 = 2000;
 
 // ---------------------------------------------------------------------------
 // Config (`configs/actor-catalogue.yaml`)
@@ -77,7 +81,7 @@ pub struct ThreatSieveSync {
     /// Stop serving a snapshot this old: the catalogue falls back to the
     /// bundled ATT&CK groups and curated reports.
     pub stale_after_hours: u32,
-    /// Give up on a sync still running after this long and start again.
+    /// Start again only when a sync has made no progress for this long.
     pub max_sync_hours: u32,
     pub max_actors: usize,
     pub max_campaigns: usize,
@@ -109,8 +113,8 @@ impl CatalogueConfig {
         {
             out.push("blob_prefix must be a relative key prefix ending in /".into());
         }
-        if !(1..=200).contains(&t.calls_per_run) {
-            out.push("calls_per_run must be 1 to 200".into());
+        if !(1..=MAX_CALLS_PER_RUN).contains(&t.calls_per_run) {
+            out.push(format!("calls_per_run must be 1 to {MAX_CALLS_PER_RUN}"));
         }
         if t.refresh_after_hours == 0 || t.stale_after_hours <= t.refresh_after_hours {
             out.push("stale_after_hours must be greater than refresh_after_hours".into());
@@ -155,6 +159,10 @@ pub struct TsProvenance {
     /// Source assertions only: a copy of another source's record.
     #[serde(default)]
     pub mirrored: bool,
+    /// Whether the source's terms allow commercial use, when ThreatSieve
+    /// sends it (`null` or absent: unknown, see [`commercial_use`]).
+    #[serde(default, alias = "commercial_use")]
+    pub commercial_use: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -236,6 +244,9 @@ pub struct SourceDigest {
     pub licence: Option<String>,
     pub redistributable: bool,
     pub mirrored: bool,
+    /// As ThreatSieve sent it; `None` falls back to [`commercial_use`].
+    #[serde(default)]
+    pub commercial_use: Option<bool>,
 }
 
 /// What Foiled keeps of one actor or campaign.
@@ -263,13 +274,16 @@ pub struct ReportDigest {
     pub object_refs: BTreeSet<String>,
 }
 
-/// Why a run stopped early.
+/// Why a run stopped early. Either way the state is kept and the same
+/// call is made again next run; only a sync that makes no progress for
+/// `max_sync_hours` starts over.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncError {
-    /// Rate limited or unavailable: keep the state, try next run.
+    /// Rate limited or unavailable.
     Later { retry_after_secs: Option<u32> },
-    /// Refused or unreadable: start a new sync next run.
-    Fatal(String),
+    /// Refused (401, 403, another 4xx on a list page) or an unreadable
+    /// list page.
+    Refused(String),
 }
 
 /// A sync in progress, saved between cron runs.
@@ -287,6 +301,21 @@ pub struct SyncState {
     pub calls: u32,
     /// Detail fetches that answered 404 (removed since the listing).
     pub missing: u32,
+    /// Detail fetches skipped: another 4xx, or an unreadable answer.
+    #[serde(default)]
+    pub skipped: u32,
+    /// Why, for the first [`MAX_DROPPED_NOTES`].
+    #[serde(default)]
+    pub skipped_notes: Vec<String>,
+    /// Unix ms of the last answer that moved the sync on.
+    #[serde(default)]
+    pub progress_at: i64,
+    /// Unix ms the last call completed; the snapshot's `synced_at`.
+    #[serde(default)]
+    pub finished_at: Option<i64>,
+    /// The snapshot and its pointer are written.
+    #[serde(default)]
+    pub published: bool,
     #[serde(default)]
     pub last_error: Option<String>,
 }
@@ -320,6 +349,7 @@ fn digest_source(p: &TsProvenance) -> SourceDigest {
         licence: p.license.clone().filter(|l| !l.trim().is_empty()),
         redistributable: p.redistributable,
         mirrored: p.mirrored,
+        commercial_use: p.commercial_use,
     }
 }
 
@@ -378,8 +408,40 @@ impl SyncState {
             reports: Vec::new(),
             calls: 0,
             missing: 0,
+            skipped: 0,
+            skipped_notes: Vec::new(),
+            progress_at: now,
+            finished_at: None,
+            published: false,
             last_error: None,
         }
+    }
+
+    /// Unix ms of the last progress (the start, before any).
+    pub fn last_progress(&self) -> i64 {
+        self.progress_at.max(self.started_at)
+    }
+
+    fn next_entity(&mut self) {
+        self.next_detail += 1;
+        if self.next_detail >= self.queue.len() {
+            self.phase = Phase::Done;
+        }
+    }
+
+    /// Leave the current detail out and go on: one bad entity must not
+    /// hold the whole sync back.
+    fn skip_entity(&mut self, why: String) {
+        self.skipped += 1;
+        if self.skipped_notes.len() < MAX_DROPPED_NOTES {
+            let id = self
+                .queue
+                .get(self.next_detail)
+                .map(|(id, _)| id.as_str())
+                .unwrap_or("?");
+            self.skipped_notes.push(format!("{id}: {why}"));
+        }
+        self.next_entity();
     }
 
     pub fn is_done(&self) -> bool {
@@ -443,20 +505,24 @@ impl SyncState {
         retry_after_secs: Option<u32>,
     ) -> Result<(), SyncError> {
         self.calls += 1;
+        let details = self.phase == Phase::Details;
         match status {
             200 => {}
-            404 if self.phase == Phase::Details => {
+            429 | 500..=599 => return Err(SyncError::Later { retry_after_secs }),
+            // The key, not the entity: every call would fail the same way.
+            401 | 403 => return Err(SyncError::Refused(format!("ThreatSieve answered {status}"))),
+            404 if details => {
                 self.missing += 1;
-                self.next_detail += 1;
-                if self.next_detail >= self.queue.len() {
-                    self.phase = Phase::Done;
-                }
+                self.next_entity();
                 return Ok(());
             }
-            429 | 500..=599 => return Err(SyncError::Later { retry_after_secs }),
-            s => return Err(SyncError::Fatal(format!("ThreatSieve answered {s}"))),
+            400..=499 if details => {
+                self.skip_entity(format!("ThreatSieve answered {status}"));
+                return Ok(());
+            }
+            s => return Err(SyncError::Refused(format!("ThreatSieve answered {s}"))),
         }
-        let bad = |e: serde_json::Error| SyncError::Fatal(format!("unreadable answer: {e}"));
+        let bad = |e: serde_json::Error| SyncError::Refused(format!("unreadable answer: {e}"));
         match self.phase {
             Phase::Actors | Phase::Campaigns => {
                 let list: TsList = serde_json::from_str(body).map_err(bad)?;
@@ -524,17 +590,20 @@ impl SyncState {
                 self.after_list(list.next_cursor, full);
             }
             Phase::Details => {
-                let d: TsDetail = serde_json::from_str(body).map_err(bad)?;
+                let d: TsDetail = match serde_json::from_str(body) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        self.skip_entity(format!("unreadable answer: {e}"));
+                        return Ok(());
+                    }
+                };
                 let kind = self
                     .queue
                     .get(self.next_detail)
                     .map(|(_, k)| *k)
                     .unwrap_or(EntityKind::Actor);
                 self.details.push(digest_detail(d, kind));
-                self.next_detail += 1;
-                if self.next_detail >= self.queue.len() {
-                    self.phase = Phase::Done;
-                }
+                self.next_entity();
             }
             Phase::Done => {}
         }
@@ -605,9 +674,10 @@ fn digest_detail(d: TsDetail, kind: EntityKind) -> EntityDigest {
 // ---------------------------------------------------------------------------
 
 /// Whether a ThreatSieve source allows commercial use, from its licence
-/// records (ThreatSieve migration 0034). Entity answers carry only
-/// `redistributable`; anything not listed counts as unknown, which is not
-/// allowed.
+/// records (ThreatSieve migration 0034): the fallback for entity answers
+/// that do not carry `commercialUse` per source. Anything not listed counts
+/// as unknown, which is not allowed. Remove once every ThreatSieve
+/// deployment sends the flag.
 pub fn commercial_use(source_id: &str) -> Option<bool> {
     match source_id {
         "mitre" | "cisa-kev" | "misp" | "iptoasn" | "epss" | "nvd" => Some(true),
@@ -664,7 +734,7 @@ fn to_source(
 }
 
 fn restricted(s: &SourceDigest) -> bool {
-    !s.redistributable || commercial_use(&s.source_id) != Some(true)
+    !s.redistributable || s.commercial_use.or_else(|| commercial_use(&s.source_id)) != Some(true)
 }
 
 /// Map one entity, with the reports that name it, into the curated format.
@@ -705,9 +775,11 @@ pub fn map_entity(
             sources.push(src);
         }
     }
-    for r in reports {
+    // The same for reports: a mirrored copy of a report is not another
+    // publisher.
+    for r in reports.iter().filter(|r| !r.source.mirrored) {
         restricted_any |= restricted(&r.source);
-        if let Some(src) = to_source(&r.source, &r.title, None, day) {
+        if let Some(src) = to_source(&r.source, served_title(&r.title), None, day) {
             sources.push(src);
         }
     }
@@ -795,6 +867,9 @@ pub struct SnapshotCounts {
     pub restricted: u32,
     pub dropped: u32,
     pub missing: u32,
+    /// Details left out: another 4xx, or an unreadable answer.
+    #[serde(default)]
+    pub skipped: u32,
 }
 
 /// A finished import, as stored. Mirrors what [`LayeredSource`] serves.
@@ -821,6 +896,8 @@ pub struct SnapshotPointer {
     pub key: String,
     pub synced_at: i64,
     /// SHA-256 of the snapshot body; a reader refuses a body that differs.
+    /// This catches a torn or corrupt write, not tampering: whoever can
+    /// write the bucket can rewrite the pointer too.
     pub sha256: String,
     pub imported: u32,
 }
@@ -832,10 +909,12 @@ pub fn snapshot(state: &SyncState, sidecar: &crate::attack::AttackSidecar, now: 
     let mut counts = SnapshotCounts {
         reports: state.reports.len() as u32,
         missing: state.missing,
+        skipped: state.skipped,
         ..Default::default()
     };
     let mut reports = Vec::new();
-    let mut dropped = Vec::new();
+    let mut dropped: Vec<String> = state.skipped_notes.clone();
+    dropped.truncate(MAX_DROPPED_NOTES);
     for d in &state.details {
         match d.kind {
             EntityKind::Actor => counts.actors += 1,
@@ -881,11 +960,22 @@ pub fn body_sha256(body: &str) -> String {
     hex::encode(Sha256::digest(body.as_bytes()))
 }
 
+fn fresh(format: u32, synced_at: i64, cfg: &ThreatSieveSync, now: i64) -> bool {
+    format == FORMAT
+        && now - synced_at <= i64::from(cfg.stale_after_hours) * 3_600_000
+        && synced_at <= now + DAY_MS
+}
+
 impl Snapshot {
     pub fn is_fresh(&self, cfg: &ThreatSieveSync, now: i64) -> bool {
-        self.format == FORMAT
-            && now - self.synced_at <= i64::from(cfg.stale_after_hours) * 3_600_000
-            && self.synced_at <= now + DAY_MS
+        fresh(self.format, self.synced_at, cfg, now)
+    }
+}
+
+impl SnapshotPointer {
+    /// Whether the snapshot this points at is fresh, without reading it.
+    pub fn is_fresh(&self, cfg: &ThreatSieveSync, now: i64) -> bool {
+        fresh(self.format, self.synced_at, cfg, now)
     }
 }
 
@@ -955,5 +1045,132 @@ mod tests {
         assert_eq!(commercial_use("mitre"), Some(true));
         assert_eq!(commercial_use("greynoise"), Some(false));
         assert_eq!(commercial_use("taxii-foiled"), None);
+    }
+
+    fn src(id: &str, name: &str, url: &str) -> SourceDigest {
+        SourceDigest {
+            source_id: id.into(),
+            name: name.into(),
+            url: Some(url.into()),
+            published: Some("2026-01-01".into()),
+            retrieved: Some("2026-02-01".into()),
+            licence: Some("CC-BY-4.0".into()),
+            redistributable: true,
+            mirrored: false,
+            commercial_use: None,
+        }
+    }
+
+    fn entity(sources: Vec<SourceDigest>) -> EntityDigest {
+        EntityDigest {
+            entity_id: "threat-actor_x".into(),
+            kind: EntityKind::Actor,
+            name: "EXAMPLE Cluster X".into(),
+            aliases: vec![],
+            external_id: None,
+            sources,
+            refs: vec![],
+            techniques: BTreeSet::new(),
+            indicators: BTreeSet::from([(IndicatorType::Domain, "c2.example.invalid".into())]),
+            cves: BTreeSet::new(),
+        }
+    }
+
+    fn report(title: &str, source: SourceDigest) -> ReportDigest {
+        ReportDigest {
+            title: title.into(),
+            source,
+            object_refs: BTreeSet::from(["threat-actor_x".to_string()]),
+        }
+    }
+
+    fn imported(r: &ActorReport) -> &Imported {
+        r.imported.as_ref().unwrap()
+    }
+
+    #[test]
+    fn a_mirrored_report_is_not_another_publisher() {
+        let d = entity(vec![src("mitre", "MITRE", "https://a.example.com/1")]);
+        let mut copy = src("misp-feed", "Mirror", "https://b.example.com/2");
+        copy.mirrored = true;
+        let r = report("A report", copy);
+        let m = map_entity(&d, &[&r], &BTreeSet::new(), "2026-03-01").unwrap();
+        assert_eq!(imported(&m).publishers, 1);
+        assert_eq!(m.label.kind, LabelKind::Cluster);
+        assert!(m.sources.iter().all(|s| s.publisher != "Mirror"));
+        // The same report, not mirrored, is a second publisher.
+        let r = report("A report", src("misp", "MISP", "https://b.example.com/2"));
+        let m = map_entity(&d, &[&r], &BTreeSet::new(), "2026-03-01").unwrap();
+        assert_eq!(imported(&m).publishers, 2);
+        assert_eq!(m.label.kind, LabelKind::NamedGroup);
+    }
+
+    #[test]
+    fn report_titles_that_claim_attribution_are_withheld() {
+        let d = entity(vec![src("mitre", "MITRE", "https://a.example.com/1")]);
+        let r = report(
+            "Intrusions attributed to EXAMPLE Cluster X",
+            src("misp", "MISP", "https://b.example.com/2"),
+        );
+        let m = map_entity(&d, &[&r], &BTreeSet::new(), "2026-03-01").unwrap();
+        assert!(
+            m.sources
+                .iter()
+                .any(|s| s.title == crate::actor::WITHHELD_TITLE)
+        );
+        for s in &m.sources {
+            assert!(wording_problems(&s.title, false).is_empty(), "{}", s.title);
+        }
+    }
+
+    #[test]
+    fn a_per_source_commercial_use_flag_wins_over_the_copied_table() {
+        let mut s = src("taxii-acme", "Acme", "https://a.example.com/1");
+        assert!(restricted(&s), "unknown source, no flag: restricted");
+        s.commercial_use = Some(true);
+        assert!(!restricted(&s));
+        let mut m = src("mitre", "MITRE", "https://a.example.com/1");
+        assert!(!restricted(&m), "the table allows MITRE");
+        m.commercial_use = Some(false);
+        assert!(restricted(&m), "the response says no");
+        let p: TsProvenance =
+            serde_json::from_str(r#"{"sourceId":"x","redistributable":true,"commercialUse":true}"#)
+                .unwrap();
+        assert_eq!(p.commercial_use, Some(true));
+        let p: TsProvenance =
+            serde_json::from_str(r#"{"sourceId":"x","commercial_use":false}"#).unwrap();
+        assert_eq!(p.commercial_use, Some(false));
+        let p: TsProvenance = serde_json::from_str(r#"{"sourceId":"x"}"#).unwrap();
+        assert_eq!(p.commercial_use, None);
+    }
+
+    #[test]
+    fn one_bad_detail_is_skipped_not_fatal() {
+        let cfg: CatalogueConfig =
+            serde_yaml_ng::from_str(include_str!("../../../configs/actor-catalogue.yaml")).unwrap();
+        let mut s = SyncState::new(0);
+        s.phase = Phase::Details;
+        s.queue = vec![
+            ("a".into(), EntityKind::Actor),
+            ("b".into(), EntityKind::Actor),
+            ("c".into(), EntityKind::Actor),
+            ("d".into(), EntityKind::Actor),
+        ];
+        assert_eq!(s.apply(&cfg.threatsieve, 400, "{}", None), Ok(()));
+        assert_eq!(s.apply(&cfg.threatsieve, 200, "not json", None), Ok(()));
+        assert_eq!(s.next_detail, 2);
+        assert_eq!(s.skipped, 2);
+        assert!(s.skipped_notes[0].starts_with("a: "));
+        assert!(s.skipped_notes[1].starts_with("b: unreadable"));
+        // A refused key is not the entity's fault: stop, skip nothing.
+        assert!(matches!(
+            s.apply(&cfg.threatsieve, 401, "{}", None),
+            Err(SyncError::Refused(_))
+        ));
+        assert_eq!(s.next_detail, 2);
+        assert_eq!(s.apply(&cfg.threatsieve, 404, "{}", None), Ok(()));
+        assert_eq!(s.apply(&cfg.threatsieve, 422, "{}", None), Ok(()));
+        assert!(s.is_done());
+        assert_eq!((s.missing, s.skipped), (1, 3));
     }
 }

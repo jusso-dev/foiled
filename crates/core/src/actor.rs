@@ -107,6 +107,20 @@ pub fn wording_problems(text: &str, confirmed: bool) -> Vec<String> {
     out
 }
 
+/// Served in place of a source title that claims attribution.
+pub const WITHHELD_TITLE: &str = "Report (title withheld: attribution wording)";
+
+/// A source title as Foiled serves it (`/v0/actors`, link sources). The
+/// file keeps the document's real title as data; one that claims
+/// attribution is replaced wherever it would reach a tenant.
+pub fn served_title(title: &str) -> &str {
+    if wording_problems(title, false).is_empty() {
+        title
+    } else {
+        WITHHELD_TITLE
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sources and the curated report format
 // ---------------------------------------------------------------------------
@@ -464,7 +478,14 @@ impl ActorReport {
             indicators: self.indicators,
             targeting: self.targeting,
             geo: self.geo,
-            sources: self.sources,
+            sources: self
+                .sources
+                .into_iter()
+                .map(|mut s| {
+                    s.title = served_title(&s.title).to_string();
+                    s
+                })
+                .collect(),
             attack_version: None,
             example: self.example,
             notes: self.notes,
@@ -2655,7 +2676,11 @@ mod tests {
                 e.summary
             );
         }
-        assert_eq!(l.sources[0].title, r.sources[0].title, "kept as data");
+        assert_eq!(l.sources[0].title, WITHHELD_TITLE, "withheld when served");
+        assert!(
+            r.problems(&sidecar().known_ids()).is_empty(),
+            "kept as data"
+        );
         r.sources[0].publisher = "Group responsible for it (fictional)".into();
         r.aliases = vec!["the crew that is behind it".into()];
         let p = r.problems(&sidecar().known_ids()).join("\n");

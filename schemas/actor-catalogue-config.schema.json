@@ -17,7 +17,7 @@
         "binding": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
         "api_key_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
         "blob_prefix": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_/-]*/$" },
-        "calls_per_run": { "type": "integer", "minimum": 1, "maximum": 200 },
+        "calls_per_run": { "type": "integer", "minimum": 1, "maximum": 2000 },
         "refresh_after_hours": { "type": "integer", "minimum": 1 },
         "stale_after_hours": { "type": "integer", "minimum": 2 },
         "max_sync_hours": { "type": "integer", "minimum": 1 },
