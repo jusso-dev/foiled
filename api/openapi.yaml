@@ -63,6 +63,8 @@ tags:
     description: "Audit log (#21)."
   - name: events
     description: "Live event stream (#14)."
+  - name: mcp
+    description: "MCP server for agents (#24). See docs/mcp/foiled-mcp.md."
 
 paths:
   /healthz:
@@ -433,6 +435,8 @@ paths:
         - { name: state, in: query, schema: { type: string, enum: [probe, exploit, post-exploitation] } }
         - { name: cve, in: query, schema: { type: string }, description: "Case-insensitive CVE id from hook hits; CVE links (#12, #27) extend this." }
         - { name: campaign_id, in: query, schema: { type: string } }
+        - { name: technique, in: query, schema: { type: string, pattern: "^T[0-9]{4}(\\.[0-9]{3})?$" }, description: "ATT&CK technique id. Matches attempts with a technique link to it (#26, #27)." }
+        - { name: min_confidence, in: query, schema: { type: integer, minimum: 0, maximum: 100 }, description: "Matches attempts with a CVE or technique link (or, with `technique`, that link) scoring at least this. Scores are before analyst overrides." }
         - { $ref: "#/components/parameters/Limit" }
       x-foiled-status: implemented
       x-foiled-store: postgres
@@ -806,6 +810,88 @@ paths:
             text/event-stream:
               schema: { type: string }
 
+  /v0/mcp:
+    post:
+      tags: [mcp]
+      operationId: mcp
+      summary: MCP endpoint (Streamable HTTP, JSON-RPC 2.0)
+      description: |
+        Model Context Protocol server for agents (#24). One JSON-RPC 2.0
+        request or notification per POST; batches are refused. Requests get
+        a single `application/json` response, notifications get 202 with no
+        body. There is no SSE stream and no session (`GET` and `DELETE`
+        answer 405). Serves protocol revisions `2026-07-28` (stateless,
+        `server/discover`), `2025-11-25` and `2025-06-18` (`initialize`).
+        Methods: `initialize`, `server/discover`, `ping`, `tools/list`,
+        `tools/call`.
+
+        The endpoint is a pure client of this API: each tool call is replayed
+        against the REST routes with the caller's own token, so their scopes,
+        tenancy, rate limits, caps and audit apply. Agent caps from
+        `configs/mcp.yaml` apply on top. Every `tools/call` writes one
+        `mcp.tool_call` audit record. Tool results put attacker text inside
+        nonce-framed, escaped blocks (`../schemas/mcp-tool-result.schema.json`).
+        A request with an `Origin` header not in `allowed_origins` gets 403.
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [catalogue:read, decoys:read, decoys:write, decoys:elevate, attempts:read, audit:read]
+      parameters:
+        - name: MCP-Protocol-Version
+          in: header
+          description: Required on every request except `initialize` and `server/discover`. Must match `params._meta` when both are sent.
+          schema: { type: string, enum: ["2026-07-28", "2025-11-25", "2025-06-18"] }
+        - name: Mcp-Method
+          in: header
+          description: When sent, must equal the body's `method`.
+          schema: { type: string }
+        - name: Mcp-Name
+          in: header
+          description: When sent on `tools/call`, must equal `params.name`.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JsonRpcRequest" }
+            examples:
+              call:
+                value:
+                  jsonrpc: "2.0"
+                  id: 1
+                  method: tools/call
+                  params:
+                    name: query_attempts
+                    arguments: { src: 203.0.113.66, state: exploit }
+      responses:
+        "200":
+          description: A JSON-RPC response. Tool results carry `structuredContent` in the shape of `mcp-tool-result.schema.json` and the same data framed as text.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JsonRpcResponse" }
+        "202":
+          description: A notification was accepted. No body.
+        "400":
+          description: Parse error, batch, missing or unsupported protocol version, or a header that does not match the body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JsonRpcResponse" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403":
+          description: Origin not allowed, or a host or sensor credential.
+          content:
+            application/json:
+              schema: {}
+        "404":
+          description: Unknown method under protocol revision 2026-07-28 (JSON-RPC -32601), or the endpoint is switched off.
+          content:
+            application/json:
+              schema: {}
+        "413":
+          description: Body over 64 KiB.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JsonRpcResponse" }
+
 components:
   securitySchemes:
     bearer:
@@ -813,7 +899,9 @@ components:
       scheme: bearer
       bearerFormat: "fo_<id>.<secret>"
       description: |
-        Operator and MCP tokens. Scopes: catalogue:read, decoys:read,
+        Operator and MCP tokens. An `mcp` role token can only hold
+        catalogue:read, decoys:read, decoys:write, decoys:elevate,
+        attempts:read, audit:read and events:read (#24). Scopes: catalogue:read, decoys:read,
         decoys:write, decoys:elevate, attempts:read, attempts:write,
         campaigns:read, campaigns:write, iocs:read, review:read, review:write,
         sensors:read, sensors:write, hosts:read, hosts:write, quarantine:read,
@@ -929,6 +1017,34 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, method]
+      properties:
+        jsonrpc: { const: "2.0" }
+        id: { type: [string, integer], description: "Absent for notifications." }
+        method: { type: string, examples: [tools/call] }
+        params: { type: object }
+    JsonRpcResponse:
+      type: object
+      required: [jsonrpc]
+      properties:
+        jsonrpc: { const: "2.0" }
+        id: { type: [string, integer] }
+        result:
+          type: object
+          description: For `tools/call`, `content`, `structuredContent` and `isError`.
+          properties:
+            content: { type: array, items: { type: object } }
+            structuredContent: { $ref: "../schemas/mcp-tool-result.schema.json" }
+            isError: { type: boolean }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: integer, examples: [-32602, -32022, -32020] }
+            message: { type: string }
+            data: {}
     Error:
       type: object
       required: [error]

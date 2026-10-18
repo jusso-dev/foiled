@@ -4,6 +4,7 @@
 //!
 //! ```sh
 //! cargo run -p foiled-mock-api -- 127.0.0.1:8787
+//! # also prints an mcp-role token for MCP clients (POST /v0/mcp)
 //! # lab mode: also accept one sandbox host without mTLS, and sign its jobs
 //! cargo run -p foiled-mock-api -- 127.0.0.1:8787 --lab-host lab-host-1
 //! ```
@@ -81,6 +82,23 @@ async fn main() {
         expires_at: None,
         revoked: false,
     });
+    // An agent token for MCP clients (#24): role mcp, least privilege.
+    let mcp_secret = uuid::Uuid::new_v4().simple().to_string();
+    store.add_token(TokenRecord {
+        id: "devmcp".into(),
+        tenant_id: "local".into(),
+        role: Role::Mcp,
+        scopes: vec![
+            Scope::CatalogueRead,
+            Scope::DecoysRead,
+            Scope::DecoysWrite,
+            Scope::AttemptsRead,
+            Scope::AuditRead,
+        ],
+        secret_sha256: sha256_hex(&mcp_secret),
+        expires_at: None,
+        revoked: false,
+    });
     let mut state = AppState::new(store.clone(), Arc::new(now_ms));
     let mut app = None;
     if let Some(host_id) = &lab_host {
@@ -110,6 +128,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(socket).await.expect("bind");
     println!("foiled mock API on http://{socket}");
     println!("token: fo_dev.{secret}");
+    println!("mcp token: fo_devmcp.{mcp_secret} (MCP endpoint http://{socket}/v0/mcp)");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

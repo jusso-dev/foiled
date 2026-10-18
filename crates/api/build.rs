@@ -2,7 +2,8 @@
 //! - `catalogue/entries/**` (#5) as `catalogue.json`, sorted by id;
 //! - `rules/attack/*.yaml` (#26) as `attack_rules.json`, sorted by id;
 //! - `catalogue/{matchers,sequences,advisories}` (#12) as `matchers.json`,
-//!   `sequences.json` and `advisories.json`.
+//!   `sequences.json` and `advisories.json`;
+//! - `configs/mcp.yaml` (#24) as `mcp_config.json`.
 //!
 //! Each deploy serves exactly what was merged. `foiled-lint` validates the
 //! files in CI; this script only converts YAML to JSON.
@@ -38,10 +39,23 @@ fn bundle(rel: &str, out_name: &str) {
     std::fs::write(out, serde_json::to_vec(&items).unwrap()).unwrap();
 }
 
+/// Convert one YAML file to JSON.
+fn bundle_file(rel: &str, out_name: &str) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel);
+    println!("cargo:rerun-if-changed={}", path.display());
+    let text = std::fs::read_to_string(&path).expect("read");
+    let value: serde_json::Value = serde_yaml_ng::from_str(&text).expect("parse YAML");
+    let out = Path::new(&std::env::var("OUT_DIR").unwrap()).join(out_name);
+    std::fs::write(out, serde_json::to_vec(&value).unwrap()).unwrap();
+}
+
 fn main() {
     bundle("catalogue/entries", "catalogue.json");
     bundle("rules/attack", "attack_rules.json");
     bundle("catalogue/matchers", "matchers.json");
     bundle("catalogue/sequences", "sequences.json");
     bundle("catalogue/advisories", "advisories.json");
+    bundle_file("configs/mcp.yaml", "mcp_config.json");
 }

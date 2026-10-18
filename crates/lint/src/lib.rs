@@ -137,6 +137,14 @@ pub const BINDINGS: &[Binding] = &[
         data_dir: "testdata/alerts",
         schema: "schemas/alert.schema.json",
     },
+    Binding {
+        data_dir: "configs/mcp.yaml",
+        schema: "schemas/mcp-config.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/mcp/results",
+        schema: "schemas/mcp-tool-result.schema.json",
+    },
 ];
 
 /// Directories never scanned for schema files.

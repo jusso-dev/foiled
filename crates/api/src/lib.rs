@@ -20,6 +20,7 @@ pub mod catalogue;
 pub mod d1_sql;
 pub mod error;
 pub mod links;
+pub mod mcp;
 pub mod memory;
 pub mod routes;
 pub mod store;
@@ -76,6 +77,8 @@ pub struct AppState {
     pub uploads: Option<routes::ingest::UploadConfig>,
     /// Signs host agent jobs; `None` disables leasing.
     pub job_signer: Option<Arc<foiled_core::agent::JobSigner>>,
+    /// MCP endpoint settings (`configs/mcp.yaml`, #24).
+    pub mcp: Arc<foiled_core::mcp::McpConfig>,
 }
 
 impl AppState {
@@ -88,6 +91,7 @@ impl AppState {
             limits: Limits::default(),
             uploads: None,
             job_signer: None,
+            mcp: Arc::new(mcp::bundled_config()),
         }
     }
 }
@@ -108,8 +112,8 @@ async fn healthz() -> Json<Health> {
     })
 }
 
-/// Build the API router.
-pub fn router(state: AppState) -> Router {
+/// Every REST route, without the MCP endpoint or a fallback.
+fn rest_routes() -> Router<AppState> {
     let decoys = routes::decoys::router();
     Router::new()
         .route("/healthz", get(healthz))
@@ -122,6 +126,20 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::hosts::router())
         .merge(routes::exports::router())
         .merge(routes::attempts::router())
+}
+
+/// The REST API alone. MCP tool calls are replayed against this router, so
+/// the MCP endpoint is a pure client of the API and can never reach itself.
+pub fn rest_router(state: AppState) -> Router {
+    rest_routes()
+        .fallback(|| async { error::ApiError::not_found("route") })
+        .with_state(state)
+}
+
+/// Build the API router.
+pub fn router(state: AppState) -> Router {
+    rest_routes()
+        .merge(mcp::router())
         .fallback(|| async { error::ApiError::not_found("route") })
         .with_state(state)
 }
