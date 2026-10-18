@@ -12,7 +12,7 @@
 //! weight that is capped at [`LLM_MAX_WEIGHT`], below `high` in #27.
 
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -22,6 +22,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::attack::is_technique_id;
+use crate::confidence::{Evidence, EvidenceSource, LinkKind};
 
 /// Default daily token budget across all providers.
 pub const DEFAULT_TOKENS_PER_DAY: u64 = 2_000_000;
@@ -354,20 +355,19 @@ pub fn redact(text: &str) -> String {
         let word_start = i == 0 || !is_word_byte(bytes[i - 1]);
         let rest = &text[i..];
 
-        if rest.starts_with("-----BEGIN ") {
-            let line_end = rest.find('\n').unwrap_or(rest.len());
-            if rest[..line_end].contains("PRIVATE KEY-----") {
-                let end = match rest.find("-----END ") {
-                    Some(e) => match rest[e + 9..].find("-----") {
-                        Some(f) => e + 9 + f + 5,
-                        None => rest.len(),
-                    },
+        if rest.starts_with("-----BEGIN ") && is_private_key_header(&bytes[i..]) {
+            // Everything up to the footer is consumed, so this scan is paid
+            // once per block, not once per position.
+            let end = match rest.find("-----END ") {
+                Some(e) => match rest[e + 9..].find("-----") {
+                    Some(f) => e + 9 + f + 5,
                     None => rest.len(),
-                };
-                out.push_str("[REDACTED:private-key]");
-                i += end;
-                continue;
-            }
+                },
+                None => rest.len(),
+            };
+            out.push_str("[REDACTED:private-key]");
+            i += end;
+            continue;
         }
 
         if rest.starts_with(CANARY_PREFIX) {
@@ -383,9 +383,13 @@ pub fn redact(text: &str) -> String {
                 i += n.0;
                 continue;
             }
-            if let Some((key_len, value_len)) = secret_assignment(bytes, i) {
+            if let Some((key_len, value_len, cookie)) = secret_assignment(bytes, i) {
                 out.push_str(&text[i..i + key_len]);
-                out.push_str("[REDACTED:secret]");
+                if cookie {
+                    mask_cookies(&text[i + key_len..i + key_len + value_len], &mut out);
+                } else {
+                    out.push_str("[REDACTED:secret]");
+                }
                 i += key_len + value_len;
                 continue;
             }
@@ -415,6 +419,21 @@ pub fn redact(text: &str) -> String {
     out
 }
 
+/// The longest private key header we look for, `-----BEGIN ENCRYPTED
+/// PRIVATE KEY-----`, with room to spare. Only this many bytes are searched,
+/// so a flood of `-----BEGIN ` does not rescan the rest of the text each time.
+const KEY_HEADER_MAX: usize = 64;
+
+/// `-----BEGIN ... PRIVATE KEY-----` on one line, within [`KEY_HEADER_MAX`].
+fn is_private_key_header(rest: &[u8]) -> bool {
+    let head = &rest[..rest.len().min(KEY_HEADER_MAX)];
+    let line = match head.iter().position(|b| *b == b'\n') {
+        Some(n) => &head[..n],
+        None => head,
+    };
+    line.windows(16).any(|w| w == b"PRIVATE KEY-----")
+}
+
 /// AWS key ids, JWTs and well-known token prefixes at `i`.
 fn secret_token_len(bytes: &[u8], i: usize) -> Option<(usize, &'static str)> {
     let rest = &bytes[i..];
@@ -427,8 +446,21 @@ fn secret_token_len(bytes: &[u8], i: usize) -> Option<(usize, &'static str)> {
         }
     }
     if rest.starts_with(b"eyJ") {
-        let n = run_len(bytes, i, |b| is_word_byte(b) || b == b'.');
-        let dots = rest[..n].iter().filter(|b| **b == b'.').count();
+        // Stop at a third dot: that is not a JWT, and stopping keeps a run of
+        // `eyJ.eyJ.eyJ.` linear instead of rescanning it from every `eyJ`.
+        let mut dots = 0;
+        let mut n = 0;
+        for &b in rest {
+            if b == b'.' {
+                dots += 1;
+                if dots > 2 {
+                    break;
+                }
+            } else if !is_word_byte(b) {
+                break;
+            }
+            n += 1;
+        }
         if n >= 20 && dots == 2 {
             return Some((n, "[REDACTED:jwt]"));
         }
@@ -445,9 +477,10 @@ fn secret_token_len(bytes: &[u8], i: usize) -> Option<(usize, &'static str)> {
 }
 
 /// `key = value` or `key: value` where the key looks like a secret. Returns
-/// the length of the kept prefix (key, separator, spacing) and of the masked
-/// value.
-fn secret_assignment(bytes: &[u8], i: usize) -> Option<(usize, usize)> {
+/// the length of the kept prefix (key, separator, spacing), the length of
+/// the masked value, and whether the value is a cookie list (see
+/// [`mask_cookies`]).
+fn secret_assignment(bytes: &[u8], i: usize) -> Option<(usize, usize, bool)> {
     let key_len = run_len(bytes, i, is_word_byte);
     if key_len == 0 {
         return None;
@@ -473,6 +506,10 @@ fn secret_assignment(bytes: &[u8], i: usize) -> Option<(usize, usize)> {
             !b.is_ascii_whitespace() && !matches!(b, b'&' | b';' | b',' | b'"' | b'\'')
         })
     };
+    if key.ends_with("cookie") {
+        let end = cookie_list_end(bytes, j);
+        return (end > j).then_some((j - i, end - j, true));
+    }
     let mut end = value_end(j);
     if end == j {
         return None;
@@ -482,7 +519,53 @@ fn secret_assignment(bytes: &[u8], i: usize) -> Option<(usize, usize)> {
         let after = end + run_len(bytes, end, |b| b == b' ');
         end = value_end(after);
     }
-    Some((j - i, end - j))
+    Some((j - i, end - j, false))
+}
+
+/// Bytes that end a cookie name or value.
+fn is_cookie_stop(b: u8) -> bool {
+    b.is_ascii_whitespace() || matches!(b, b';' | b'&' | b',' | b'"' | b'\'')
+}
+
+/// End of a `name=value; name=value` list starting at `from`: pairs joined
+/// by `;` and optional spaces, up to the first other stop byte. The list
+/// only goes on past a `;` if a `name=` follows, so trailing words or a
+/// second `Cookie:` header are left for the main loop to look at.
+fn cookie_list_end(bytes: &[u8], from: usize) -> usize {
+    let mut j = from;
+    loop {
+        j += run_len(bytes, j, |b| !is_cookie_stop(b));
+        if j >= bytes.len() || bytes[j] != b';' {
+            return j;
+        }
+        let next = j + 1 + run_len(bytes, j + 1, |b| b == b' ' || b == b'\t');
+        let name_end = next + run_len(bytes, next, |b| !is_cookie_stop(b) && b != b'=');
+        if name_end == next || name_end >= bytes.len() || bytes[name_end] != b'=' {
+            return j;
+        }
+        j = next;
+    }
+}
+
+/// Mask every value in a cookie list, keeping the names: `a=1; sid=abc`
+/// becomes `a=[REDACTED:secret]; sid=[REDACTED:secret]`. A bare value with
+/// no `=` is masked whole.
+fn mask_cookies(list: &str, out: &mut String) {
+    for (n, pair) in list.split(';').enumerate() {
+        if n > 0 {
+            out.push(';');
+        }
+        let value = pair.trim_start_matches([' ', '\t']);
+        out.push_str(&pair[..pair.len() - value.len()]);
+        if value.is_empty() {
+            continue;
+        }
+        if let Some((name, _)) = value.split_once('=') {
+            out.push_str(name);
+            out.push('=');
+        }
+        out.push_str("[REDACTED:secret]");
+    }
 }
 
 /// Make untrusted text safe to place inside a data block: drop control
@@ -516,10 +599,22 @@ pub fn estimate_tokens(text: &str) -> u32 {
     u32::try_from(text.len().div_ceil(BYTES_PER_TOKEN)).unwrap_or(u32::MAX)
 }
 
-/// Redact, then clamp, then escape. Redaction runs first so a secret is
-/// never half-cut into something the masks no longer recognise.
+/// Attacker text is cut to this many times its final limit before
+/// redaction, so the work per field is bounded however much was sent.
+const PRE_REDACT_FACTOR: usize = 4;
+
+/// Pre-clamp, redact, clamp, then escape. Redaction runs before the final
+/// clamp so a secret is never half-cut into something the masks no longer
+/// recognise. The pre-clamp backs off to the last whitespace, so it does not
+/// half-cut a secret either; text with no whitespace is one run, which the
+/// blob mask still catches.
 fn prepare(text: &str, max_chars: usize) -> (String, bool) {
-    let (clamped, cut) = clamp_chars(&redact(text), max_chars);
+    let (mut bounded, pre_cut) = clamp_chars(text, max_chars.saturating_mul(PRE_REDACT_FACTOR));
+    if pre_cut && let Some(ws) = bounded.rfind(char::is_whitespace) {
+        bounded.truncate(ws);
+    }
+    let (clamped, cut) = clamp_chars(&redact(&bounded), max_chars);
+    let cut = cut || pre_cut;
     let mut s = escape_data(&clamped);
     if cut {
         s.push_str(" [truncated]");
@@ -532,12 +627,15 @@ fn prepare(text: &str, max_chars: usize) -> (String, bool) {
 // ---------------------------------------------------------------------------
 
 /// What goes to the provider. `doc_ids` lists the retrieved documents that
-/// fitted in the prompt: the only ids a citation may name.
+/// fitted in the prompt, in rank order: the only ids a citation may name.
+/// `docs` maps each of them to the title and text the model was shown, for
+/// the grounding check in [`parse_and_validate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptParts {
     pub system: String,
     pub user: String,
     pub doc_ids: Vec<String>,
+    pub docs: BTreeMap<String, String>,
     pub truncated: bool,
 }
 
@@ -646,6 +744,7 @@ pub fn build_prompt(
     // Retrieved documents in rank order.
     let mut docs = String::new();
     let mut doc_ids: Vec<String> = Vec::new();
+    let mut doc_text: BTreeMap<String, String> = BTreeMap::new();
     for c in chunks {
         if !is_safe_id(&c.doc_id) || doc_ids.contains(&c.doc_id) {
             continue;
@@ -667,6 +766,7 @@ pub fn build_prompt(
         truncated |= cut;
         docs.push_str(&block);
         doc_ids.push(c.doc_id.clone());
+        doc_text.insert(c.doc_id.clone(), format!("{title}\n{text}"));
     }
 
     let cite = if doc_ids.is_empty() {
@@ -680,6 +780,7 @@ pub fn build_prompt(
         system: SYSTEM_PROMPT.to_string(),
         user,
         doc_ids,
+        docs: doc_text,
         truncated,
     })
 }
@@ -715,8 +816,10 @@ pub struct Proposal {
 #[derive(Debug, Clone, Copy)]
 pub struct ValidationContext<'a> {
     pub attempt_id: &'a str,
-    /// The doc ids that were in the prompt ([`PromptParts::doc_ids`]).
-    pub allowed_doc_ids: &'a BTreeSet<String>,
+    /// The documents that were in the prompt, by id ([`PromptParts::docs`]).
+    /// A citation may only name these, and a proposed CVE id must appear in
+    /// the text of one it cites.
+    pub docs: &'a BTreeMap<String, String>,
     /// CVE and demo ids in the catalogue (D1).
     pub known_cves: &'a BTreeSet<String>,
     /// Technique ids in the pinned ATT&CK sidecar (#26).
@@ -735,6 +838,9 @@ pub enum Rejected {
     AttemptMismatch,
     /// Links were proposed but no citation to a retrieved document survived.
     Ungrounded,
+    /// The provider answered with a refusal, a truncated output or a
+    /// malformed response. Not retried on another provider.
+    Provider(ProviderError),
 }
 
 impl fmt::Display for Rejected {
@@ -747,6 +853,7 @@ impl fmt::Display for Rejected {
             Rejected::WrongType(k) => write!(f, "output field {k} has the wrong type"),
             Rejected::AttemptMismatch => f.write_str("output names a different attempt"),
             Rejected::Ungrounded => f.write_str("links proposed without a valid citation"),
+            Rejected::Provider(e) => write!(f, "provider answer unusable: {e}"),
         }
     }
 }
@@ -763,6 +870,8 @@ pub enum DropReason {
     Unknown,
     /// A citation to a document that was not in the prompt.
     NotRetrieved,
+    /// A known CVE id that none of the surviving citations mention.
+    NotInCitedDoc,
     Duplicate,
     OverLimit,
 }
@@ -808,13 +917,14 @@ fn string_array<'v>(
         .collect()
 }
 
+/// Keep the well-formed ids that pass `check` (which names the reason to
+/// drop one), without duplicates and up to `max`.
 fn filter_ids(
     field: &'static str,
     items: Vec<&str>,
     max: usize,
     well_formed: impl Fn(&str) -> bool,
-    allowed: &BTreeSet<String>,
-    unknown_reason: DropReason,
+    check: impl Fn(&str) -> Option<DropReason>,
     dropped: &mut Vec<Dropped>,
 ) -> Vec<String> {
     let mut kept: Vec<String> = Vec::new();
@@ -822,8 +932,8 @@ fn filter_ids(
         let v = raw.trim();
         let reason = if !well_formed(v) {
             Some(DropReason::BadFormat)
-        } else if !allowed.contains(v) {
-            Some(unknown_reason)
+        } else if let Some(r) = check(v) {
+            Some(r)
         } else if kept.iter().any(|k| k == v) {
             Some(DropReason::Duplicate)
         } else if kept.len() >= max {
@@ -843,11 +953,26 @@ fn filter_ids(
     kept
 }
 
+/// `id` appears in `text` as a whole id, ignoring case: `CVE-2021-4422`
+/// does not match inside `CVE-2021-44228`.
+fn mentions(text: &str, id: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    let id = id.to_ascii_lowercase();
+    let t = text.as_bytes();
+    text.match_indices(&id).any(|(at, _)| {
+        let before = at.checked_sub(1).map(|b| t[b]);
+        let after = t.get(at + id.len()).copied();
+        !before.is_some_and(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && !after.is_some_and(|b| b.is_ascii_alphanumeric())
+    })
+}
+
 /// Parse and check model output. The whole output is dropped if it is not a
 /// JSON object with the five schema keys of the right types, or if it names
 /// another attempt. Individual ids that are malformed, unknown, duplicated,
 /// over the limit or cite a document outside the prompt are dropped one by
-/// one. Extra keys, including any confidence, score, weight or publish flag,
+/// one, as is a CVE id that no surviving citation mentions (rule 3 of the
+/// system prompt, enforced here rather than trusted). Extra keys, including any confidence, score, weight or publish flag,
 /// are ignored and never read. The rationale is redacted, stripped of
 /// control characters and clamped to [`MAX_RATIONALE_CHARS`].
 pub fn parse_and_validate(raw: &str, ctx: &ValidationContext<'_>) -> Result<Validated, Rejected> {
@@ -881,14 +1006,38 @@ pub fn parse_and_validate(raw: &str, ctx: &ValidationContext<'_>) -> Result<Vali
         .collect();
     ignored_fields.sort();
 
+    // Citations first, because CVE grounding depends on which survive.
+    // Their drops are listed last, after the ids, for a stable audit order.
+    let mut cite_dropped = Vec::new();
+    let citations = filter_ids(
+        "citations",
+        citations,
+        MAX_CITATIONS,
+        is_safe_id,
+        |v| (!ctx.docs.contains_key(v)).then_some(DropReason::NotRetrieved),
+        &mut cite_dropped,
+    );
+    let cited_mention = |id: &str| {
+        citations
+            .iter()
+            .filter_map(|c| ctx.docs.get(c))
+            .any(|text| mentions(text, id))
+    };
     let mut dropped = Vec::new();
     let cve_ids = filter_ids(
         "cve_ids",
         cves,
         MAX_CVE_IDS,
         is_vuln_id,
-        ctx.known_cves,
-        DropReason::Unknown,
+        |v| {
+            if !ctx.known_cves.contains(v) {
+                Some(DropReason::Unknown)
+            } else if !cited_mention(v) {
+                Some(DropReason::NotInCitedDoc)
+            } else {
+                None
+            }
+        },
         &mut dropped,
     );
     let technique_ids = filter_ids(
@@ -896,20 +1045,16 @@ pub fn parse_and_validate(raw: &str, ctx: &ValidationContext<'_>) -> Result<Vali
         techniques,
         MAX_TECHNIQUE_IDS,
         is_technique_id,
-        ctx.known_techniques,
-        DropReason::Unknown,
+        |v| (!ctx.known_techniques.contains(v)).then_some(DropReason::Unknown),
         &mut dropped,
     );
-    let citations = filter_ids(
-        "citations",
-        citations,
-        MAX_CITATIONS,
-        is_safe_id,
-        ctx.allowed_doc_ids,
-        DropReason::NotRetrieved,
-        &mut dropped,
-    );
-    if (!cve_ids.is_empty() || !technique_ids.is_empty()) && citations.is_empty() {
+    dropped.extend(cite_dropped);
+    // A known CVE dropped only because nothing was cited still counts as a
+    // link proposed without a citation.
+    let uncited_cve = dropped
+        .iter()
+        .any(|d| d.reason == DropReason::NotInCitedDoc);
+    if (!cve_ids.is_empty() || !technique_ids.is_empty() || uncited_cve) && citations.is_empty() {
         return Err(Rejected::Ungrounded);
     }
 
@@ -1008,6 +1153,38 @@ impl Proposal {
     }
 }
 
+impl LlmEvidence {
+    /// The #27 link this evidence is for.
+    pub fn link_kind(&self) -> LinkKind {
+        match self.target {
+            LinkTarget::Cve(_) => LinkKind::AttemptCve,
+            LinkTarget::Technique(_) => LinkKind::AttemptTechnique,
+        }
+    }
+
+    /// The #27 evidence item, with `source = llm` so the confidence layer's
+    /// `llm` points and cap apply. The weight is re-clamped to
+    /// [`LLM_MAX_WEIGHT`]; #27 reads it as a strength out of 100 and scales
+    /// it by the `llm` points (20 by default), so one LLM link adds at most
+    /// 8 points. Citations become the reference, comma-separated (doc ids
+    /// never contain a comma).
+    pub fn to_evidence(&self) -> Evidence {
+        Evidence {
+            signal_id: self.signal_id.clone(),
+            source: EvidenceSource::Llm,
+            weight: self.weight.min(LLM_MAX_WEIGHT),
+            summary: self.summary.clone(),
+            reference: (!self.refs.is_empty()).then(|| self.refs.join(",")),
+        }
+    }
+}
+
+impl From<&LlmEvidence> for Evidence {
+    fn from(e: &LlmEvidence) -> Self {
+        e.to_evidence()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Budget
 // ---------------------------------------------------------------------------
@@ -1102,6 +1279,21 @@ pub struct Usage {
     pub output_tokens: u32,
 }
 
+/// What a settled reservation is charged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Charge {
+    /// The provider reported its use.
+    Actual(Usage),
+    /// The model ran but its use is unknown (no usage in the response, or a
+    /// refused, truncated or malformed response): keep the whole hold, the
+    /// input estimate plus the full output cap.
+    Reserved,
+    /// The call never reached a model (transport error, rate limit): keep
+    /// the input estimate, which may still have been billed, and release the
+    /// output hold.
+    InputOnly,
+}
+
 impl Budget {
     fn roll(&mut self, now_ms: i64) {
         let day = utc_day(now_ms);
@@ -1156,13 +1348,13 @@ impl Budget {
         Ok(r)
     }
 
-    /// Replace a reservation with actual use. With no usage (the call
-    /// failed), the input estimate stays charged and the output hold is
-    /// released, because a failed call may still have been billed for input.
-    pub fn settle(&mut self, now_ms: i64, r: Reservation, usage: Option<Usage>) {
-        let actual = match usage {
-            Some(u) => u64::from(u.input_tokens) + u64::from(u.output_tokens),
-            None => u64::from(r.input_tokens),
+    /// Replace a reservation with what the call cost (see [`Charge`]).
+    /// Unknown use is never read as zero.
+    pub fn settle(&mut self, now_ms: i64, r: Reservation, charge: Charge) {
+        let actual = match charge {
+            Charge::Actual(u) => u64::from(u.input_tokens) + u64::from(u.output_tokens),
+            Charge::Reserved => r.total(),
+            Charge::InputOnly => u64::from(r.input_tokens),
         };
         self.roll(now_ms);
         if r.day == self.day {
@@ -1186,11 +1378,12 @@ pub struct CompletionRequest {
 }
 
 /// Raw model text plus usage. The text is untrusted until
-/// [`parse_and_validate`] accepts it.
+/// [`parse_and_validate`] accepts it. `usage` is `None` when the response
+/// did not report both token counts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Completion {
     pub raw: String,
-    pub usage: Usage,
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1218,6 +1411,19 @@ impl fmt::Display for ProviderError {
 }
 
 impl std::error::Error for ProviderError {}
+
+impl ProviderError {
+    /// Transport and availability errors: the model never answered, so the
+    /// next provider may be tried. A refusal, a truncation or a malformed
+    /// response is an answer, and an injection can provoke any of them, so
+    /// failing over would let it buy a second, possibly costlier, call.
+    pub fn is_unavailable(&self) -> bool {
+        matches!(
+            self,
+            ProviderError::Transport(_) | ProviderError::RateLimited
+        )
+    }
+}
 
 /// Future returned by [`Provider::complete`]. Not `Send`: Workers futures
 /// are single-threaded.
@@ -1338,7 +1544,13 @@ impl WireFormat {
     pub fn parse_response(self, body: &str) -> Result<Completion, ProviderError> {
         let v: Value = serde_json::from_str(body)
             .map_err(|_| ProviderError::BadResponse("body is not JSON".into()))?;
-        let num = |x: &Value| x.as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
+        let num = |x: &Value| x.as_u64().and_then(|n| u32::try_from(n).ok());
+        let usage = |input: &Value, output: &Value| {
+            Some(Usage {
+                input_tokens: num(input)?,
+                output_tokens: num(output)?,
+            })
+        };
         match self {
             WireFormat::Anthropic => {
                 match v["stop_reason"].as_str() {
@@ -1364,10 +1576,7 @@ impl WireFormat {
                 }
                 Ok(Completion {
                     raw,
-                    usage: Usage {
-                        input_tokens: num(&v["usage"]["input_tokens"]),
-                        output_tokens: num(&v["usage"]["output_tokens"]),
-                    },
+                    usage: usage(&v["usage"]["input_tokens"], &v["usage"]["output_tokens"]),
                 })
             }
             WireFormat::OpenAiChat => {
@@ -1394,10 +1603,10 @@ impl WireFormat {
                 };
                 Ok(Completion {
                     raw,
-                    usage: Usage {
-                        input_tokens: num(&v["usage"]["prompt_tokens"]),
-                        output_tokens: num(&v["usage"]["completion_tokens"]),
-                    },
+                    usage: usage(
+                        &v["usage"]["prompt_tokens"],
+                        &v["usage"]["completion_tokens"],
+                    ),
                 })
             }
         }
@@ -1422,7 +1631,9 @@ pub struct CorrelationInput<'a> {
 pub struct Correlation {
     pub proposal: Proposal,
     pub provider: String,
-    pub usage: Usage,
+    /// `None` when the provider did not report usage; the budget was then
+    /// charged the full reservation.
+    pub usage: Option<Usage>,
     pub ignored_fields: Vec<String>,
     pub dropped: Vec<Dropped>,
     pub prompt_truncated: bool,
@@ -1433,7 +1644,7 @@ pub enum CorrelateError {
     Skipped(Skip),
     Prompt(PromptError),
     Budget(BudgetError),
-    /// Every provider failed; the last error is kept.
+    /// Every provider was unavailable; the last error is kept.
     Provider(ProviderError),
     NoProvider,
     /// The output was dropped. Not retried on another provider.
@@ -1456,10 +1667,10 @@ impl fmt::Display for CorrelateError {
 impl std::error::Error for CorrelateError {}
 
 /// Correlate one attempt. Sampling, prompt building, budget reservation,
-/// provider fallback (in order, only on provider errors, at most
-/// `calls_per_attempt` calls) and validation. A dropped output is final:
-/// asking another model the same question would cost twice and invite the
-/// injection to try again.
+/// provider fallback (in order, only when a provider is unavailable, at most
+/// `calls_per_attempt` calls) and validation. A dropped output is final, and
+/// so is a refused, truncated or malformed answer: asking another model the
+/// same question would cost twice and invite the injection to try again.
 pub async fn correlate(
     providers: &[&dyn Provider],
     budget: &mut Budget,
@@ -1479,10 +1690,9 @@ pub async fn correlate(
         user: prompt.user.clone(),
         max_output_tokens: limits.output_tokens_per_attempt,
     };
-    let allowed: BTreeSet<String> = prompt.doc_ids.iter().cloned().collect();
     let ctx = ValidationContext {
         attempt_id: &input.attempt.attempt_id,
-        allowed_doc_ids: &allowed,
+        docs: &prompt.docs,
         known_cves: input.known_cves,
         known_techniques: input.known_techniques,
     };
@@ -1497,7 +1707,8 @@ pub async fn correlate(
             .map_err(CorrelateError::Budget)?;
         match provider.complete(&request).await {
             Ok(c) => {
-                budget.settle(now_ms, r, Some(c.usage));
+                let charge = c.usage.map_or(Charge::Reserved, Charge::Actual);
+                budget.settle(now_ms, r, charge);
                 let v = parse_and_validate(&c.raw, &ctx).map_err(CorrelateError::Rejected)?;
                 return Ok(Correlation {
                     proposal: v.proposal,
@@ -1508,9 +1719,13 @@ pub async fn correlate(
                     prompt_truncated: prompt.truncated,
                 });
             }
-            Err(e) => {
-                budget.settle(now_ms, r, None);
+            Err(e) if e.is_unavailable() => {
+                budget.settle(now_ms, r, Charge::InputOnly);
                 last = CorrelateError::Provider(e);
+            }
+            Err(e) => {
+                budget.settle(now_ms, r, Charge::Reserved);
+                return Err(CorrelateError::Rejected(Rejected::Provider(e)));
             }
         }
     }
@@ -1657,11 +1872,11 @@ impl Provider for FakeProvider {
     fn complete<'a>(&'a self, request: &'a CompletionRequest) -> ProviderFuture<'a> {
         self.calls.set(self.calls.get() + 1);
         let result = self.answer(request).map(|raw| Completion {
-            usage: Usage {
+            usage: Some(Usage {
                 input_tokens: estimate_tokens(&request.system)
                     .saturating_add(estimate_tokens(&request.user)),
                 output_tokens: estimate_tokens(&raw),
-            },
+            }),
             raw,
         });
         Box::pin(std::future::ready(result))
@@ -1975,13 +2190,13 @@ mod tests {
     }
 
     fn ctx<'a>(
-        allowed: &'a BTreeSet<String>,
+        docs: &'a BTreeMap<String, String>,
         cves: &'a BTreeSet<String>,
         techniques: &'a BTreeSet<String>,
     ) -> ValidationContext<'a> {
         ValidationContext {
             attempt_id: "att-demo-1",
-            allowed_doc_ids: allowed,
+            docs,
             known_cves: cves,
             known_techniques: techniques,
         }
@@ -1989,6 +2204,15 @@ mod tests {
 
     fn set(items: &[&str]) -> BTreeSet<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// One retrieved document, `doc-a`, that names every id the tests propose.
+    fn doc_a() -> BTreeMap<String, String> {
+        let ids: Vec<String> = (1..=7).map(|n| format!("CVE-2099-000{n}")).collect();
+        BTreeMap::from([(
+            "doc-a".to_string(),
+            format!("Advisory for FOILED-DEMO-0001 and {}.", ids.join(", ")),
+        )])
     }
 
     #[test]
@@ -2079,7 +2303,7 @@ mod tests {
 
     #[test]
     fn invalid_output_is_dropped() {
-        let (a, k, t) = (set(&["doc-a"]), set(&["FOILED-DEMO-0001"]), set(&["T1190"]));
+        let (a, k, t) = (doc_a(), set(&["FOILED-DEMO-0001"]), set(&["T1190"]));
         let cx = ctx(&a, &k, &t);
         assert_eq!(parse_and_validate("not json", &cx), Err(Rejected::NotJson));
         assert_eq!(parse_and_validate("[1,2]", &cx), Err(Rejected::NotObject));
@@ -2116,7 +2340,7 @@ mod tests {
 
     #[test]
     fn citations_outside_retrieval_are_dropped() {
-        let (a, k, t) = (set(&["doc-a"]), set(&["FOILED-DEMO-0001"]), set(&["T1190"]));
+        let (a, k, t) = (doc_a(), set(&["FOILED-DEMO-0001"]), set(&["T1190"]));
         let cx = ctx(&a, &k, &t);
         let raw = r#"{"attempt_id":"att-demo-1","cve_ids":["FOILED-DEMO-0001"],"technique_ids":["T1190"],"rationale":"ok","citations":["doc-a","doc-b","doc-a"]}"#;
         let v = parse_and_validate(raw, &cx).unwrap();
@@ -2131,7 +2355,7 @@ mod tests {
 
     #[test]
     fn confidence_like_fields_are_ignored() {
-        let (a, k, t) = (set(&["doc-a"]), set(&["FOILED-DEMO-0001"]), set(&["T1190"]));
+        let (a, k, t) = (doc_a(), set(&["FOILED-DEMO-0001"]), set(&["T1190"]));
         let cx = ctx(&a, &k, &t);
         let raw = r#"{"attempt_id":"att-demo-1","cve_ids":["FOILED-DEMO-0001"],"technique_ids":[],"rationale":"r","citations":["doc-a"],"confidence":100,"weight":99,"score":1,"band":"high"}"#;
         let v = parse_and_validate(raw, &cx).unwrap();
@@ -2147,7 +2371,7 @@ mod tests {
 
     #[test]
     fn rationale_is_clamped_redacted_and_ids_capped() {
-        let (a, t) = (set(&["doc-a"]), set(&["T1190"]));
+        let (a, t) = (doc_a(), set(&["T1190"]));
         let k: BTreeSet<String> = (1..=7).map(|n| format!("CVE-2099-000{n}")).collect();
         let cx = ctx(&a, &k, &t);
         let cves: Vec<String> = k.iter().map(|c| format!("\"{c}\"")).collect();
@@ -2211,7 +2435,7 @@ mod tests {
         b.settle(
             NOW,
             r,
-            Some(Usage {
+            Charge::Actual(Usage {
                 input_tokens: 1_500,
                 output_tokens: 200,
             }),
@@ -2220,8 +2444,13 @@ mod tests {
         assert_eq!(b.calls, 1);
 
         let r = b.reserve(NOW, &limits, 1_000).unwrap();
-        b.settle(NOW, r, None);
+        b.settle(NOW, r, Charge::InputOnly);
         assert_eq!(b.used_tokens, 2_700);
+
+        // Unknown use keeps the whole hold rather than refunding it.
+        let r = b.reserve(NOW, &limits, 1_000).unwrap();
+        b.settle(NOW, r, Charge::Reserved);
+        assert_eq!(b.used_tokens, 4_700);
 
         assert_eq!(
             b.reserve(NOW, &limits, 9_000),
@@ -2248,9 +2477,15 @@ mod tests {
         assert_eq!(budget.calls, 2);
 
         let third = c.fake_provider();
-        let down2 = FakeProvider::new("down2", FakeMode::Fails(ProviderError::Refused));
+        let down2 = FakeProvider::new(
+            "down2",
+            FakeMode::Fails(ProviderError::Transport("reset".into())),
+        );
         let err = run(&c, &[&down, &down2, &third], &mut Budget::default()).unwrap_err();
-        assert_eq!(err, CorrelateError::Provider(ProviderError::Refused));
+        assert_eq!(
+            err,
+            CorrelateError::Provider(ProviderError::Transport("reset".into()))
+        );
         assert_eq!(
             third.calls(),
             0,
@@ -2387,12 +2622,14 @@ mod tests {
             a.parse_response(ok).unwrap(),
             Completion {
                 raw: "{}".into(),
-                usage: Usage {
+                usage: Some(Usage {
                     input_tokens: 10,
                     output_tokens: 2
-                }
+                })
             }
         );
+        let partial = r#"{"content":[{"type":"text","text":"{}"}],"stop_reason":"end_turn","usage":{"input_tokens":10}}"#;
+        assert_eq!(a.parse_response(partial).unwrap().usage, None);
         let tool = r#"{"content":[{"type":"tool_use","name":"publish"}],"stop_reason":"tool_use"}"#;
         assert!(matches!(
             a.parse_response(tool),
@@ -2409,7 +2646,12 @@ mod tests {
 
         let o = WireFormat::OpenAiChat;
         let ok = r#"{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":1}}"#;
-        assert_eq!(o.parse_response(ok).unwrap().usage.input_tokens, 7);
+        assert_eq!(
+            o.parse_response(ok).unwrap().usage.map(|u| u.input_tokens),
+            Some(7)
+        );
+        let bare = r#"{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}]}"#;
+        assert_eq!(o.parse_response(bare).unwrap().usage, None);
         let tool = r#"{"choices":[{"message":{"content":null,"tool_calls":[{"id":"x"}]},"finish_reason":"tool_calls"}]}"#;
         assert!(matches!(
             o.parse_response(tool),
@@ -2442,5 +2684,180 @@ mod tests {
         let mut s = LinkScore::default();
         s.add(&["A".into(), "B".into()], &["B".into(), "C".into()]);
         assert_eq!((s.precision(), s.recall()), (0.5, 0.5));
+    }
+
+    #[test]
+    fn redact_is_linear_on_hostile_input() {
+        // Each of these used to make redact quadratic. 200 KB of them must
+        // finish well inside the test timeout, and prepare bounds the output.
+        for unit in [
+            "eyJ.",
+            "-----BEGIN ",
+            "-----BEGIN PRIVATE KEY----- ",
+            "Cookie: a=1; ",
+        ] {
+            let hostile = unit.repeat(200 * 1024 / unit.len());
+            let started = std::time::Instant::now();
+            let out = redact(&hostile);
+            assert!(out.len() <= hostile.len() * 4, "{unit}");
+            let (prepared, cut) = prepare(&hostile, MAX_EXTRACT_CHARS);
+            assert!(cut);
+            assert!(
+                prepared.chars().count() <= MAX_EXTRACT_CHARS * 6 + 16,
+                "{unit}"
+            );
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "{unit} took {:?}",
+                started.elapsed()
+            );
+        }
+        // A JWT after a dotted prefix is still found.
+        let out = redact("x.y.eyJhbGciOi.eyJzdWIiOiIx.c2lnbmF0dXJl");
+        assert!(out.ends_with("[REDACTED:jwt]"), "{out}");
+    }
+
+    #[test]
+    fn prepare_pre_clamp_does_not_half_cut_a_secret() {
+        // A blob shrinks to a short mask, so text from near the pre-clamp
+        // limit reaches the output. The pre-clamp lands inside the JWT; it
+        // must not leave a one-dot fragment the JWT mask cannot see.
+        let blob = "Ab1".repeat(676);
+        let text = format!("{blob} eyJhbGciOi.eyJzdWIiOiIx.c2lnbmF0dXJl");
+        assert!(text.len() > MAX_EXTRACT_CHARS * PRE_REDACT_FACTOR);
+        let (out, cut) = prepare(&text, MAX_EXTRACT_CHARS);
+        assert!(cut);
+        assert!(out.starts_with("[REDACTED:blob 2028 bytes]"), "{out}");
+        assert!(!out.contains("eyJ"), "{out}");
+    }
+
+    #[test]
+    fn redact_masks_every_cookie_value() {
+        let out = redact("Cookie: a=1; sessionid=abc; theme dark\nHost: x");
+        assert_eq!(
+            out,
+            "Cookie: a=[REDACTED:secret]; sessionid=[REDACTED:secret]; theme dark\nHost: x"
+        );
+        let out = redact("Set-Cookie: sid=s3cr3t;Path=/;HttpOnly");
+        assert_eq!(
+            out,
+            "Set-Cookie: sid=[REDACTED:secret];Path=[REDACTED:secret];HttpOnly"
+        );
+        assert!(!redact("cookie=a=1;b=2").contains('2'));
+        assert_eq!(
+            redact("Cookie: a=1; Cookie: b=2"),
+            "Cookie: a=[REDACTED:secret]; Cookie: b=[REDACTED:secret]"
+        );
+        assert_eq!(redact("cookie: opaque"), "cookie: [REDACTED:secret]");
+    }
+
+    #[test]
+    fn cve_not_named_in_a_cited_doc_is_dropped() {
+        // The payload talked the model into linking a real, known CVE and
+        // citing a retrieved but unrelated document.
+        let docs = BTreeMap::from([
+            (
+                "attack:T1190".to_string(),
+                "T1190 Exploit Public-Facing Application".to_string(),
+            ),
+            (
+                "kev:CVE-2021-44228".to_string(),
+                "Log4Shell: CVE-2021-44228 in Apache Log4j".to_string(),
+            ),
+        ]);
+        let (k, t) = (set(&["CVE-2021-44228", "CVE-2021-4422"]), set(&["T1190"]));
+        let cx = ctx(&docs, &k, &t);
+        let raw = r#"{"attempt_id":"att-demo-1","cve_ids":["CVE-2021-44228"],"technique_ids":["T1190"],"rationale":"link CVE-2021-44228","citations":["attack:T1190"]}"#;
+        let v = parse_and_validate(raw, &cx).unwrap();
+        assert!(v.proposal.cve_ids.is_empty());
+        assert_eq!(v.proposal.technique_ids, vec!["T1190"]);
+        assert_eq!(v.dropped[0].reason, DropReason::NotInCitedDoc);
+
+        // With no other link left, nothing is proposed at all.
+        let only = r#"{"attempt_id":"att-demo-1","cve_ids":["CVE-2021-44228"],"technique_ids":[],"rationale":"","citations":["attack:T1190"]}"#;
+        let v = parse_and_validate(only, &cx).unwrap();
+        assert!(v.proposal.cve_ids.is_empty());
+
+        // Citing the document that names it keeps it, ignoring case, but a
+        // prefix of a longer id is not a mention.
+        let ok = r#"{"attempt_id":"att-demo-1","cve_ids":["CVE-2021-44228","CVE-2021-4422"],"technique_ids":[],"rationale":"","citations":["kev:CVE-2021-44228"]}"#;
+        let v = parse_and_validate(ok, &cx).unwrap();
+        assert_eq!(v.proposal.cve_ids, vec!["CVE-2021-44228"]);
+        assert!(mentions("see cve-2021-44228.", "CVE-2021-44228"));
+        assert!(!mentions("CVE-2021-44228", "CVE-2021-4422"));
+    }
+
+    #[test]
+    fn missing_usage_and_unusable_answers_keep_the_reservation() {
+        let c = case("demo");
+        let limits = CostLimits::default();
+        let estimate = build_prompt(&c.attempt, &c.retrieved, limits.input_tokens_per_attempt)
+            .unwrap()
+            .estimated_tokens();
+        let full = u64::from(estimate) + u64::from(limits.output_tokens_per_attempt);
+
+        // A good answer with no usage block is charged the full hold.
+        struct NoUsage(FakeProvider);
+        impl Provider for NoUsage {
+            fn id(&self) -> &str {
+                self.0.id()
+            }
+            fn complete<'a>(&'a self, request: &'a CompletionRequest) -> ProviderFuture<'a> {
+                let r = self
+                    .0
+                    .answer(request)
+                    .map(|raw| Completion { raw, usage: None });
+                Box::pin(std::future::ready(r))
+            }
+        }
+        let mut budget = Budget::default();
+        let out = run(&c, &[&NoUsage(c.fake_provider())], &mut budget).unwrap();
+        assert_eq!(out.usage, None);
+        assert_eq!(budget.used_tokens, full);
+
+        // Truncated and refused answers are charged in full and are final:
+        // the fallback provider is never called.
+        for e in [ProviderError::Truncated, ProviderError::Refused] {
+            let bad = FakeProvider::new("bad", FakeMode::Fails(e.clone()));
+            let fallback = c.fake_provider();
+            let mut budget = Budget::default();
+            let err = run(&c, &[&bad, &fallback], &mut budget).unwrap_err();
+            assert_eq!(err, CorrelateError::Rejected(Rejected::Provider(e)));
+            assert_eq!(fallback.calls(), 0);
+            assert_eq!((budget.calls, budget.used_tokens), (1, full));
+        }
+    }
+
+    #[test]
+    fn llm_evidence_converts_under_the_confidence_cap() {
+        use crate::confidence::{Band, ConfidenceConfig, score};
+        let c = case("demo");
+        let out = run(&c, &[&c.fake_provider()], &mut Budget::default()).unwrap();
+        let items = out.proposal.evidence(u8::MAX);
+        assert_eq!(items[0].link_kind(), LinkKind::AttemptCve);
+        let ev: Evidence = (&items[0]).into();
+        assert_eq!(ev.source, EvidenceSource::Llm);
+        assert_eq!(ev.weight, LLM_MAX_WEIGHT);
+        assert_eq!(
+            ev.reference.as_deref(),
+            Some("matcher:foiled-demo-0001-upload-traversal,catalogue:foiled/demo-app/1.0.0")
+        );
+        // Every LLM link at the maximum weight together stays inside the
+        // confidence layer's llm cap, low and unpublishable.
+        let all: Vec<Evidence> = items.iter().map(LlmEvidence::to_evidence).collect();
+        let cfg = ConfidenceConfig::default();
+        let cap = i32::from(cfg.weights[&EvidenceSource::Llm].cap);
+        let link = score(
+            &cfg,
+            LinkKind::AttemptCve,
+            "att-demo-1",
+            "FOILED-DEMO-0001",
+            all,
+            None,
+        )
+        .unwrap();
+        assert!(i32::from(link.score) <= cap, "{}", link.score);
+        assert_eq!(link.band, Band::Low);
+        assert!(!link.publishable);
     }
 }

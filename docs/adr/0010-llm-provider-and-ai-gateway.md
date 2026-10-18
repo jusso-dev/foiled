@@ -56,7 +56,7 @@ One gateway is dedicated to LLM correlation, so its settings do not leak into ot
 | Logging | **Off.** Gateway logging is on by default; turn it off in the gateway settings. The worker also sends `cf-aig-collect-log: false` on every request. | Gateway logs hold prompt text, which can hold personal information (#16). With logging off there is nothing to retain or purge. Usage and outcomes are recorded by the worker in Postgres without prompt text. An operator who must debug can allow metadata-only logs (log on, with `cf-aig-collect-log-payload: false`) for a time-boxed window. |
 | Retries | `cf-aig-max-attempts: 2`, `cf-aig-retry-delay: 1000`, `cf-aig-backoff: exponential` | Absorbs transient provider errors at the gateway. |
 | Timeout | `cf-aig-request-timeout: 60000` | A stuck provider triggers the next provider instead of eating wall time. |
-| Provider fallback | Consumer-side, in `providers` order, at most `calls_per_attempt` (2) calls | Each fallback call is budgeted and validated the same way. A dropped (invalid or ungrounded) output is never retried on another provider. |
+| Provider fallback | Consumer-side, in `providers` order, at most `calls_per_attempt` (2) calls, on transport errors and rate limits only | Each fallback call is budgeted and validated the same way. A dropped (invalid or ungrounded) output, a refusal or a truncated answer is never retried on another provider. |
 
 ### Token budget enforcement
 
