@@ -527,3 +527,51 @@ async fn restricted_profiles_link_but_never_export() {
             .all(|x| x.target != c.label)
     );
 }
+
+#[tokio::test]
+async fn an_empty_sync_never_replaces_a_good_snapshot() {
+    let blobs = MemoryBlobs::default();
+    let http = FakeThreatSieve::new();
+    let cfg = config(50);
+    sync_to_end(&blobs, &http, &cfg).await;
+    let (sha, _) = current_snapshot(&blobs, &cfg, now()).await.unwrap();
+    // A day later every detail fails.
+    let day = i64::from(cfg.threatsieve.refresh_after_hours) * HOUR;
+    *http.force.borrow_mut() = Some(400);
+    let mut at = now() + day;
+    let mut outcomes = Vec::new();
+    for _ in 0..3 {
+        outcomes.push(sync(&blobs, Some(&http), &cfg, at).await);
+        at += HOUR;
+    }
+    assert!(
+        matches!(outcomes[0], SyncOutcome::Stalled { .. }),
+        "a 400 on a list page stalls: {outcomes:?}"
+    );
+    // Lists answer, details all fail: nothing published.
+    let blobs = MemoryBlobs::default();
+    let http = FakeThreatSieve::new();
+    sync_to_end(&blobs, &http, &cfg).await;
+    let mut empty = http.responses.clone();
+    for (k, v) in empty.as_object_mut().unwrap() {
+        if k.starts_with("/v1/entities/") {
+            v["status"] = 400.into();
+        }
+    }
+    let http = FakeThreatSieve {
+        responses: empty,
+        seen: RefCell::new(Vec::new()),
+        force: RefCell::new(None),
+    };
+    let o = sync(&blobs, Some(&http), &cfg, now() + day).await;
+    assert!(matches!(o, SyncOutcome::Restarted(_)), "{o:?}");
+    let (kept, _) = current_snapshot(&blobs, &cfg, now() + day).await.unwrap();
+    assert_eq!(kept, sha, "the good snapshot stays current");
+    let calls = http.seen.borrow().len();
+    assert_eq!(
+        sync(&blobs, Some(&http), &cfg, now() + day + HOUR).await,
+        SyncOutcome::UpToDate,
+        "no full sync every hour"
+    );
+    assert_eq!(http.seen.borrow().len(), calls);
+}

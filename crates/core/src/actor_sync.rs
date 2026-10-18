@@ -508,7 +508,7 @@ impl SyncState {
         let details = self.phase == Phase::Details;
         match status {
             200 => {}
-            429 | 500..=599 => return Err(SyncError::Later { retry_after_secs }),
+            408 | 425 | 429 | 500..=599 => return Err(SyncError::Later { retry_after_secs }),
             // The key, not the entity: every call would fail the same way.
             401 | 403 => return Err(SyncError::Refused(format!("ThreatSieve answered {status}"))),
             404 if details => {

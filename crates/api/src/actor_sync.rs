@@ -109,7 +109,8 @@ pub enum SyncOutcome {
         calls: u32,
         why: String,
     },
-    /// The sync finished without a single entity; the next run starts over.
+    /// The sync finished without a single entity: nothing is published and
+    /// the next sync starts after `refresh_after_hours`.
     Restarted(String),
     /// A new snapshot is current.
     Completed {
@@ -159,7 +160,17 @@ pub async fn run_sync(d: &SyncDeps<'_>) -> SyncOutcome {
         .filter(|s| s.format == foiled_core::actor_sync::FORMAT);
     let max_idle = i64::from(t.max_sync_hours) * HOUR_MS;
     let mut state = match saved {
-        Some(s) if s.is_done() && !s.published => s,
+        // Finished but not written: write it again while it is still worth
+        // serving (a state without `finished_at` predates this format).
+        Some(s)
+            if s.is_done()
+                && !s.published
+                && s.finished_at.is_some_and(|at| {
+                    d.now_ms - at <= i64::from(t.stale_after_hours) * HOUR_MS
+                }) =>
+        {
+            s
+        }
         Some(s) if !s.is_done() && d.now_ms - s.last_progress() <= max_idle => s,
         saved => {
             let last_sync = match saved.as_ref().filter(|s| s.is_done()) {
@@ -221,12 +232,18 @@ pub async fn run_sync(d: &SyncDeps<'_>) -> SyncOutcome {
         let _ = save_state(d, &state).await;
         return SyncOutcome::Progress { calls };
     }
-    if state.details.is_empty() && !state.queue.is_empty() {
-        // Every detail fetch failed: never replace a good snapshot with that.
-        let why = "every detail fetch failed or was missing".to_string();
-        let mut fresh = SyncState::new(d.now_ms);
-        fresh.last_error = Some(why.clone());
-        let _ = save_state(d, &fresh).await;
+    if state.details.is_empty() {
+        // Nothing listed, or every detail failed: never replace a good
+        // snapshot with an empty one. Recorded as a finished sync, so the
+        // next attempt waits for refresh_after_hours instead of running a
+        // full sync every hour.
+        let why = "the sync found no entity to import".to_string();
+        let mut done = SyncState::new(d.now_ms);
+        done.phase = foiled_core::actor_sync::Phase::Done;
+        done.finished_at = Some(d.now_ms);
+        done.published = true;
+        done.last_error = Some(why.clone());
+        let _ = save_state(d, &done).await;
         return SyncOutcome::Restarted(why);
     }
     let synced_at = *state.finished_at.get_or_insert(d.now_ms);
