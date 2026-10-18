@@ -7,6 +7,7 @@ pub const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/d1/0001_init.sql"),
     include_str!("../../../migrations/d1/0002_host_jobs.sql"),
     include_str!("../../../migrations/d1/0003_enrolment.sql"),
+    include_str!("../../../migrations/d1/0004_enrich_cache.sql"),
 ];
 
 pub const TOKEN_BY_ID: &str = "SELECT id, tenant_id, role, scopes, secret_sha256, expires_at, revoked \
@@ -191,6 +192,65 @@ pub const RELEASE_ENROLMENT_TOKEN: &str = "UPDATE enrolment_tokens SET used_at =
 pub const RECORD_AGENT_SEEN: &str = "UPDATE agents SET last_seen_at = ?3, last_ip = ?4, last_asn = ?5, \
      network_changed_at = CASE WHEN ?6 = 1 THEN ?3 ELSE network_changed_at END \
      WHERE tenant_id = ?1 AND id = ?2";
+
+// Enrichment cache reads (#11).
+
+/// D1 binds at most 100 parameters per statement.
+pub const D1_MAX_BOUND_PARAMS: usize = 100;
+
+/// Observable values per lookup statement: the bound limit less the kind
+/// and the clock.
+pub const ENRICH_LOOKUP_CHUNK: usize = D1_MAX_BOUND_PARAMS - 2;
+
+/// Cache rows for some values of one kind that are still fresh. `?1` kind,
+/// `?2` now (unix ms), `?3`.. the values. Uses `enrich_cache_observable`.
+pub fn enrich_cache_lookup(values: usize) -> String {
+    let list: Vec<String> = (0..values).map(|i| format!("?{}", i + 3)).collect();
+    format!(
+        "SELECT provider, kind, value, fetched_at, ttl_secs, facts FROM enrich_cache \
+         WHERE kind = ?1 AND value IN ({}) AND fetched_at + ttl_secs * 1000 > ?2",
+        list.join(", ")
+    )
+}
+
+/// How to look up a set of observables in at most `max_statements`
+/// statements: duplicates removed first, then the first
+/// `max_statements * ENRICH_LOOKUP_CHUNK` kept (callers pass the newest
+/// first), then one `(kind, values)` per statement, grouped by kind, at most
+/// [`ENRICH_LOOKUP_CHUNK`] values each. Send them in one D1 batch.
+pub fn enrich_lookup_plan(
+    observables: &[foiled_core::enrichment::Observable],
+    max_statements: usize,
+) -> Vec<(&'static str, Vec<String>)> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut seen: BTreeSet<&foiled_core::enrichment::Observable> = BTreeSet::new();
+    let mut kept: Vec<&foiled_core::enrichment::Observable> = Vec::new();
+    let budget = max_statements.saturating_mul(ENRICH_LOOKUP_CHUNK);
+    for o in observables {
+        if kept.len() == budget {
+            break;
+        }
+        if seen.insert(o) {
+            kept.push(o);
+        }
+    }
+    let mut by_kind: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    for o in kept {
+        by_kind
+            .entry(o.kind.as_str())
+            .or_default()
+            .push(o.value.clone());
+    }
+    let mut plan = Vec::new();
+    for (kind, values) in by_kind {
+        for chunk in values.chunks(ENRICH_LOOKUP_CHUNK) {
+            plan.push((kind, chunk.to_vec()));
+        }
+    }
+    // Grouping by kind can split the budget unevenly; never exceed it.
+    plan.truncate(max_statements);
+    plan
+}
 
 #[cfg(test)]
 mod tests {
@@ -888,5 +948,113 @@ mod tests {
         c.execute(RELEASE_ENROLMENT_TOKEN, params!["e1", 8])
             .unwrap();
         assert!(!consume(&c, "e1", 10), "never reopened for a revoked agent");
+    }
+
+    fn insert_cache(
+        c: &Connection,
+        provider: &str,
+        kind: &str,
+        value: &str,
+        fetched: i64,
+        ttl: i64,
+    ) {
+        c.execute(
+            "INSERT INTO enrich_cache (cache_key, provider, kind, value, fetched_at, ttl_secs, facts) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]')",
+            params![format!("{provider}:{kind}:{value}"), provider, kind, value, fetched, ttl],
+        )
+        .unwrap();
+    }
+
+    fn lookup(c: &Connection, kind: &str, now: i64, values: &[String]) -> Vec<(String, String)> {
+        let mut args: Vec<rusqlite::types::Value> = vec![kind.to_string().into(), now.into()];
+        args.extend(
+            values
+                .iter()
+                .map(|v| rusqlite::types::Value::from(v.clone())),
+        );
+        let mut st = c.prepare(&enrich_cache_lookup(values.len())).unwrap();
+        st.query_map(rusqlite::params_from_iter(args), |r| {
+            Ok((r.get(0)?, r.get(2)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    #[test]
+    fn enrichment_cache_lookup_is_batched_fresh_and_bound() {
+        use foiled_core::enrichment::Observable;
+        let c = db();
+        let now = 1_800_000_000_000;
+        insert_cache(&c, "local_asn", "ip", "203.0.113.7", now - 1000, 604_800);
+        insert_cache(&c, "greynoise", "ip", "203.0.113.7", now - 1000, 86_400);
+        // Expired: fetched two days ago with a one day TTL.
+        insert_cache(
+            &c,
+            "greynoise",
+            "ip",
+            "198.51.100.23",
+            now - 2 * 86_400_000,
+            86_400,
+        );
+        insert_cache(&c, "local_asn", "domain", "stage2.example.invalid", now, 60);
+        // A value that looks like SQL is only ever a bound parameter.
+        let hostile = "x') OR 1=1 --".to_string();
+
+        let got = lookup(
+            &c,
+            "ip",
+            now,
+            &[
+                "203.0.113.7".into(),
+                "198.51.100.23".into(),
+                hostile.clone(),
+            ],
+        );
+        let mut got: Vec<String> = got.into_iter().map(|(p, _)| p).collect();
+        got.sort();
+        assert_eq!(got, vec!["greynoise", "local_asn"]);
+        assert!(lookup(&c, "domain", now, &[hostile]).is_empty());
+
+        // 250 addresses and a domain: three IP statements and one domain
+        // statement, every one under D1's bound parameter limit.
+        let mut obs: Vec<Observable> = (0..250)
+            .map(|i| Observable::ip(&format!("198.51.{}.{}", i / 250, i % 250)).unwrap())
+            .collect();
+        obs.push(Observable::ip("203.0.113.7").unwrap());
+        obs.push(Observable::ip("203.0.113.7").unwrap());
+        obs.push(Observable::domain("stage2.example.invalid").unwrap());
+        let plan = enrich_lookup_plan(&obs, 20);
+        assert_eq!(plan.iter().filter(|(k, _)| *k == "ip").count(), 3);
+        assert_eq!(plan.iter().filter(|(k, _)| *k == "domain").count(), 1);
+        assert_eq!(plan.iter().map(|(_, v)| v.len()).sum::<usize>(), 252);
+        let mut hits = Vec::new();
+        for (kind, values) in &plan {
+            assert!(values.len() + 2 <= D1_MAX_BOUND_PARAMS);
+            hits.extend(lookup(&c, kind, now, values));
+        }
+        assert_eq!(hits.len(), 3, "{hits:?}");
+
+        // The statement budget bounds the work for a huge window. Duplicates
+        // go first, so they never use up the budget, and the earliest
+        // observables (callers pass the newest first) are the ones kept.
+        let ip = |i: usize| {
+            Observable::ip(&format!("10.{}.{}.{}", i / 65536, (i / 256) % 256, i % 256)).unwrap()
+        };
+        let mut many: Vec<Observable> = vec![ip(0); 500];
+        many.extend((0..5_000).map(ip));
+        let plan = enrich_lookup_plan(&many, 3);
+        assert_eq!(plan.len(), 3);
+        let kept: Vec<&String> = plan.iter().flat_map(|(_, v)| v).collect();
+        assert_eq!(kept.len(), 3 * ENRICH_LOOKUP_CHUNK);
+        assert_eq!(kept[0], "10.0.0.0");
+        assert_eq!(kept[1], "10.0.0.1", "the duplicate did not take a slot");
+        assert!(
+            !kept.iter().any(|v| *v == "10.0.19.135"),
+            "older ones are cut"
+        );
+        // The default budget stays inside the D1 Free plan.
+        assert!(enrich_lookup_plan(&many, 20).len() <= 20);
     }
 }

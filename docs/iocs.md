@@ -140,7 +140,7 @@ Address IOCs carry ASN and country context from enrichment Facts (#11): the newe
 
 Each ref says whether it is `shareable`. `local_asn` is on the never-redistribute list because its dataset may be MaxMind GeoLite2 ([enrichment.md](enrichment.md)), so its refs are `shareable: false`. `ioc::redact_for_export` drops every non-shareable ref through `ioc::export_refs`; exports (#13), the radar (#35) and contribute-back (#37) must call it. The CSV export already does: its `asn`, `as_org` and `country` columns are filled only from refs that pass `export_refs`, so with the default providers they stay empty.
 
-The API asks the store for cached Facts (`Store::enrichment_facts`) for the addresses it is about to return. The in-memory store answers in tests; the Worker store answers nothing until the `foiled-enrich` consumer writes its cache (#11), so production IOCs have no ASN refs until then. The golden test uses the fake ASN table in `testdata/enrichment/asn.csv`.
+The API reads the D1 enrichment cache for the addresses it is about to return, in one batched lookup per response, and keeps only usable Facts: fresh, within the retention cap, from the row's own provider, and only first-party providers (`local_asn`, `yara`) while `show_to_tenants` is false ([enrichment.md](enrichment.md#reading-the-cache)). If the cache cannot be read, the response still succeeds without ASN refs and says so (`x-foiled-enrichment: unavailable`, `enrichment_unavailable: true`). The cache is written by the `foiled-enrich` consumer (#11); until that runs, production IOCs have no ASN refs. The golden test uses the fake ASN table in `testdata/enrichment/asn.csv`.
 
 ## Behaviour fingerprint format
 

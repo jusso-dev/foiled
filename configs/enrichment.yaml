@@ -23,8 +23,9 @@ cache:
   # Wait before asking a provider again after an error or a rate limit.
   error_backoff_secs: 300
 
-# When false, third-party Facts are shown to operator roles only, never to
-# tenant users in central mode. Check each provider's terms before changing it.
+# When false, third-party Facts (every provider except local_asn and yara)
+# are left out of API responses. The API has no operator-only view yet.
+# Check each provider's terms before changing it. Bundled at build time.
 show_to_tenants: false
 
 providers:

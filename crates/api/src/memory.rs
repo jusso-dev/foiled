@@ -7,7 +7,7 @@ use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, agent_scopes};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
-use foiled_core::enrichment::{Observable, ObservedFacts};
+use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
 
 use crate::store::{
@@ -30,7 +30,8 @@ struct Inner {
     campaign_registry: HashMap<String, foiled_core::campaign::Registry>,
     /// Audit appends with this action fail, to test storage outages.
     fail_audit_action: Option<String>,
-    facts: Vec<(String, ObservedFacts)>,
+    cache: Vec<CacheEntry>,
+    fail_enrichment: bool,
     agents: Vec<AgentRecord>,
     enrolment_tokens: Vec<EnrolmentTokenRecord>,
     /// CA reference for each bound certificate, by fingerprint.
@@ -104,10 +105,18 @@ impl MemoryStore {
         }
     }
 
-    /// Cached enrichment Facts for a tenant, as the enrichment consumer
-    /// would leave them (#11).
-    pub fn add_facts(&self, tenant_id: &str, facts: ObservedFacts) {
-        self.lock().facts.push((tenant_id.to_string(), facts));
+    /// An enrichment cache row, as the `foiled-enrich` consumer would leave
+    /// it in D1 (#11). Replaces the row for the same provider and
+    /// observable.
+    /// Make enrichment cache reads fail, to test graceful degradation.
+    pub fn fail_enrichment_reads(&self) {
+        self.lock().fail_enrichment = true;
+    }
+
+    pub fn add_cache_entry(&self, entry: CacheEntry) {
+        let mut g = self.lock();
+        g.cache.retain(|e| e.key() != entry.key());
+        g.cache.push(entry);
     }
 
     /// The campaign registry recorded for a tenant (tests).
@@ -449,17 +458,29 @@ impl Store for MemoryStore {
         ready(Ok(out))
     }
 
-    fn enrichment_facts(
+    fn enrichment_cache(
         &self,
-        tenant_id: &str,
         observables: Vec<Observable>,
-    ) -> StoreFuture<'_, Vec<ObservedFacts>> {
+        now_ms: i64,
+        max_statements: usize,
+    ) -> StoreFuture<'_, Vec<CacheEntry>> {
+        // The same plan and rows as the D1 store: the observables the
+        // statement budget covers, matching rows that are still fresh.
+        let plan = crate::d1_sql::enrich_lookup_plan(&observables, max_statements);
+        let wanted = |e: &CacheEntry| {
+            plan.iter().any(|(kind, values)| {
+                *kind == e.observable.kind.as_str() && values.contains(&e.observable.value)
+            })
+        };
+        if self.lock().fail_enrichment {
+            return ready(Err(StoreError("enrichment cache unavailable".into())));
+        }
         let out = self
             .lock()
-            .facts
+            .cache
             .iter()
-            .filter(|(t, f)| t == tenant_id && observables.contains(&f.observable))
-            .map(|(_, f)| f.clone())
+            .filter(|e| wanted(e) && e.is_fresh(now_ms))
+            .cloned()
             .collect();
         ready(Ok(out))
     }

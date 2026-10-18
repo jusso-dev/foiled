@@ -17,7 +17,7 @@ use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
-use foiled_core::enrichment::{Observable, ObservedFacts};
+use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, SeenFrom};
 use serde::{Deserialize, Serialize};
 
@@ -374,17 +374,21 @@ pub trait Store: Send + Sync {
     /// Source IPs seen since `since` (Unix ms), oldest first.
     fn ip_iocs(&self, tenant_id: &str, since: i64) -> StoreFuture<'_, Vec<IpIocRow>>;
 
-    /// Cached enrichment Facts (#11) for these observables, used for ASN
-    /// context on IOCs (#34). Observables with no cached Facts are left
-    /// out. The default knows none: the Worker store answers from the
-    /// enrichment cache once the `foiled-enrich` consumer writes it.
-    fn enrichment_facts(
+    /// Enrichment cache rows (#11) for these observables that are still
+    /// fresh at `now_ms`, from every provider. The cache is shared by all
+    /// tenants of a deployment (the operator owns the provider keys); what a
+    /// caller may read from it is decided by
+    /// [`crate::enrichment::cached_facts`], never by the store. The Worker
+    /// store reads D1 `enrich_cache` in one batch of at most
+    /// `max_statements` chunked statements (`d1_sql::enrich_lookup_plan`);
+    /// pass the newest observables first, since the oldest are dropped when
+    /// the budget runs out.
+    fn enrichment_cache(
         &self,
-        _tenant_id: &str,
-        _observables: Vec<Observable>,
-    ) -> StoreFuture<'_, Vec<ObservedFacts>> {
-        Box::pin(std::future::ready(Ok(Vec::new())))
-    }
+        observables: Vec<Observable>,
+        now_ms: i64,
+        max_statements: usize,
+    ) -> StoreFuture<'_, Vec<CacheEntry>>;
 
     fn record_heartbeat(
         &self,

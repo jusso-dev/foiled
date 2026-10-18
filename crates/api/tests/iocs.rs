@@ -10,7 +10,7 @@ use foiled_api::store::{Store, TokenRecord};
 use foiled_api::{AppState, router};
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::CaptureEvent;
-use foiled_core::enrichment::{Fact, Observable, ObservedFacts};
+use foiled_core::enrichment::{CacheEntry, Fact, Observable};
 use http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -55,8 +55,8 @@ async fn harness() -> AppState {
     .unwrap();
     let events: Vec<CaptureEvent> = serde_json::from_value(raw["events"].clone()).unwrap();
     store.enqueue_events(events).await.unwrap();
-    let fact = |key: &str, value: Value| Fact {
-        provider: "local_asn".into(),
+    let fact = |provider: &str, key: &str, value: Value| Fact {
+        provider: provider.into(),
         key: key.into(),
         value,
         confidence: 90,
@@ -64,28 +64,54 @@ async fn harness() -> AppState {
         ttl_secs: 604_800,
         raw_ref: None,
     };
-    store.add_facts(
-        "t1",
-        ObservedFacts {
-            observable: Observable::ip("203.0.113.50").unwrap(),
-            facts: vec![
-                fact("asn.number", json!(64498)),
-                fact("asn.org", json!("Example Hosting")),
-                fact("greynoise.noise", json!(true)),
-            ],
-        },
-    );
-    // A provider not on the never-redistribute list, for the export guard.
-    store.add_facts(
-        "t1",
-        ObservedFacts {
-            observable: Observable::ip("203.0.113.50").unwrap(),
-            facts: vec![Fact {
-                provider: "team_asn".into(),
-                ..fact("geo.country", json!("US"))
-            }],
-        },
-    );
+    let row =
+        |provider: &str, ip: &str, fetched_at: i64, ttl_secs: u64, facts: Vec<Fact>| CacheEntry {
+            provider: provider.into(),
+            observable: Observable::ip(ip).unwrap(),
+            fetched_at,
+            ttl_secs,
+            facts,
+        };
+    // As the foiled-enrich consumer leaves them in D1 (#11).
+    store.add_cache_entry(row(
+        "local_asn",
+        "203.0.113.50",
+        T0,
+        604_800,
+        vec![
+            fact("local_asn", "asn.number", json!(64498)),
+            fact("local_asn", "asn.org", json!("Example Hosting")),
+            // A Fact under another provider's name is never trusted.
+            fact("greynoise", "greynoise.noise", json!(true)),
+        ],
+    ));
+    // A provider nobody listed as first party: third party by default.
+    store.add_cache_entry(row(
+        "team_asn",
+        "203.0.113.50",
+        T0,
+        604_800,
+        vec![fact("team_asn", "geo.country", json!("US"))],
+    ));
+    // Third-party data: not shown to tenants (show_to_tenants: false).
+    store.add_cache_entry(row(
+        "crowdsec",
+        "203.0.113.50",
+        T0,
+        86_400,
+        vec![fact("crowdsec", "asn.number", json!(64999))],
+    ));
+    // Expired row: fetched two days before the clock with a one day TTL.
+    store.add_cache_entry(row(
+        "local_asn",
+        "192.0.2.80",
+        T0 - 2 * 86_400_000,
+        86_400,
+        vec![Fact {
+            observed_at: T0 - 2 * 86_400_000,
+            ..fact("local_asn", "asn.number", json!(64496))
+        }],
+    ));
     AppState::new(store, Arc::new(|| T0 + 3_600_000))
 }
 
@@ -132,11 +158,18 @@ async fn search_lists_tenant_iocs_with_asn_context_and_no_file_hash() {
         .collect();
     assert_eq!(
         keys,
-        vec!["asn.number", "asn.org", "geo.country"],
-        "only ASN and geo facts"
+        vec!["asn.number", "asn.org"],
+        "ASN facts from the operator's own table only: no third-party or unlisted \
+         provider, no Fact under another provider's name"
     );
+    assert!(
+        !src.to_string().contains("64999"),
+        "crowdsec is third party"
+    );
+    // An expired cache row gives no context.
+    let stale = all.iter().find(|i| i["value"] == "192.0.2.80").unwrap();
+    assert_eq!(stale["enrichment"], json!([]));
     assert_eq!(src["enrichment"][0]["shareable"], false);
-    assert_eq!(src["enrichment"][2]["shareable"], true);
     assert_eq!(src["display"], "203[.]0[.]113[.]50");
 
     // Another tenant sees nothing; a token without iocs:read is refused.
@@ -292,9 +325,10 @@ async fn csv_export_keeps_never_redistribute_asn_data_out() {
         .lines()
         .find(|l| l.starts_with("ipv4,203.0.113.50,"))
         .unwrap();
-    // local_asn (ASN 64498, Example Hosting) is never exported; the
-    // shareable team_asn country is.
-    assert!(row.ends_with(",,,US"), "{row}");
+    // local_asn (ASN 64498, Example Hosting) is never exported, and the
+    // unlisted team_asn is third party, so nothing reaches the columns.
+    assert!(row.ends_with(",,,"), "{row}");
+    assert!(!row.contains("US"), "{row}");
     assert!(!csv.contains("64498") && !csv.contains("Example Hosting"));
 }
 
@@ -314,4 +348,57 @@ async fn ioc_links_cannot_be_overridden_per_attempt() {
     .await;
     assert_eq!(st, StatusCode::BAD_REQUEST, "{text}");
     assert!(text.contains("attempt_ioc"));
+}
+
+#[tokio::test]
+async fn a_cache_failure_degrades_to_no_context() {
+    let s = harness().await;
+    let store = Arc::new(MemoryStore::new());
+    store.add_token(TokenRecord {
+        id: "analyst".into(),
+        tenant_id: "t1".into(),
+        role: Role::Human,
+        scopes: vec![Scope::IocsRead, Scope::ExportsRead],
+        secret_sha256: sha256_hex(SECRET),
+        expires_at: None,
+        revoked: false,
+    });
+    store
+        .enqueue_events(
+            s.store
+                .events_between("t1", 0, i64::MAX, 1000)
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    store.fail_enrichment_reads();
+    let state = AppState::new(store, Arc::new(|| T0 + 3_600_000));
+
+    let req = Request::get("/v0/iocs")
+        .header("authorization", format!("Bearer fo_analyst.{SECRET}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["x-foiled-enrichment"], "unavailable");
+    let b: Value =
+        serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(b["enrichment_unavailable"], true);
+    assert!(items(&b).iter().all(|i| i["enrichment"] == json!([])));
+    assert!(!items(&b).is_empty());
+
+    let (st, csv) = send(
+        &state,
+        "analyst",
+        Request::get("/v0/exports/iocs.csv"),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(csv.contains("203.0.113.50"));
+
+    // A healthy store says so too.
+    let (_, b) = get(&s, "analyst", "/v0/iocs").await;
+    assert_eq!(b["enrichment_unavailable"], false);
 }

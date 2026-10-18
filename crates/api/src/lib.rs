@@ -18,6 +18,7 @@ use serde::Serialize;
 pub mod auth;
 pub mod catalogue;
 pub mod d1_sql;
+pub mod enrichment;
 pub mod error;
 pub mod issuer;
 pub mod links;
@@ -62,6 +63,10 @@ pub struct Limits {
     /// Most capture events read for one attempts, IOC or export window.
     /// Larger windows are cut at this many events, oldest first (#25).
     pub max_window_events: usize,
+    /// Most D1 statements one request may spend reading the enrichment
+    /// cache (#11). Each covers up to 98 observables. The default leaves
+    /// room inside the D1 Free plan's 50 queries per Worker invocation.
+    pub enrichment_lookup_statements: usize,
 }
 
 impl Default for Limits {
@@ -81,6 +86,7 @@ impl Default for Limits {
             cert_validity_days: foiled_core::enrolment::DEFAULT_CERT_VALIDITY_DAYS,
             campaign_actions_per_hour: 60,
             max_window_events: routes::attempts::MAX_WINDOW_EVENTS,
+            enrichment_lookup_statements: 20,
         }
     }
 }

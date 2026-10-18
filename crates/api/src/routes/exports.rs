@@ -315,7 +315,9 @@ pub(crate) async fn selection_capped(
         .into_iter()
         .filter(|i| i.attempt_ids.iter().any(|a| kept.contains(a.as_str())))
         .collect();
-    crate::routes::iocs::enrich(state, &who.tenant_id, &mut iocs).await?;
+    // Enrichment is context: if the cache cannot be read the export goes
+    // out without ASN refs rather than failing.
+    let _ = crate::routes::iocs::enrich(state, &who.tenant_id, &mut iocs).await;
     let input = export_input(
         &state.catalogue,
         attempts,
@@ -532,27 +534,26 @@ async fn iocs_csv(
         .since
         .unwrap_or_else(|| (state.clock)() - 30 * 24 * 3600 * 1000);
     let rows = state.store.ip_iocs(&who.tenant_id, since).await?;
-    let observables: Vec<Observable> = rows
+    // Newest first, so a tight lookup budget leaves the oldest without
+    // context.
+    let mut by_recency: Vec<&IpIocRow> = rows.iter().collect();
+    by_recency.sort_by_key(|a| std::cmp::Reverse(a.last_seen));
+    let observables: Vec<Observable> = by_recency
         .iter()
         .filter_map(|r| Observable::ip(&r.ip).ok())
         .collect();
-    // The store may answer once per provider for the same observable.
-    let mut facts: BTreeMap<String, Vec<foiled_core::enrichment::Fact>> = BTreeMap::new();
-    if !observables.is_empty() {
-        for o in state
-            .store
-            .enrichment_facts(&who.tenant_id, observables)
-            .await?
-        {
-            facts.entry(o.observable.value).or_default().extend(o.facts);
-        }
-    }
-    let context: ExportContext = facts
+    let cached = crate::enrichment::cached_facts(&state, observables).await;
+    let headers = cached.headers();
+    let context: ExportContext = cached
+        .facts
         .into_iter()
-        .map(|(ip, f)| (ip, export_refs(&context_refs(&f))))
+        .map(|(o, f)| (o.value, export_refs(&context_refs(&f))))
         .filter(|(_, refs)| !refs.is_empty())
         .collect();
+    // A cache failure leaves the ASN columns empty and says so in a header;
+    // the export itself still succeeds.
     Ok((
+        headers,
         [
             (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
             (

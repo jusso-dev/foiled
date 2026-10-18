@@ -11,7 +11,7 @@ use foiled_api::store::{Store, TokenRecord};
 use foiled_api::{AppState, router};
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::CaptureEvent;
-use foiled_core::enrichment::{Fact, Observable, ObservedFacts};
+use foiled_core::enrichment::{CacheEntry, Fact, Observable};
 use http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -66,21 +66,21 @@ async fn harness() -> (AppState, Arc<MemoryStore>) {
     store.enqueue_events(events).await.unwrap();
     let now = raw["now"].as_i64().unwrap();
     for (ip, asn) in raw["asns"].as_object().unwrap() {
-        store.add_facts(
-            "t1",
-            ObservedFacts {
-                observable: Observable::ip(ip).unwrap(),
-                facts: vec![Fact {
-                    provider: "local_asn".into(),
-                    key: "asn.number".into(),
-                    value: asn.clone(),
-                    confidence: 90,
-                    observed_at: now,
-                    ttl_secs: 604_800,
-                    raw_ref: None,
-                }],
-            },
-        );
+        store.add_cache_entry(CacheEntry {
+            provider: "local_asn".into(),
+            observable: Observable::ip(ip).unwrap(),
+            fetched_at: now,
+            ttl_secs: 604_800,
+            facts: vec![Fact {
+                provider: "local_asn".into(),
+                key: "asn.number".into(),
+                value: asn.clone(),
+                confidence: 90,
+                observed_at: now,
+                ttl_secs: 604_800,
+                raw_ref: None,
+            }],
+        });
     }
     let mut state = AppState::new(store.clone(), Arc::new(move || now));
     let ids = std::sync::Mutex::new(0u32);
