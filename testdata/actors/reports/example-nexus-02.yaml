@@ -1,0 +1,22 @@
+# Fictional example (#29): a nexus label whose only overlap with the
+# fleet-wave campaigns is geography and a shared ASN, neither of which is
+# evidence. The golden test expects no link to it.
+id: example-nexus-02
+example: true
+label:
+  kind: nexus
+  text: EXAMPLE-nexus mining activity
+sources:
+  - kind: vendor_report
+    publisher: Example Threat Research (fictional)
+    title: Mining crews on exposed caches
+    url: https://reports.example.com/2026/example-nexus-02
+    published: "2026-08-03"
+    retrieved: "2026-10-01"
+    sha256: 7237ed441ace953aacaa4dc9d0ae29854cb717c4187085a3afbf484d18b68f15
+    licence: Fictional example for tests and docs; no third-party content
+techniques: [T1496.001, T1053.003]
+indicators:
+  - { type: asn, value: AS64500 }
+geo:
+  source_countries: [XA]

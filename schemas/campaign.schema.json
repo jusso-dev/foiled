@@ -194,7 +194,10 @@
                   "llm",
                   "analyst",
                   "campaign_cluster",
-                  "noise_score"
+                  "noise_score",
+                  "actor_ttp_overlap",
+                  "actor_indicator_overlap",
+                  "actor_targeting"
                 ]
               },
               "weight": {
@@ -221,17 +224,30 @@
     },
     "suggested_actor_links": {
       "type": "array",
-      "description": "Attachment point for actor possible-association (#29). Clustering never fills it.",
+      "description": "Actor possible-associations (#29) that are pending or confirmed, strongest first, at most five. Clustering never fills it; the actor matcher does, through #27. The full explanation is at confidence_ref.",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "link_id",
+          "actor_id",
           "label",
           "wording",
+          "score",
+          "band",
+          "status",
           "confidence_ref",
           "report_urls"
         ],
         "properties": {
+          "link_id": {
+            "type": "string",
+            "pattern": "^acl_[0-9a-f]{24}$"
+          },
+          "actor_id": {
+            "type": "string",
+            "pattern": "^(attack|report):[A-Za-z0-9][A-Za-z0-9-]{0,63}$"
+          },
           "label": {
             "type": "string",
             "minLength": 1
@@ -240,6 +256,24 @@
             "enum": [
               "possible association",
               "confirmed association"
+            ]
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "band": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "confirmed"
             ]
           },
           "confidence_ref": {

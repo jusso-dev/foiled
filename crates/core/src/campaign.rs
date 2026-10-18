@@ -15,8 +15,8 @@
 //!
 //! Tenant-scoped: attempts from any other tenant are ignored. There is no
 //! fleet (cross-tenant) scope yet; see `docs/campaigns.md`. Actor
-//! possible-association (#29) attaches to `suggested_actor_links`, which
-//! clustering never fills.
+//! possible-association (#29, `crate::actor`) attaches to
+//! `suggested_actor_links`, which clustering never fills.
 //!
 //! Contract: `schemas/campaign.schema.json` and
 //! `schemas/campaign-action.schema.json`.
@@ -537,14 +537,21 @@ pub struct CampaignConfidence {
     pub caps_applied: Vec<String>,
 }
 
-/// Attachment point for actor possible-association (#29). Clustering never
-/// fills this; #29 does, through #27, with "possible association" wording
-/// unless an analyst confirms a high link.
+/// Actor possible-association (#29) on a campaign. Clustering never fills
+/// this; `actor::attach_suggestions` does, from links scored through #27,
+/// with "possible association" wording unless an analyst confirms a link.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActorSuggestion {
+    pub link_id: String,
+    pub actor_id: String,
     pub label: String,
     pub wording: String,
+    pub score: u8,
+    pub band: Band,
+    /// `pending` or `confirmed`; rejected links are left out.
+    pub status: crate::actor::LinkStatus,
+    /// Where the full explanation lives (`/v0/actor-links/{link_id}`).
     pub confidence_ref: String,
     pub report_urls: Vec<String>,
 }
@@ -592,7 +599,8 @@ pub struct Campaign {
     /// Where the full #27 explanation lives.
     pub confidence_ref: String,
     pub confidence: CampaignConfidence,
-    /// Reserved for #29. Always empty from clustering.
+    /// Actor possible-associations (#29), strongest first. Always empty
+    /// from clustering; filled by `actor::attach_suggestions`.
     pub suggested_actor_links: Vec<ActorSuggestion>,
     pub analyst: AnalystState,
     /// Links refused because one source alone made them (see

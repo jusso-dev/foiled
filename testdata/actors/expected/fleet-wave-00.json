@@ -1,0 +1,156 @@
+{
+  "link_id": "acl_dd706cca0cbf14ccf2c0fb28",
+  "tenant_id": "t1",
+  "subject_kind": "campaign",
+  "subject_id": "cmp_b61ebed681d410ce4b3d19fb",
+  "attempt_ids": [
+    "att_0e2effa1697050a0be41765f",
+    "att_6b578aee5d058370fb9c6e44"
+  ],
+  "actor_id": "report:example-cluster-01",
+  "label": "EXAMPLE-CLUSTER-01 (Example Threat Research (fictional))",
+  "label_kind": "cluster",
+  "status": "pending",
+  "wording": "possible association",
+  "statement": "Possible association with EXAMPLE-CLUSTER-01 (Example Threat Research (fictional)): TTP, infrastructure and targeting overlap with activity reported in \"Loader waves against demo upload endpoints\" (Example Threat Research (fictional), 2026-09-14) and 1 other source(s). This is not an attribution.",
+  "score": 63,
+  "band": "medium",
+  "publishable": false,
+  "review_queue": true,
+  "matched": {
+    "techniques": [
+      {
+        "id": "T1059.004",
+        "profiles_using": 14,
+        "rarity": 48
+      },
+      {
+        "id": "T1105",
+        "profiles_using": 91,
+        "rarity": 13
+      },
+      {
+        "id": "T1190",
+        "profiles_using": 48,
+        "rarity": 25
+      }
+    ],
+    "indicators": [
+      {
+        "type": "domain",
+        "display": "stage2[.]example[.]invalid",
+        "match": "exact",
+        "ioc_id": "ioc_daf259e5ed85436b18bb7a11",
+        "weight": 85,
+        "stale": false,
+        "source_url": "https://reports.example.com/2026/example-cluster-01"
+      },
+      {
+        "type": "ip",
+        "display": "192[.]0[.]2[.]80",
+        "match": "exact",
+        "ioc_id": "ioc_8a63c09854314685b5ec5f02",
+        "weight": 70,
+        "stale": false,
+        "source_url": "https://advisories.example.org/ex-2026-001"
+      }
+    ],
+    "targeting": [
+      "FOILED-DEMO-0001",
+      "foiled/demo-app/1.0.0"
+    ]
+  },
+  "not_counted": [
+    "source country XA is in the geography the source reports; geography is never evidence"
+  ],
+  "sources": [
+    {
+      "kind": "vendor_report",
+      "publisher": "Example Threat Research (fictional)",
+      "title": "Loader waves against demo upload endpoints",
+      "url": "https://reports.example.com/2026/example-cluster-01",
+      "published": "2026-09-14",
+      "retrieved": "2026-10-01",
+      "sha256": "e1f75d6e4e5d830fa4c41e06698cb5123bfc9bf557eb8d745b4dd77e3a5d814c",
+      "licence": "Fictional example for tests and docs; no third-party content"
+    },
+    {
+      "kind": "government_advisory",
+      "publisher": "Example National CERT (fictional)",
+      "title": "Advisory EX-2026-001, upload path traversal exploitation",
+      "url": "https://advisories.example.org/ex-2026-001",
+      "published": "2026-09-20",
+      "retrieved": "2026-10-01",
+      "sha256": "d89b7765b3fc9ba1f22d998f42494b92dfe5ec47eba5e658095318ce80a42836",
+      "licence": "Fictional example for tests and docs; no third-party content"
+    }
+  ],
+  "example": true,
+  "confidence": {
+    "kind": "attempt_actor",
+    "attempt_id": "att_0e2effa1697050a0be41765f",
+    "target": "EXAMPLE-CLUSTER-01 (Example Threat Research (fictional))",
+    "score": 63,
+    "band": "medium",
+    "wording": "possible association",
+    "evidence": [
+      {
+        "signal_id": "actor:report:example-cluster-01:ttp",
+        "source": "actor_ttp_overlap",
+        "weight": 89,
+        "summary": "uses 3 of the 3 technique(s) seen (T1059.004, T1105, T1190), rarity-weighted coverage 100%",
+        "ref": "https://reports.example.com/2026/example-cluster-01"
+      },
+      {
+        "signal_id": "actor:report:example-cluster-01:indicator:0",
+        "source": "actor_indicator_overlap",
+        "weight": 85,
+        "summary": "domain stage2[.]example[.]invalid listed in \"Loader waves against demo upload endpoints\" (Example Threat Research (fictional), 2026-09-14)",
+        "ref": "https://reports.example.com/2026/example-cluster-01"
+      },
+      {
+        "signal_id": "actor:report:example-cluster-01:indicator:1",
+        "source": "actor_indicator_overlap",
+        "weight": 70,
+        "summary": "IP address 192[.]0[.]2[.]80 listed in \"Advisory EX-2026-001, upload path traversal exploitation\" (Example National CERT (fictional), 2026-09-20)",
+        "ref": "https://advisories.example.org/ex-2026-001"
+      },
+      {
+        "signal_id": "actor:report:example-cluster-01:targeting",
+        "source": "actor_targeting",
+        "weight": 100,
+        "summary": "hit FOILED-DEMO-0001, foiled/demo-app/1.0.0, which the source reports as targeted",
+        "ref": "https://reports.example.com/2026/example-cluster-01"
+      }
+    ],
+    "contributions": [
+      {
+        "source": "actor_ttp_overlap",
+        "points": 22,
+        "signal_ids": [
+          "actor:report:example-cluster-01:ttp"
+        ]
+      },
+      {
+        "source": "actor_indicator_overlap",
+        "points": 31,
+        "signal_ids": [
+          "actor:report:example-cluster-01:indicator:0",
+          "actor:report:example-cluster-01:indicator:1"
+        ]
+      },
+      {
+        "source": "actor_targeting",
+        "points": 10,
+        "signal_ids": [
+          "actor:report:example-cluster-01:targeting"
+        ]
+      }
+    ],
+    "caps_applied": [],
+    "publishable": false,
+    "ui_highlight": true,
+    "auto_state_promote": false,
+    "radar_queue": true
+  }
+}
