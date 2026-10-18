@@ -1,0 +1,15 @@
+{
+  "agent_id": "sen-0001",
+  "tenant_id": "t1",
+  "role": "sensor",
+  "scopes": [
+    "sensor:lease",
+    "sensor:report",
+    "sensor:ingest",
+    "sensor:upload"
+  ],
+  "certificate_pem": "-----BEGIN CERTIFICATE-----\nMIIBhjCCASugAwIBAgIUEOKf8IYpSEofR9mFhj/YQ+NnAQ4wCgYIKoZIzj0EAwIw\nGDEWMBQGA1UEAwwNZm9pbGVkLXNlbnNvcjAeFw0yNjEwMTgwMjI3NTVaFw0yNzAx\nMTYwMjI3NTVaMBgxFjAUBgNVBAMMDWZvaWxlZC1zZW5zb3IwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAASkm3pu1rmFLdnERGEzoXlxbO3taF9FwCFGeW+gqCYaXLpJ\nKxC9G2N0DgB0m/4LsXRTRDI3WYnJw6SHxfNVkJ9vo1MwUTAdBgNVHQ4EFgQUrbJy\n9zR+XhvRS3sbTkosyeanU3owHwYDVR0jBBgwFoAUrbJy9zR+XhvRS3sbTkosyean\nU3owDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNJADBGAiEAosIuRezzTwyA\nX7Ky6oBAjO8O5pF2fEJ87++QeUA5pgACIQD/tq4aXl0fr011YFwbk2B9Xkm8ITrT\n9jita0sS76C7zQ==\n-----END CERTIFICATE-----\n",
+  "cert_sha256": "fcaa13fdeea972bb2cb5e2cdfd3ef57503e43ea0b5c512ae0d528ee8c8d44c8c",
+  "issued_at": 1800000000000,
+  "expires_at": 1807776000000
+}

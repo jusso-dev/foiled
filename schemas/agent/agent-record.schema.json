@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/agent/agent-record.schema.json",
+  "title": "Foiled enrolled agent (edge sensor or sandbox host)",
+  "description": "A registered edge sensor or sandbox host as returned by /v0/sensors and /v0/hosts (#31). The certificate fingerprint is the identity; the private key never leaves the agent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "tenant_id", "role", "label", "status", "sandbox_allowed", "share_opt_in", "created_at", "created_by", "enrolled_at", "cert_sha256", "cert_expires_at", "last_seen_at", "last_ip", "last_asn", "network_changed_at", "revoked_at", "revoke_reason"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "role": { "type": "string", "enum": ["host", "sensor"] },
+    "label": { "type": ["string", "null"], "maxLength": 100 },
+    "status": { "type": "string", "enum": ["pending", "active", "revoked"] },
+    "sandbox_allowed": { "type": "boolean", "description": "Whether full sandbox decoys may be placed here. Off by default for edge sensors." },
+    "share_opt_in": { "type": ["boolean", "null"], "description": "Contribute-back choice (#37). Null means the policy default." },
+    "created_at": { "type": "integer" },
+    "created_by": { "type": "string" },
+    "enrolled_at": { "type": ["integer", "null"] },
+    "cert_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "cert_expires_at": { "type": ["integer", "null"] },
+    "last_seen_at": { "type": ["integer", "null"] },
+    "last_ip": { "type": ["string", "null"] },
+    "last_asn": { "type": ["integer", "null"], "minimum": 0 },
+    "network_changed_at": { "type": ["integer", "null"], "description": "Set when the agent's IP or ASN moved unexpectedly." },
+    "revoked_at": { "type": ["integer", "null"] },
+    "revoke_reason": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "text"],
+          "properties": {
+            "code": { "type": "string", "enum": ["max_lifetime", "idle", "reverse_shell", "egress_blocked", "yara_match", "canary_used", "honeyscore_high", "health_failed", "operator_manual"] },
+            "text": { "type": "string", "minLength": 1, "maxLength": 500 }
+          }
+        }
+      ]
+    }
+  }
+}

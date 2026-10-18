@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/agent/enrol-request.schema.json",
+  "title": "Foiled enrolment request",
+  "description": "POST /v0/enrol. A one-time enrolment token and a certificate signing request for a key generated on the agent (#31). The CSR subject is ignored; identity comes from the token.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["token", "csr_pem"],
+  "properties": {
+    "token": { "type": "string", "pattern": "^foe_[A-Za-z0-9]{1,128}\\.[A-Za-z0-9]{32,128}$" },
+    "csr_pem": { "type": "string", "maxLength": 8192, "pattern": "-----BEGIN CERTIFICATE REQUEST-----" }
+  }
+}

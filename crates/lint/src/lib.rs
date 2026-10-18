@@ -122,6 +122,22 @@ pub const BINDINGS: &[Binding] = &[
         schema: "schemas/agent/heartbeat.schema.json",
     },
     Binding {
+        data_dir: "testdata/agent/registry",
+        schema: "schemas/agent/agent-record.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/agent/enrol/requests",
+        schema: "schemas/agent/enrol-request.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/agent/enrol/responses",
+        schema: "schemas/agent/enrol-response.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/releases",
+        schema: "schemas/release-manifest.schema.json",
+    },
+    Binding {
         data_dir: "hooks",
         schema: "schemas/hook-manifest.schema.json",
     },
