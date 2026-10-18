@@ -1,0 +1,130 @@
+{
+  "id": "bundle--ba1680e3-f9eb-5470-9c35-d1ac9a37fada",
+  "objects": [
+    {
+      "created": "2026-01-01T00:00:00.000Z",
+      "description": "Foiled deception platform. Observations come from decoys, which have no legitimate users.",
+      "id": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "identity_class": "system",
+      "modified": "2026-01-01T00:00:00.000Z",
+      "name": "Foiled",
+      "spec_version": "2.1",
+      "type": "identity"
+    },
+    {
+      "created": "2022-10-01T00:00:00.000Z",
+      "extensions": {
+        "extension-definition--60a3c5c5-0d10-413e-aab3-9e08dde9e88d": {
+          "extension_type": "property-extension",
+          "tlp_2_0": "amber"
+        }
+      },
+      "id": "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421",
+      "name": "TLP:AMBER",
+      "spec_version": "2.1",
+      "type": "marking-definition"
+    },
+    {
+      "created": "2026-01-01T00:00:00.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "external_references": [
+        {
+          "external_id": "FOILED-DEMO-0001",
+          "source_name": "foiled"
+        }
+      ],
+      "id": "vulnerability--7e149f36-fa52-5d10-aed1-a52f339928e3",
+      "modified": "2026-01-01T00:00:00.000Z",
+      "name": "FOILED-DEMO-0001",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "spec_version": "2.1",
+      "type": "vulnerability"
+    },
+    {
+      "context": "suspicious-activity",
+      "created": "2026-10-18T01:02:03.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "id": "grouping--16088965-de9a-5ea8-a9b2-61663b11f741",
+      "modified": "2026-10-18T01:02:07.000Z",
+      "name": "Foiled attempt att_58d10ea05f1470733c2e46a6",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "object_refs": [
+        "vulnerability--7e149f36-fa52-5d10-aed1-a52f339928e3"
+      ],
+      "spec_version": "2.1",
+      "type": "grouping",
+      "x_foiled_attempt_id": "att_58d10ea05f1470733c2e46a6",
+      "x_foiled_catalogue_id": "foiled/demo-app/1.0.0",
+      "x_foiled_decoy_kind": "sandbox",
+      "x_foiled_file_ioc_limited": true,
+      "x_foiled_state": "post-exploitation",
+      "x_foiled_summary": "Attempt from an address below the export gate against foiled/demo-app/1.0.0 (sandbox) reached post-exploitation. State changes: probe (first_contact), exploit (matcher), post-exploitation (egress). Vulnerable-path hooks fired: demo-app.upload-path-traversal. Source noise score 10 (targeted). File IOCs are limited: no file hash is available."
+    },
+    {
+      "abstract": "Foiled notes for attempt att_58d10ea05f1470733c2e46a6",
+      "content": "Post-exploitation activity was seen but no file was captured, so the implant may be memory-resident. File IOCs are limited and no file hash is reported; use the command line, behaviour fingerprint and network callback indicators instead.",
+      "created": "2026-10-18T01:02:03.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "id": "note--6b99fb2a-bb57-51c6-a622-4ff0572c01a2",
+      "modified": "2026-10-18T01:02:07.000Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "object_refs": [
+        "grouping--16088965-de9a-5ea8-a9b2-61663b11f741"
+      ],
+      "spec_version": "2.1",
+      "type": "note"
+    },
+    {
+      "confidence": 100,
+      "created": "2026-10-18T01:02:03.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as an attempt against FOILED-DEMO-0001. Confidence 100 of 100 (high).",
+      "id": "relationship--85c62198-5f28-50e8-99aa-6050602aa5e8",
+      "labels": [
+        "foiled-band:high"
+      ],
+      "modified": "2026-10-18T01:02:07.000Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "relationship_type": "related-to",
+      "source_ref": "grouping--16088965-de9a-5ea8-a9b2-61663b11f741",
+      "spec_version": "2.1",
+      "target_ref": "vulnerability--7e149f36-fa52-5d10-aed1-a52f339928e3",
+      "type": "relationship",
+      "x_foiled_confirmed": false,
+      "x_foiled_evidence": [
+        {
+          "points": 30,
+          "source": "rule"
+        },
+        {
+          "points": 40,
+          "source": "sequence"
+        },
+        {
+          "points": 60,
+          "source": "vuln_path_hook"
+        },
+        {
+          "points": 10,
+          "source": "catalogue_prior"
+        },
+        {
+          "points": -2,
+          "source": "noise_score"
+        }
+      ],
+      "x_foiled_link_kind": "attempt_cve",
+      "x_foiled_publishable": true,
+      "x_foiled_wording": "we assess as"
+    }
+  ],
+  "type": "bundle"
+}

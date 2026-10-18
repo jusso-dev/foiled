@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/stix-bundle.schema.json",
+  "title": "Foiled STIX 2.1 bundle (minimal)",
+  "description": "A minimal, vendored subset of the OASIS STIX 2.1 JSON schemas covering the object types Foiled exports (#13): identity, marking-definition, ipv4-addr, ipv6-addr, domain-name, url, file, autonomous-system, indicator, grouping, malware, attack-pattern, vulnerability, campaign, intrusion-set, observed-data, note, relationship and sighting. It checks ids, required properties, timestamps, confidence ranges and property names. Reference resolution and cross-field rules are checked by foiled_core::intel::stix::problems. See docs/intel-outputs.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "id", "objects"],
+  "properties": {
+    "type": { "const": "bundle" },
+    "id": { "type": "string", "pattern": "^bundle--[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "objects": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/object" } }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]+[a-z0-9]--[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:([0-5][0-9]|60)(\\.[0-9]+)?Z$"
+    },
+    "confidence": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "refs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/identifier" } },
+    "external_reference": {
+      "type": "object",
+      "required": ["source_name"],
+      "properties": {
+        "source_name": { "type": "string", "minLength": 1 },
+        "external_id": { "type": "string" },
+        "url": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "common": {
+      "type": "object",
+      "required": ["type", "id", "spec_version"],
+      "propertyNames": { "pattern": "^(id|[a-z0-9_]{3,250})$" },
+      "properties": {
+        "type": { "type": "string" },
+        "id": { "$ref": "#/$defs/identifier" },
+        "spec_version": { "const": "2.1" },
+        "created_by_ref": { "$ref": "#/$defs/identifier" },
+        "created": { "$ref": "#/$defs/timestamp" },
+        "modified": { "$ref": "#/$defs/timestamp" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "labels": { "type": "array", "items": { "type": "string" } },
+        "external_references": { "type": "array", "items": { "$ref": "#/$defs/external_reference" } },
+        "object_marking_refs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^marking-definition--" }
+        }
+      }
+    },
+    "sdo": {
+      "properties": {
+        "created": { "$ref": "#/$defs/timestamp" },
+        "modified": { "$ref": "#/$defs/timestamp" }
+      },
+      "required": ["created", "modified"]
+    },
+    "object": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "oneOf": [
+            {
+              "properties": { "type": { "const": "identity" }, "name": { "type": "string", "minLength": 1 } },
+              "allOf": [{ "$ref": "#/$defs/sdo" }],
+              "required": ["name"]
+            },
+            {
+              "properties": {
+                "type": { "const": "marking-definition" },
+                "definition_type": { "type": "string" },
+                "definition": { "type": "object" },
+                "extensions": { "type": "object" }
+              },
+              "required": ["created"],
+              "anyOf": [
+                { "properties": { "extensions": { "type": "object" } }, "required": ["extensions"] },
+                {
+                  "properties": { "definition_type": { "type": "string" }, "definition": { "type": "object" } },
+                  "required": ["definition_type", "definition"]
+                }
+              ]
+            },
+            {
+              "properties": { "type": { "enum": ["ipv4-addr", "ipv6-addr", "domain-name", "url"] }, "value": { "type": "string", "minLength": 1 }, "belongs_to_refs": { "$ref": "#/$defs/refs" } },
+              "required": ["value"]
+            },
+            {
+              "properties": {
+                "type": { "const": "file" },
+                "hashes": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string" } }
+              },
+              "anyOf": [
+                { "properties": { "hashes": { "type": "object" } }, "required": ["hashes"] },
+                { "properties": { "name": { "type": "string" } }, "required": ["name"] }
+              ]
+            },
+            {
+              "properties": { "type": { "const": "autonomous-system" }, "number": { "type": "integer", "minimum": 0 } },
+              "required": ["number"]
+            },
+            {
+              "properties": {
+                "type": { "const": "indicator" },
+                "pattern": { "type": "string", "minLength": 1 },
+                "pattern_type": { "type": "string", "minLength": 1 },
+                "valid_from": { "$ref": "#/$defs/timestamp" },
+                "indicator_types": { "type": "array", "items": { "type": "string" } }
+              },
+              "allOf": [{ "$ref": "#/$defs/sdo" }],
+              "required": ["pattern", "pattern_type", "valid_from"]
+            },
+            {
+              "properties": {
+                "type": { "const": "malware" },
+                "is_family": { "type": "boolean" },
+                "sample_refs": { "$ref": "#/$defs/refs" }
+              },
+              "allOf": [{ "$ref": "#/$defs/sdo" }],
+              "required": ["is_family"]
+            },
+            {
+              "properties": { "type": { "enum": ["attack-pattern", "vulnerability", "campaign", "intrusion-set"] }, "name": { "type": "string", "minLength": 1 } },
+              "allOf": [{ "$ref": "#/$defs/sdo" }],
+              "required": ["name"]
+            },
+            {
+              "properties": {
+                "type": { "const": "observed-data" },
+                "first_observed": { "$ref": "#/$defs/timestamp" },
+                "last_observed": { "$ref": "#/$defs/timestamp" },
+                "number_observed": { "type": "integer", "minimum": 1, "maximum": 999999999 },
+                "object_refs": { "$ref": "#/$defs/refs" }
+              },
+              "allOf": [{ "$ref": "#/$defs/sdo" }],
+              "required": ["first_observed", "last_observed", "number_observed", "object_refs"]
+            },
+            {
+              "properties": {
+                "type": { "const": "grouping" },
+                "context": { "type": "string", "minLength": 1 },
+                "object_refs": { "$ref": "#/$defs/refs" }
+              },
+              "allOf": [{ "$ref": "#/$defs/sdo" }],
+              "required": ["context", "object_refs"]
+            },
+            {
+              "properties": {
+                "type": { "const": "note" },
+                "content": { "type": "string", "minLength": 1 },
+                "object_refs": { "$ref": "#/$defs/refs" }
+              },
+              "allOf": [{ "$ref": "#/$defs/sdo" }],
+              "required": ["content", "object_refs"]
+            },
+            {
+              "properties": {
+                "type": { "const": "relationship" },
+                "relationship_type": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+                "source_ref": { "$ref": "#/$defs/identifier" },
+                "target_ref": { "$ref": "#/$defs/identifier" }
+              },
+              "allOf": [{ "$ref": "#/$defs/sdo" }],
+              "required": ["relationship_type", "source_ref", "target_ref"]
+            },
+            {
+              "properties": {
+                "type": { "const": "sighting" },
+                "sighting_of_ref": { "$ref": "#/$defs/identifier" },
+                "first_seen": { "$ref": "#/$defs/timestamp" },
+                "last_seen": { "$ref": "#/$defs/timestamp" },
+                "count": { "type": "integer", "minimum": 0, "maximum": 999999999 },
+                "observed_data_refs": { "$ref": "#/$defs/refs" },
+                "where_sighted_refs": { "$ref": "#/$defs/refs" }
+              },
+              "allOf": [{ "$ref": "#/$defs/sdo" }],
+              "required": ["sighting_of_ref"]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

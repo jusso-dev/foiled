@@ -45,7 +45,7 @@ Default tier weights (normative, tunable in `configs/confidence.yaml`):
 | `llm` | 20 | 20 |
 | `campaign_cluster` | 45 | 55 |
 
-The config checks itself: the LLM cap must stay below `high`, the pre-disclosure cap below `publish_min`, and the `campaign_cluster` cap below both, so clustering alone never publishes a campaign or reaches `high` (#33).
+The config checks itself: the LLM cap must stay below `high`, the pre-disclosure cap below `publish_min`, and the `campaign_cluster` cap below both, so clustering alone never publishes a campaign or reaches `high` (#33). `campaign_cluster` evidence counts only for `attempt_campaign` links: on any other kind (a CVE, technique, indicator or actor link) it adds nothing and the explanation says so in `caps_applied`, because attempts belonging together says nothing about an actor or a CVE.
 
 ## Bands, wording and thresholds
 
@@ -87,4 +87,4 @@ These are tests (`crates/core/src/confidence.rs` and `crates/lint/tests/confiden
 
 ## Explainability
 
-The console's confidence panel (#14) shows the score, band and wording, then every contribution with its points, every cap that applied, the evidence ledger with links to the events, and the noise band with `decoy_types_touched` when present. STIX exports (#13) carry the score as the relationship's `confidence` and the wording in the description.
+The console's confidence panel (#14) shows the score, band and wording, then every contribution with its points, every cap that applied, the evidence ledger with links to the events, and the noise band with `decoy_types_touched` when present. STIX exports (#13) carry the score as the relationship's `confidence` and the wording in the description, and only publishable links leave unless an analyst asks for more ([intel-outputs.md](intel-outputs.md#the-gate)).

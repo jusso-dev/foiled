@@ -139,6 +139,40 @@ pub(crate) struct WindowModel {
     /// cluster again (for example after recording an action).
     pub inputs: Option<ClusterInputs>,
     pub truncated: bool,
+    /// When truncated, the last event kept in `(ts, event_id)` order:
+    /// reading on from it with `Store::events_after` loses nothing and
+    /// repeats nothing.
+    pub cut: Option<EventCursor>,
+}
+
+/// A position in a tenant's events, in the `(ts, event_id)` order every
+/// store reads them in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventCursor {
+    pub ts: i64,
+    pub event_id: String,
+}
+
+/// Longest event id a cursor carries.
+const MAX_CURSOR_ID_BYTES: usize = 512;
+
+impl EventCursor {
+    /// `<ts>.<hex of event_id>`: opaque to clients, safe in a header and a
+    /// query string whatever the sender put in the event id.
+    pub fn encode(&self) -> String {
+        format!("{}.{}", self.ts, hex::encode(self.event_id.as_bytes()))
+    }
+
+    pub fn decode(s: &str) -> Option<EventCursor> {
+        let (ts, id) = s.split_once('.')?;
+        if id.len() > 2 * MAX_CURSOR_ID_BYTES {
+            return None;
+        }
+        Some(EventCursor {
+            ts: ts.parse().ok()?,
+            event_id: String::from_utf8(hex::decode(id).ok()?).ok()?,
+        })
+    }
 }
 
 /// Build attempts, their IOCs and their campaigns for a tenant over a window.
@@ -150,18 +184,52 @@ pub(crate) async fn window_model(
     iocs: Iocs,
     campaigns: Campaigns,
 ) -> Result<WindowModel, ApiError> {
+    let cap = state.limits.max_window_events;
+    window_model_capped(state, tenant_id, since, until, None, iocs, campaigns, cap).await
+}
+
+/// [`window_model`] reading at most `cap` events.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn window_model_capped(
+    state: &AppState,
+    tenant_id: &str,
+    since: i64,
+    until: i64,
+    after: Option<&EventCursor>,
+    iocs: Iocs,
+    campaigns: Campaigns,
+    cap: usize,
+) -> Result<WindowModel, ApiError> {
     if until <= since || until - since > 31 * DAY_MS {
         return Err(ApiError::bad_request(
             "window must be positive and at most 31 days",
         ));
     }
-    let events = state
-        .store
-        .events_between(tenant_id, since, until, MAX_WINDOW_EVENTS + 1)
-        .await?;
-    let truncated = events.len() > MAX_WINDOW_EVENTS;
+    let events = match after {
+        None => {
+            state
+                .store
+                .events_between(tenant_id, since, until, cap + 1)
+                .await?
+        }
+        Some(c) => {
+            state
+                .store
+                .events_after(tenant_id, (c.ts, c.event_id.clone()), until, cap + 1)
+                .await?
+        }
+    };
+    let truncated = events.len() > cap;
     let mut events = events;
-    events.truncate(MAX_WINDOW_EVENTS);
+    events.truncate(cap);
+    let cut = if truncated {
+        events.last().map(|e| EventCursor {
+            ts: e.ts,
+            event_id: e.event_id.clone(),
+        })
+    } else {
+        None
+    };
     let signals = crate::links::matcher_signals(&events);
     let mut attempts = build(&events, DEFAULT_IDLE_GAP_MS, &signals);
     // Payload storage is off by default (#16), so inline bodies never
@@ -203,6 +271,7 @@ pub(crate) async fn window_model(
         Campaigns::Skip => (Default::default(), None),
     };
     Ok(WindowModel {
+        cut,
         attempts,
         events,
         iocs: x,
@@ -562,8 +631,9 @@ async fn timeline(
     let mut t = foiled_core::timeline::build_timeline(attempt, &events);
     if truncated {
         t.notes.push(format!(
-            "The window held more than {MAX_WINDOW_EVENTS} events, so this attempt may be cut \
-             short. Narrow since and until."
+            "The window held more than {} events, so this attempt may be cut \
+             short. Narrow since and until.",
+            state.limits.max_window_events
         ));
     }
     Ok(match f.format {

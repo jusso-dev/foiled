@@ -1513,40 +1513,44 @@ pub fn extract(
         });
     }
 
+    // Consumes the accumulators so the IOCs and their accumulators are
+    // never both held in full (a full window can hold tens of thousands).
     let mut iocs: Vec<Ioc> = accs
-        .iter()
+        .into_iter()
         .map(|(id, acc)| {
             let sightings = if acc.ty == IocType::BehaviourFingerprint {
                 acc.attempts.len()
             } else {
                 acc.events.len()
             };
+            let confidence = confidence(cfg, &id, &acc, &attempt_index);
+            let display = defang(acc.ty, &acc.value);
             Ioc {
-                ioc_id: id.clone(),
+                ioc_id: id,
                 ioc_type: acc.ty,
-                value: acc.value.clone(),
-                display: defang(acc.ty, &acc.value),
-                roles: acc.roles.iter().copied().collect(),
+                value: acc.value,
+                display,
+                roles: acc.roles.into_iter().collect(),
                 origin: IocOrigin::Observed,
                 redacted: acc.redacted,
                 file_ioc_limited: acc.file_ioc_limited,
                 first_seen: acc.first_seen,
                 last_seen: acc.last_seen,
                 sightings: u32::try_from(sightings).unwrap_or(u32::MAX),
-                attempt_ids: acc.attempts.iter().cloned().collect(),
-                campaign_ids: acc.campaigns.iter().cloned().collect(),
-                decoy_ids: acc.decoys.iter().cloned().collect(),
-                catalogue_ids: acc.catalogues.iter().cloned().collect(),
+                attempt_ids: acc.attempts.into_iter().collect(),
+                campaign_ids: acc.campaigns.into_iter().collect(),
+                decoy_ids: acc.decoys.into_iter().collect(),
+                catalogue_ids: acc.catalogues.into_iter().collect(),
                 event_ids: acc
                     .events
-                    .iter()
+                    .into_iter()
                     .take(MAX_EVENT_REFS)
-                    .map(|(_, id)| id.clone())
+                    .map(|(_, id)| id)
                     .collect(),
-                extracted_from: acc.fields.iter().cloned().collect(),
+                extracted_from: acc.fields.into_iter().collect(),
                 enrichment: vec![],
-                fingerprint: acc.fingerprint.clone(),
-                confidence: confidence(cfg, id, acc, &attempt_index),
+                fingerprint: acc.fingerprint,
+                confidence,
             }
         })
         .collect();

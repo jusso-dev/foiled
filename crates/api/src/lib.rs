@@ -59,6 +59,9 @@ pub struct Limits {
     pub cert_validity_days: u32,
     /// Campaign analyst actions per principal per hour (#33).
     pub campaign_actions_per_hour: u32,
+    /// Most capture events read for one attempts, IOC or export window.
+    /// Larger windows are cut at this many events, oldest first (#25).
+    pub max_window_events: usize,
 }
 
 impl Default for Limits {
@@ -77,6 +80,7 @@ impl Default for Limits {
             ingest_batches_per_minute: 120,
             cert_validity_days: foiled_core::enrolment::DEFAULT_CERT_VALIDITY_DAYS,
             campaign_actions_per_hour: 60,
+            max_window_events: routes::attempts::MAX_WINDOW_EVENTS,
         }
     }
 }

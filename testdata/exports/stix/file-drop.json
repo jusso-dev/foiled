@@ -1,0 +1,613 @@
+{
+  "id": "bundle--ff865115-f745-5469-b790-5a7072b1435a",
+  "objects": [
+    {
+      "created": "2026-01-01T00:00:00.000Z",
+      "description": "Foiled deception platform. Observations come from decoys, which have no legitimate users.",
+      "id": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "identity_class": "system",
+      "modified": "2026-01-01T00:00:00.000Z",
+      "name": "Foiled",
+      "spec_version": "2.1",
+      "type": "identity"
+    },
+    {
+      "created": "2022-10-01T00:00:00.000Z",
+      "extensions": {
+        "extension-definition--60a3c5c5-0d10-413e-aab3-9e08dde9e88d": {
+          "extension_type": "property-extension",
+          "tlp_2_0": "amber"
+        }
+      },
+      "id": "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421",
+      "name": "TLP:AMBER",
+      "spec_version": "2.1",
+      "type": "marking-definition"
+    },
+    {
+      "hashes": {
+        "SHA-256": "c1c5d1b2f75673adc7db8fbf8bf1ab10f405dac8e71ce3cb8d7d0fef7fdeb172"
+      },
+      "id": "file--6b20a295-6264-5aa5-b1f3-a09cd9776f9c",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "spec_version": "2.1",
+      "type": "file"
+    },
+    {
+      "id": "ipv4-addr--9ddd739e-87b1-587d-83f2-62ef1130af2f",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "spec_version": "2.1",
+      "type": "ipv4-addr",
+      "value": "203.0.113.7"
+    },
+    {
+      "confidence": 98,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as malicious activity: ip seen at Foiled decoys, which have no legitimate users, in 1 attempt (3 sightings). Confidence 98 of 100 (high).",
+      "id": "indicator--09437cd0-b2e7-5fb3-814c-a8eb9ffda36b",
+      "indicator_types": [
+        "malicious-activity"
+      ],
+      "labels": [
+        "foiled-band:high"
+      ],
+      "modified": "2026-10-18T01:03:20.005Z",
+      "name": "ip: 203[.]0[.]113[.]7",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "pattern": "[ipv4-addr:value = '203.0.113.7']",
+      "pattern_type": "stix",
+      "spec_version": "2.1",
+      "type": "indicator",
+      "valid_from": "2026-10-18T01:03:20.000Z",
+      "x_foiled_file_ioc_limited": false,
+      "x_foiled_ioc_id": "ioc_17b8b6ab4beb2dee9dac3a99",
+      "x_foiled_ioc_type": "ip",
+      "x_foiled_publishable": true,
+      "x_foiled_redacted": false,
+      "x_foiled_roles": [
+        "source"
+      ],
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "confidence": 98,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as malicious activity: http_path seen at Foiled decoys, which have no legitimate users, in 1 attempt (2 sightings). Confidence 98 of 100 (high).",
+      "id": "indicator--1f0b5a94-3375-525f-86a2-bcfdbcca8ab9",
+      "indicator_types": [
+        "malicious-activity"
+      ],
+      "labels": [
+        "foiled-band:high"
+      ],
+      "modified": "2026-10-18T01:03:20.003Z",
+      "name": "http_path: /api/upload?path=../../../tmp/x.sh",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "pattern": "[network-traffic:extensions.'http-request-ext'.request_value = '/api/upload?path=../../../tmp/x.sh']",
+      "pattern_type": "stix",
+      "spec_version": "2.1",
+      "type": "indicator",
+      "valid_from": "2026-10-18T01:03:20.000Z",
+      "x_foiled_file_ioc_limited": false,
+      "x_foiled_ioc_id": "ioc_b7d596a00135d7f5c9e0e289",
+      "x_foiled_ioc_type": "http_path",
+      "x_foiled_publishable": true,
+      "x_foiled_redacted": false,
+      "x_foiled_roles": [
+        "request"
+      ],
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "confidence": 98,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as malicious activity: payload_sha256 seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+      "id": "indicator--3cf4d592-853f-50a3-915b-3beeb1077881",
+      "indicator_types": [
+        "malicious-activity"
+      ],
+      "labels": [
+        "foiled-band:high"
+      ],
+      "modified": "2026-10-18T01:03:20.000Z",
+      "name": "payload_sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "pattern": "[artifact:hashes.'SHA-256' = '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08']",
+      "pattern_type": "stix",
+      "spec_version": "2.1",
+      "type": "indicator",
+      "valid_from": "2026-10-18T01:03:20.000Z",
+      "x_foiled_file_ioc_limited": false,
+      "x_foiled_ioc_id": "ioc_c2a20db8e7502bf8de80669e",
+      "x_foiled_ioc_type": "payload_sha256",
+      "x_foiled_publishable": true,
+      "x_foiled_redacted": false,
+      "x_foiled_roles": [
+        "payload"
+      ],
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "confidence": 98,
+      "created": "2026-10-18T01:03:20.900Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as malicious activity: cmdline seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+      "id": "indicator--80591ac4-b920-5ec7-9eaf-1d42a09191a8",
+      "indicator_types": [
+        "malicious-activity"
+      ],
+      "labels": [
+        "foiled-band:high"
+      ],
+      "modified": "2026-10-18T01:03:20.900Z",
+      "name": "cmdline: /bin/chmod +x /tmp/x.sh",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "pattern": "[process:command_line = '/bin/chmod +x /tmp/x.sh']",
+      "pattern_type": "stix",
+      "spec_version": "2.1",
+      "type": "indicator",
+      "valid_from": "2026-10-18T01:03:20.900Z",
+      "x_foiled_file_ioc_limited": false,
+      "x_foiled_ioc_id": "ioc_ea029c10c988923ca58bc861",
+      "x_foiled_ioc_type": "cmdline",
+      "x_foiled_publishable": true,
+      "x_foiled_redacted": false,
+      "x_foiled_roles": [
+        "post_exploit"
+      ],
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "confidence": 98,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as malicious activity: behaviour_fingerprint seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+      "id": "indicator--c2a17b0d-7a64-5d25-b250-a73b5e21d545",
+      "indicator_types": [
+        "malicious-activity"
+      ],
+      "labels": [
+        "foiled-band:high"
+      ],
+      "modified": "2026-10-18T01:03:55.000Z",
+      "name": "behaviour_fingerprint: bf2:0de7b0e05fd88c37375be5ad651909f0",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "pattern": "bf2:0de7b0e05fd88c37375be5ad651909f0",
+      "pattern_type": "foiled-bf",
+      "spec_version": "2.1",
+      "type": "indicator",
+      "valid_from": "2026-10-18T01:03:20.000Z",
+      "x_foiled_file_ioc_limited": false,
+      "x_foiled_fingerprint": {
+        "steps": [
+          "http POST /api/upload?path",
+          "hook demo-app.upload-path-traversal trigger",
+          "hook demo-app.upload-path-traversal post_exploit",
+          "exec chmod",
+          "quarantine"
+        ],
+        "version": 2
+      },
+      "x_foiled_ioc_id": "ioc_c792dbedda795a56395b28cd",
+      "x_foiled_ioc_type": "behaviour_fingerprint",
+      "x_foiled_publishable": true,
+      "x_foiled_redacted": false,
+      "x_foiled_roles": [
+        "behaviour"
+      ],
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "confidence": 98,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as malicious activity: http_ua seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+      "id": "indicator--c6067bbc-81c8-556e-b676-0774ead439ff",
+      "indicator_types": [
+        "malicious-activity"
+      ],
+      "labels": [
+        "foiled-band:high"
+      ],
+      "modified": "2026-10-18T01:03:20.000Z",
+      "name": "http_ua: curl/8.0",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "pattern": "[network-traffic:extensions.'http-request-ext'.request_header.'User-Agent' = 'curl/8.0']",
+      "pattern_type": "stix",
+      "spec_version": "2.1",
+      "type": "indicator",
+      "valid_from": "2026-10-18T01:03:20.000Z",
+      "x_foiled_file_ioc_limited": false,
+      "x_foiled_ioc_id": "ioc_7b1b4759edeab72d8e940725",
+      "x_foiled_ioc_type": "http_ua",
+      "x_foiled_publishable": true,
+      "x_foiled_redacted": false,
+      "x_foiled_roles": [
+        "request"
+      ],
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "confidence": 98,
+      "created": "2026-10-18T01:03:20.003Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as malicious activity: payload_sha256 seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+      "id": "indicator--c786f980-9a76-5bc2-bf97-d9c6c667506b",
+      "indicator_types": [
+        "malicious-activity"
+      ],
+      "labels": [
+        "foiled-band:high"
+      ],
+      "modified": "2026-10-18T01:03:20.003Z",
+      "name": "payload_sha256: 061f6e75bb4f65a2b379124cefacf9feca6570cf5b52e88419d4ab06189f13b2",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "pattern": "[artifact:hashes.'SHA-256' = '061f6e75bb4f65a2b379124cefacf9feca6570cf5b52e88419d4ab06189f13b2']",
+      "pattern_type": "stix",
+      "spec_version": "2.1",
+      "type": "indicator",
+      "valid_from": "2026-10-18T01:03:20.003Z",
+      "x_foiled_file_ioc_limited": false,
+      "x_foiled_ioc_id": "ioc_17e092888358b0e21dcb2385",
+      "x_foiled_ioc_type": "payload_sha256",
+      "x_foiled_publishable": true,
+      "x_foiled_redacted": false,
+      "x_foiled_roles": [
+        "payload"
+      ],
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "confidence": 98,
+      "created": "2026-10-18T01:03:55.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as malicious activity: file_sha256 seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+      "id": "indicator--e78c04f0-70f9-5917-83f7-96895ff7c9a0",
+      "indicator_types": [
+        "malicious-activity"
+      ],
+      "labels": [
+        "foiled-band:high"
+      ],
+      "modified": "2026-10-18T01:03:55.000Z",
+      "name": "file_sha256: c1c5d1b2f75673adc7db8fbf8bf1ab10f405dac8e71ce3cb8d7d0fef7fdeb172",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "pattern": "[file:hashes.'SHA-256' = 'c1c5d1b2f75673adc7db8fbf8bf1ab10f405dac8e71ce3cb8d7d0fef7fdeb172']",
+      "pattern_type": "stix",
+      "spec_version": "2.1",
+      "type": "indicator",
+      "valid_from": "2026-10-18T01:03:55.000Z",
+      "x_foiled_file_ioc_limited": false,
+      "x_foiled_ioc_id": "ioc_c5004da3675301cc09eb78db",
+      "x_foiled_ioc_type": "file_sha256",
+      "x_foiled_publishable": true,
+      "x_foiled_redacted": false,
+      "x_foiled_roles": [
+        "post_exploit"
+      ],
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "created": "2026-10-18T01:03:55.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "A file Foiled captured after exploitation. It has not been classified.",
+      "id": "malware--59194f27-02ce-53bc-9034-53d26bdabc9b",
+      "is_family": false,
+      "malware_types": [
+        "unknown"
+      ],
+      "modified": "2026-10-18T01:03:55.000Z",
+      "name": "Unclassified file c1c5d1b2f756",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "sample_refs": [
+        "file--6b20a295-6264-5aa5-b1f3-a09cd9776f9c"
+      ],
+      "spec_version": "2.1",
+      "type": "malware"
+    },
+    {
+      "created": "2026-01-01T00:00:00.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "external_references": [
+        {
+          "external_id": "FOILED-DEMO-0001",
+          "source_name": "foiled"
+        }
+      ],
+      "id": "vulnerability--7e149f36-fa52-5d10-aed1-a52f339928e3",
+      "modified": "2026-01-01T00:00:00.000Z",
+      "name": "FOILED-DEMO-0001",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "spec_version": "2.1",
+      "type": "vulnerability"
+    },
+    {
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "first_observed": "2026-10-18T01:03:20.000Z",
+      "id": "observed-data--6b4794de-e45d-5b73-9df7-6c0c88e82ad8",
+      "last_observed": "2026-10-18T01:03:55.000Z",
+      "modified": "2026-10-18T01:03:55.000Z",
+      "number_observed": 5,
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "object_refs": [
+        "file--6b20a295-6264-5aa5-b1f3-a09cd9776f9c",
+        "ipv4-addr--9ddd739e-87b1-587d-83f2-62ef1130af2f"
+      ],
+      "spec_version": "2.1",
+      "type": "observed-data",
+      "x_foiled_attempt_id": "att_9c09513968e521d297116de5",
+      "x_foiled_catalogue_id": "foiled/demo-app/1.0.0",
+      "x_foiled_decoy_kind": "sandbox",
+      "x_foiled_file_ioc_limited": false,
+      "x_foiled_state": "post-exploitation",
+      "x_foiled_summary": "Attempt from 203.0.113.7 against foiled/demo-app/1.0.0 (sandbox) reached post-exploitation. State changes: probe (first_contact), exploit (matcher), post-exploitation (hook_post_exploit). Vulnerable-path hooks fired: demo-app.upload-path-traversal. Source noise score 10 (targeted)."
+    },
+    {
+      "confidence": 98,
+      "created": "2026-10-18T01:03:55.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as malicious activity: file_sha256 seen at Foiled decoys, which have no legitimate users, in 1 attempt (1 sighting). Confidence 98 of 100 (high).",
+      "id": "relationship--057a3caa-2bf4-532b-a773-ab4d490fcbf8",
+      "modified": "2026-10-18T01:03:55.000Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "relationship_type": "indicates",
+      "source_ref": "indicator--e78c04f0-70f9-5917-83f7-96895ff7c9a0",
+      "spec_version": "2.1",
+      "target_ref": "malware--59194f27-02ce-53bc-9034-53d26bdabc9b",
+      "type": "relationship"
+    },
+    {
+      "confidence": 98,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "description": "We assess as an attempt against FOILED-DEMO-0001. Confidence 98 of 100 (high).",
+      "id": "relationship--c2145ce9-daf4-5503-bd96-1de063f8c4a7",
+      "labels": [
+        "foiled-band:high"
+      ],
+      "modified": "2026-10-18T01:03:55.000Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "relationship_type": "related-to",
+      "source_ref": "observed-data--6b4794de-e45d-5b73-9df7-6c0c88e82ad8",
+      "spec_version": "2.1",
+      "target_ref": "vulnerability--7e149f36-fa52-5d10-aed1-a52f339928e3",
+      "type": "relationship",
+      "x_foiled_caps_applied": [
+        "VulnPathHook capped at 60 points"
+      ],
+      "x_foiled_confirmed": false,
+      "x_foiled_evidence": [
+        {
+          "points": 30,
+          "source": "rule"
+        },
+        {
+          "points": 60,
+          "source": "vuln_path_hook"
+        },
+        {
+          "points": 10,
+          "source": "catalogue_prior"
+        },
+        {
+          "points": -2,
+          "source": "noise_score"
+        }
+      ],
+      "x_foiled_link_kind": "attempt_cve",
+      "x_foiled_publishable": true,
+      "x_foiled_wording": "we assess as"
+    },
+    {
+      "confidence": 98,
+      "count": 1,
+      "created": "2026-10-18T01:03:20.900Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "first_seen": "2026-10-18T01:03:20.900Z",
+      "id": "sighting--1097608b-bef0-5ede-8c20-a4a5b5db2ba3",
+      "last_seen": "2026-10-18T01:03:20.900Z",
+      "modified": "2026-10-18T01:03:20.900Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "observed_data_refs": [
+        "observed-data--6b4794de-e45d-5b73-9df7-6c0c88e82ad8"
+      ],
+      "sighting_of_ref": "indicator--80591ac4-b920-5ec7-9eaf-1d42a09191a8",
+      "spec_version": "2.1",
+      "type": "sighting",
+      "where_sighted_refs": [
+        "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc"
+      ]
+    },
+    {
+      "confidence": 98,
+      "count": 1,
+      "created": "2026-10-18T01:03:20.003Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "first_seen": "2026-10-18T01:03:20.003Z",
+      "id": "sighting--211d42ec-d782-566e-a708-d0e7520f7427",
+      "last_seen": "2026-10-18T01:03:20.003Z",
+      "modified": "2026-10-18T01:03:20.003Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "observed_data_refs": [
+        "observed-data--6b4794de-e45d-5b73-9df7-6c0c88e82ad8"
+      ],
+      "sighting_of_ref": "indicator--c786f980-9a76-5bc2-bf97-d9c6c667506b",
+      "spec_version": "2.1",
+      "type": "sighting",
+      "where_sighted_refs": [
+        "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc"
+      ]
+    },
+    {
+      "confidence": 98,
+      "count": 1,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "first_seen": "2026-10-18T01:03:20.000Z",
+      "id": "sighting--5aa5b8f4-1db4-5c14-b9c2-6e0a57050297",
+      "last_seen": "2026-10-18T01:03:20.000Z",
+      "modified": "2026-10-18T01:03:20.000Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "observed_data_refs": [
+        "observed-data--6b4794de-e45d-5b73-9df7-6c0c88e82ad8"
+      ],
+      "sighting_of_ref": "indicator--3cf4d592-853f-50a3-915b-3beeb1077881",
+      "spec_version": "2.1",
+      "type": "sighting",
+      "where_sighted_refs": [
+        "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc"
+      ]
+    },
+    {
+      "confidence": 98,
+      "count": 3,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "first_seen": "2026-10-18T01:03:20.000Z",
+      "id": "sighting--7f6ba363-3128-52fb-801e-060a528aa6af",
+      "last_seen": "2026-10-18T01:03:20.005Z",
+      "modified": "2026-10-18T01:03:20.005Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "observed_data_refs": [
+        "observed-data--6b4794de-e45d-5b73-9df7-6c0c88e82ad8"
+      ],
+      "sighting_of_ref": "indicator--09437cd0-b2e7-5fb3-814c-a8eb9ffda36b",
+      "spec_version": "2.1",
+      "type": "sighting",
+      "where_sighted_refs": [
+        "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc"
+      ]
+    },
+    {
+      "confidence": 98,
+      "count": 2,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "first_seen": "2026-10-18T01:03:20.000Z",
+      "id": "sighting--8c65e0fb-af0a-5c5d-995c-bb310b36366f",
+      "last_seen": "2026-10-18T01:03:20.003Z",
+      "modified": "2026-10-18T01:03:20.003Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "observed_data_refs": [
+        "observed-data--6b4794de-e45d-5b73-9df7-6c0c88e82ad8"
+      ],
+      "sighting_of_ref": "indicator--1f0b5a94-3375-525f-86a2-bcfdbcca8ab9",
+      "spec_version": "2.1",
+      "type": "sighting",
+      "where_sighted_refs": [
+        "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc"
+      ]
+    },
+    {
+      "confidence": 98,
+      "count": 1,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "first_seen": "2026-10-18T01:03:20.000Z",
+      "id": "sighting--98e4baa7-a8b2-5d74-a0d4-982a418bc3b0",
+      "last_seen": "2026-10-18T01:03:55.000Z",
+      "modified": "2026-10-18T01:03:55.000Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "observed_data_refs": [
+        "observed-data--6b4794de-e45d-5b73-9df7-6c0c88e82ad8"
+      ],
+      "sighting_of_ref": "indicator--c2a17b0d-7a64-5d25-b250-a73b5e21d545",
+      "spec_version": "2.1",
+      "type": "sighting",
+      "where_sighted_refs": [
+        "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc"
+      ]
+    },
+    {
+      "confidence": 98,
+      "count": 1,
+      "created": "2026-10-18T01:03:20.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "first_seen": "2026-10-18T01:03:20.000Z",
+      "id": "sighting--9d22d800-8e7a-574f-a60c-ed4f61753885",
+      "last_seen": "2026-10-18T01:03:20.000Z",
+      "modified": "2026-10-18T01:03:20.000Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "observed_data_refs": [
+        "observed-data--6b4794de-e45d-5b73-9df7-6c0c88e82ad8"
+      ],
+      "sighting_of_ref": "indicator--c6067bbc-81c8-556e-b676-0774ead439ff",
+      "spec_version": "2.1",
+      "type": "sighting",
+      "where_sighted_refs": [
+        "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc"
+      ]
+    },
+    {
+      "confidence": 98,
+      "count": 1,
+      "created": "2026-10-18T01:03:55.000Z",
+      "created_by_ref": "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc",
+      "first_seen": "2026-10-18T01:03:55.000Z",
+      "id": "sighting--a7b340c0-f996-567e-bb6b-7bc8bedd1684",
+      "last_seen": "2026-10-18T01:03:55.000Z",
+      "modified": "2026-10-18T01:03:55.000Z",
+      "object_marking_refs": [
+        "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"
+      ],
+      "observed_data_refs": [
+        "observed-data--6b4794de-e45d-5b73-9df7-6c0c88e82ad8"
+      ],
+      "sighting_of_ref": "indicator--e78c04f0-70f9-5917-83f7-96895ff7c9a0",
+      "spec_version": "2.1",
+      "type": "sighting",
+      "where_sighted_refs": [
+        "identity--19c7fb46-6286-5366-9cc6-1f5df4d464cc"
+      ]
+    }
+  ],
+  "type": "bundle"
+}

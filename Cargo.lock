@@ -635,6 +635,7 @@ dependencies = [
  "hex",
  "http",
  "http-body-util",
+ "peak_alloc",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1593,6 +1594,12 @@ dependencies = [
  "smallvec",
  "windows-link",
 ]
+
+[[package]]
+name = "peak_alloc"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccc90935a8dd139fdf341762773687a1e361d3f54b396a55d9dd1f7001e484bb"
 
 [[package]]
 name = "pem"

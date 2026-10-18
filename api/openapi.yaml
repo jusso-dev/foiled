@@ -16,8 +16,9 @@ info:
       `host:*` or `sensor:*` scopes and can never hold operator scopes.
 
     Every write is audited (`/v0/audit`). Destructive actions need a
-    `reason`. CPU-heavy work (exports, bulk re-score) runs on Queue consumers;
-    the request only enqueues it.
+    `reason`. CPU-heavy work (bulk re-score) runs on Queue consumers; the
+    request only enqueues it. Exports are built on request from the same
+    bounded window as attempts (`docs/intel-outputs.md`).
 
     Each operation carries:
     - `x-foiled-status`: `implemented` or `planned`. Planned paths are part of
@@ -56,7 +57,9 @@ tags:
   - name: quarantine
     description: "Quarantined payload metadata (#9)."
   - name: exports
-    description: "Intel exports (#13, #22)."
+    description: "Intel exports: STIX 2.1, MISP, IOC CSV and JSON (#13, #22). See docs/intel-outputs.md."
+  - name: taxii
+    description: "Read-only TAXII 2.1 server (#13)."
   - name: alerts
     description: "Alerting (#15)."
   - name: audit
@@ -1552,47 +1555,386 @@ paths:
     get:
       tags: [exports]
       operationId: exportIocsCsv
-      summary: IOC CSV export (source IPs seen at the tenant's decoys)
+      summary: IOC CSV export
       description: |
-        One row per source IP: `indicator_type, indicator, first_seen,
-        last_seen, event_count, decoy_ids, catalogue_ids, hook_cves, asn,
-        as_org, country`. The ASN columns hold only context from providers
-        that may be redistributed (`docs/iocs.md#asn-context`). Reads
-        live rows only, so data removed by the retention purge never returns
-        (#16). Cells are RFC 4180 quoted and formula-safe. The richer IOC
-        model (`/v0/iocs`, #34) and STIX, MISP and TAXII outputs (#13) build
-        on this.
+        `fields=source` (the default, #22) gives one row per source IP:
+        `indicator_type, indicator, first_seen, last_seen, event_count,
+        decoy_ids, catalogue_ids, hook_cves, asn, as_org, country`, over
+        `since` (default the last 30 days). This shape is unchanged.
+
+        `fields=ioc` gives one row per IOC with the #34 field list
+        (`docs/intel-outputs.md#ioc-csv-and-json`), through the same
+        confidence gate and filters as the STIX export.
+
+        The ASN columns hold only context from providers that may be
+        redistributed (`docs/iocs.md#asn-context`). Reads live rows only,
+        so data removed by the retention purge never returns (#16). Cells
+        are RFC 4180 quoted and formula-safe.
       x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
       parameters:
-        - { name: since, in: query, schema: { type: integer }, description: "Unix ms. Default: 30 days ago." }
+        - { name: fields, in: query, schema: { type: string, enum: [source, ioc], default: source } }
+        - { $ref: "#/components/parameters/ExportSince" }
+        - { $ref: "#/components/parameters/ExportUntil" }
+        - { $ref: "#/components/parameters/ExportMinConfidence" }
+        - { $ref: "#/components/parameters/ExportCatalogueId" }
+        - { $ref: "#/components/parameters/ExportState" }
+        - { $ref: "#/components/parameters/ExportCampaignId" }
+        - { $ref: "#/components/parameters/ExportDecoyKind" }
+        - { $ref: "#/components/parameters/ExportIncludeUnreviewed" }
+        - { $ref: "#/components/parameters/ExportIncludeActors" }
+        - { $ref: "#/components/parameters/ExportIncludePayloads" }
+        - { $ref: "#/components/parameters/ExportTlp" }
+        - { $ref: "#/components/parameters/ExportCursor" }
       responses:
         "200":
           description: CSV.
           content:
             text/csv:
               schema: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v0/exports/iocs.json:
+    get:
+      tags: [exports]
+      operationId: exportIocsJson
+      summary: IOC JSON export
+      description: |
+        Gated IOCs as `schemas/ioc.schema.json` objects (the #34 field
+        list), after export redaction, with the attempt notes (including
+        the memory-only implant note) and counts of what the gate left
+        out. See `docs/intel-outputs.md`.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [exports:read]
+      parameters:
+        - { $ref: "#/components/parameters/ExportSince" }
+        - { $ref: "#/components/parameters/ExportUntil" }
+        - { $ref: "#/components/parameters/ExportMinConfidence" }
+        - { $ref: "#/components/parameters/ExportCatalogueId" }
+        - { $ref: "#/components/parameters/ExportState" }
+        - { $ref: "#/components/parameters/ExportCampaignId" }
+        - { $ref: "#/components/parameters/ExportDecoyKind" }
+        - { $ref: "#/components/parameters/ExportIncludeUnreviewed" }
+        - { $ref: "#/components/parameters/ExportIncludeActors" }
+        - { $ref: "#/components/parameters/ExportIncludePayloads" }
+        - { $ref: "#/components/parameters/ExportTlp" }
+        - { $ref: "#/components/parameters/ExportCursor" }
+      responses:
+        "200":
+          description: The IOC export.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [format, version, tlp, unreviewed, dropped, attempts, items, truncated]
+                properties:
+                  format: { const: foiled-iocs }
+                  version: { const: 1 }
+                  tlp: { type: string, enum: [clear, green, amber, amber+strict, red] }
+                  unreviewed: { type: boolean }
+                  dropped: { type: object }
+                  attempts:
+                    type: array
+                    items:
+                      type: object
+                      required: [attempt_id, state, file_ioc_limited, notes]
+                      properties:
+                        attempt_id: { type: string }
+                        state: { type: string }
+                        file_ioc_limited: { type: boolean }
+                        notes: { type: array, items: { type: string } }
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/ioc.schema.json" }
+                  truncated: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
   /v0/exports/stix:
-    post:
+    get:
       tags: [exports]
-      operationId: requestStixExport
-      summary: Queue a STIX 2.1 bundle export
-      description: Runs on a Queue consumer; the response points at the result in R2 (#13).
+      operationId: exportStix
+      summary: STIX 2.1 bundle download
+      description: |
+        A deterministic STIX 2.1 bundle: indicators with patterns,
+        observables, observed-data per attempt, sightings, vulnerability and
+        attack-pattern objects with relationships carrying `confidence`
+        from #27 and "we assess as" wording, under a TLP 2.0 marking.
+        Built on request from the same window as `/v0/attempts` (default
+        the last 7 days, at most 31 days); nothing is stored. One request
+        reads at most 4,000 capture events, oldest first; when the window
+        held more, `x-foiled-truncated` is `true` and `x-foiled-next-cursor`
+        is the `cursor` to continue from (same `until`). The cursor is the
+        last event read in `(ts, event_id)` order, so parts never overlap
+        or skip, even within one millisecond. Only
+        publishable links and IOCs leave unless `include_unreviewed` is set
+        by a caller that also holds `review:write`; that export is audited
+        and marked TLP:AMBER+STRICT or stricter. See
+        `docs/intel-outputs.md`.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [exports:read]
+      parameters:
+        - { $ref: "#/components/parameters/ExportSince" }
+        - { $ref: "#/components/parameters/ExportUntil" }
+        - { $ref: "#/components/parameters/ExportMinConfidence" }
+        - { $ref: "#/components/parameters/ExportCatalogueId" }
+        - { $ref: "#/components/parameters/ExportState" }
+        - { $ref: "#/components/parameters/ExportCampaignId" }
+        - { $ref: "#/components/parameters/ExportDecoyKind" }
+        - { $ref: "#/components/parameters/ExportIncludeUnreviewed" }
+        - { $ref: "#/components/parameters/ExportIncludeActors" }
+        - { $ref: "#/components/parameters/ExportIncludePayloads" }
+        - { $ref: "#/components/parameters/ExportTlp" }
+        - { $ref: "#/components/parameters/ExportCursor" }
+      responses:
+        "200":
+          description: The bundle. `x-foiled-truncated` says whether the window held more events than the cap.
+          content:
+            application/stix+json;version=2.1:
+              schema: { $ref: "../schemas/stix-bundle.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v0/exports/misp:
+    get:
+      tags: [exports]
+      operationId: exportMisp
+      summary: MISP event download
+      description: |
+        One unpublished MISP event (distribution "your organisation only")
+        with attributes, file objects, TLP and ATT&CK galaxy tags.
+        `to_ids` is set only for publishable indicators of matchable types.
+        Same gate and filters as the STIX export. See
+        `docs/intel-outputs.md#misp`.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [exports:read]
+      parameters:
+        - { $ref: "#/components/parameters/ExportSince" }
+        - { $ref: "#/components/parameters/ExportUntil" }
+        - { $ref: "#/components/parameters/ExportMinConfidence" }
+        - { $ref: "#/components/parameters/ExportCatalogueId" }
+        - { $ref: "#/components/parameters/ExportState" }
+        - { $ref: "#/components/parameters/ExportCampaignId" }
+        - { $ref: "#/components/parameters/ExportDecoyKind" }
+        - { $ref: "#/components/parameters/ExportIncludeUnreviewed" }
+        - { $ref: "#/components/parameters/ExportIncludeActors" }
+        - { $ref: "#/components/parameters/ExportIncludePayloads" }
+        - { $ref: "#/components/parameters/ExportTlp" }
+        - { $ref: "#/components/parameters/ExportCursor" }
+      responses:
+        "200":
+          description: The event.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/misp-event.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /taxii2/:
+    get:
+      tags: [taxii]
+      operationId: taxiiDiscovery
+      summary: TAXII 2.1 discovery
+      description: Planned as a follow-up to #13, served from a materialised STIX object log. Lists the one API root. Bearer token with `exports:read`, as for every TAXII endpoint.
       x-foiled-status: planned
       x-foiled-issue: 13
-      x-foiled-store: queue
+      x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { type: object }
       responses:
-        "202": { description: "Export queued." }
+        "200":
+          description: Discovery resource.
+          content:
+            application/taxii+json;version=2.1:
+              schema:
+                type: object
+                required: [title, api_roots]
+                properties:
+                  title: { type: string }
+                  description: { type: string }
+                  default: { type: string }
+                  api_roots: { type: array, items: { type: string } }
+        "401": { $ref: "#/components/responses/TaxiiError" }
+        "403": { $ref: "#/components/responses/TaxiiError" }
+        "406": { $ref: "#/components/responses/TaxiiError" }
+
+  /taxii2/foiled/:
+    get:
+      tags: [taxii]
+      operationId: taxiiApiRoot
+      summary: TAXII 2.1 API root
+      x-foiled-status: planned
+      x-foiled-issue: 13
+      x-foiled-store: postgres
+      x-foiled-scopes: [exports:read]
+      responses:
+        "200":
+          description: API root resource.
+          content:
+            application/taxii+json;version=2.1:
+              schema:
+                type: object
+                required: [title, versions, max_content_length]
+                properties:
+                  title: { type: string }
+                  description: { type: string }
+                  versions: { type: array, items: { type: string } }
+                  max_content_length: { type: integer }
+        "401": { $ref: "#/components/responses/TaxiiError" }
+        "403": { $ref: "#/components/responses/TaxiiError" }
+        "406": { $ref: "#/components/responses/TaxiiError" }
+
+  /taxii2/foiled/collections/:
+    get:
+      tags: [taxii]
+      operationId: taxiiCollections
+      summary: TAXII 2.1 collections
+      x-foiled-status: planned
+      x-foiled-issue: 13
+      x-foiled-store: postgres
+      x-foiled-scopes: [exports:read]
+      responses:
+        "200":
+          description: The one read-only collection.
+          content:
+            application/taxii+json;version=2.1:
+              schema:
+                type: object
+                properties:
+                  collections: { type: array, items: { $ref: "#/components/schemas/TaxiiCollection" } }
+        "401": { $ref: "#/components/responses/TaxiiError" }
+        "403": { $ref: "#/components/responses/TaxiiError" }
+        "406": { $ref: "#/components/responses/TaxiiError" }
+
+  /taxii2/foiled/collections/{collection_id}/:
+    get:
+      tags: [taxii]
+      operationId: taxiiCollection
+      summary: TAXII 2.1 collection
+      x-foiled-status: planned
+      x-foiled-issue: 13
+      x-foiled-store: postgres
+      x-foiled-scopes: [exports:read]
+      parameters:
+        - { $ref: "#/components/parameters/TaxiiCollectionId" }
+      responses:
+        "200":
+          description: The collection.
+          content:
+            application/taxii+json;version=2.1:
+              schema: { $ref: "#/components/schemas/TaxiiCollection" }
+        "401": { $ref: "#/components/responses/TaxiiError" }
+        "403": { $ref: "#/components/responses/TaxiiError" }
+        "404": { $ref: "#/components/responses/TaxiiError" }
+        "406": { $ref: "#/components/responses/TaxiiError" }
+
+  /taxii2/foiled/collections/{collection_id}/objects/:
+    get:
+      tags: [taxii]
+      operationId: taxiiObjects
+      summary: TAXII 2.1 objects
+      description: |
+        The objects `/v0/exports/stix` builds with default options
+        (publishable only, TLP:AMBER), sorted by `date_added` then id.
+        Each page reads events from its own position (`next`, else
+        `added_after`, else 7 days ago; never more than 30 days back), at
+        most 4,000 per page; a cut window answers `more: true` with a
+        `next`, even on a short page. An object's `date_added` is never
+        earlier than that of any object referring to it, so `added_after`
+        polls never strand a reference. `added_after` is exclusive. Pages
+        hold at most `limit` objects (default 100, at most 1000); follow
+        `next` while `more` is true. `X-TAXII-Date-Added-First` and
+        `X-TAXII-Date-Added-Last` describe the page.
+      x-foiled-status: planned
+      x-foiled-issue: 13
+      x-foiled-store: postgres
+      x-foiled-scopes: [exports:read]
+      parameters:
+        - { $ref: "#/components/parameters/TaxiiCollectionId" }
+        - { $ref: "#/components/parameters/TaxiiAddedAfter" }
+        - { $ref: "#/components/parameters/TaxiiLimit" }
+        - { $ref: "#/components/parameters/TaxiiNext" }
+        - { name: "match[id]", in: query, schema: { type: string } }
+        - { name: "match[type]", in: query, schema: { type: string } }
+        - { name: "match[version]", in: query, schema: { type: string } }
+        - { name: "match[spec_version]", in: query, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/TaxiiEnvelope" }
+        "400": { $ref: "#/components/responses/TaxiiError" }
+        "401": { $ref: "#/components/responses/TaxiiError" }
+        "403": { $ref: "#/components/responses/TaxiiError" }
+        "404": { $ref: "#/components/responses/TaxiiError" }
+        "406": { $ref: "#/components/responses/TaxiiError" }
+
+  /taxii2/foiled/collections/{collection_id}/objects/{object_id}/:
+    get:
+      tags: [taxii]
+      operationId: taxiiObject
+      summary: TAXII 2.1 object by id
+      x-foiled-status: planned
+      x-foiled-issue: 13
+      x-foiled-store: postgres
+      x-foiled-scopes: [exports:read]
+      parameters:
+        - { $ref: "#/components/parameters/TaxiiCollectionId" }
+        - { name: object_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/TaxiiEnvelope" }
+        "401": { $ref: "#/components/responses/TaxiiError" }
+        "403": { $ref: "#/components/responses/TaxiiError" }
+        "404": { $ref: "#/components/responses/TaxiiError" }
+        "406": { $ref: "#/components/responses/TaxiiError" }
+
+  /taxii2/foiled/collections/{collection_id}/manifest/:
+    get:
+      tags: [taxii]
+      operationId: taxiiManifest
+      summary: TAXII 2.1 manifest
+      x-foiled-status: planned
+      x-foiled-issue: 13
+      x-foiled-store: postgres
+      x-foiled-scopes: [exports:read]
+      parameters:
+        - { $ref: "#/components/parameters/TaxiiCollectionId" }
+        - { $ref: "#/components/parameters/TaxiiAddedAfter" }
+        - { $ref: "#/components/parameters/TaxiiLimit" }
+        - { $ref: "#/components/parameters/TaxiiNext" }
+        - { name: "match[id]", in: query, schema: { type: string } }
+        - { name: "match[type]", in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: One manifest record per object.
+          content:
+            application/taxii+json;version=2.1:
+              schema:
+                type: object
+                required: [more]
+                properties:
+                  more: { type: boolean }
+                  next: { type: string }
+                  objects:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, date_added, version, media_type]
+                      properties:
+                        id: { type: string }
+                        date_added: { type: string }
+                        version: { type: string }
+                        media_type: { type: string }
+        "400": { $ref: "#/components/responses/TaxiiError" }
+        "401": { $ref: "#/components/responses/TaxiiError" }
+        "403": { $ref: "#/components/responses/TaxiiError" }
+        "404": { $ref: "#/components/responses/TaxiiError" }
+        "406": { $ref: "#/components/responses/TaxiiError" }
 
   /v0/alerts:
     get:
@@ -1795,6 +2137,80 @@ components:
       in: path
       required: true
       schema: { type: string }
+    ExportSince:
+      name: since
+      in: query
+      schema: { type: integer }
+      description: "Unix ms, inclusive. Default: 7 days before `until` (30 days ago for `fields=source`)."
+    ExportUntil:
+      name: until
+      in: query
+      schema: { type: integer }
+      description: "Unix ms, exclusive. Default: now. The window is at most 31 days."
+    ExportMinConfidence:
+      name: min_confidence
+      in: query
+      schema: { type: integer, minimum: 0, maximum: 100 }
+      description: Drop links and IOCs scoring below this. Only narrows; never lets anything below `publish_min` through.
+    ExportCatalogueId:
+      name: catalogue_id
+      in: query
+      schema: { type: string, maxLength: 256 }
+    ExportState:
+      name: state
+      in: query
+      schema: { type: string, enum: [probe, exploit, post-exploitation] }
+    ExportCampaignId:
+      name: campaign_id
+      in: query
+      schema: { type: string, maxLength: 256 }
+    ExportDecoyKind:
+      name: decoy_kind
+      in: query
+      schema: { $ref: "#/components/schemas/DecoyKind" }
+    ExportIncludeUnreviewed:
+      name: include_unreviewed
+      in: query
+      schema: { type: boolean, default: false }
+      description: Include links and IOCs that are not publishable. Requires `review:write`; audited; the export is marked TLP:AMBER+STRICT or stricter and is never public.
+    ExportIncludeActors:
+      name: include_actors
+      in: query
+      schema: { type: boolean, default: false }
+      description: Include actor links (#29), worded "possible association" unless high and analyst-confirmed.
+    ExportIncludePayloads:
+      name: include_payloads
+      in: query
+      schema: { type: boolean, default: false }
+      description: Include request strings taken from stored bodies and request slices (#16). Hashes are always included.
+    ExportCursor:
+      name: cursor
+      in: query
+      schema: { type: string, maxLength: 1100 }
+      description: The `x-foiled-next-cursor` of a cut export. Reads strictly after that event; pass the same `until` and filters.
+    ExportTlp:
+      name: tlp
+      in: query
+      schema: { type: string, enum: [clear, green, amber, amber+strict, red], default: amber }
+    TaxiiCollectionId:
+      name: collection_id
+      in: path
+      required: true
+      schema: { type: string }
+    TaxiiAddedAfter:
+      name: added_after
+      in: query
+      schema: { type: string }
+      description: STIX timestamp; only objects added strictly after it.
+    TaxiiLimit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    TaxiiNext:
+      name: next
+      in: query
+      schema: { type: string }
+      description: Opaque cursor from the previous page.
 
   pathItems:
     DecoyAction:
@@ -1835,6 +2251,27 @@ components:
           "429": { $ref: "#/components/responses/RateLimited" }
 
   responses:
+    TaxiiError:
+      description: A TAXII 2.1 error message.
+      content:
+        application/taxii+json;version=2.1:
+          schema:
+            type: object
+            required: [title]
+            properties:
+              title: { type: string }
+              http_status: { type: string }
+    TaxiiEnvelope:
+      description: A TAXII 2.1 envelope of STIX 2.1 objects.
+      content:
+        application/taxii+json;version=2.1:
+          schema:
+            type: object
+            required: [more]
+            properties:
+              more: { type: boolean }
+              next: { type: string }
+              objects: { type: array, items: { type: object } }
     BadRequest:
       description: Invalid input.
       content:
@@ -1920,6 +2357,16 @@ components:
     DecoyKind:
       type: string
       enum: [sandbox, emulation]
+    TaxiiCollection:
+      type: object
+      required: [id, title, can_read, can_write]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        can_read: { type: boolean }
+        can_write: { type: boolean }
+        media_types: { type: array, items: { type: string } }
     IocType:
       type: string
       enum: [ip, ipv6, domain, url, http_path, http_ua, request_substring, payload_sha256, file_sha256, cmdline, dns_query, behaviour_fingerprint]

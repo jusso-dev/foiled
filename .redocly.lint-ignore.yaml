@@ -1,0 +1,14 @@
+# This file instructs Redocly's linter to ignore the rules contained for specific parts of your API.
+# See https://redocly.com/docs/cli/ for more information.
+# TAXII 2.1 endpoint URLs end in a slash by the specification, so the
+# trailing-slash rule is waived for the /taxii2/ paths only (#13). Keep this
+# list to TAXII paths; every other path must pass the rule.
+api/openapi.yaml:
+  no-path-trailing-slash:
+    - '#/paths/~1taxii2~1'
+    - '#/paths/~1taxii2~1foiled~1'
+    - '#/paths/~1taxii2~1foiled~1collections~1'
+    - '#/paths/~1taxii2~1foiled~1collections~1{collection_id}~1'
+    - '#/paths/~1taxii2~1foiled~1collections~1{collection_id}~1objects~1'
+    - '#/paths/~1taxii2~1foiled~1collections~1{collection_id}~1objects~1{object_id}~1'
+    - '#/paths/~1taxii2~1foiled~1collections~1{collection_id}~1manifest~1'

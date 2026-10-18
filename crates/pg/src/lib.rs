@@ -355,6 +355,29 @@ pub async fn events_between(
         .collect())
 }
 
+/// Events strictly after `(after_ts, after_id)` in `(ts, event_id)` order,
+/// for continuing an export past a cut (#13).
+pub async fn events_after(
+    client: &Client,
+    tenant_id: &str,
+    after_ts: i64,
+    after_id: &str,
+    until: i64,
+    limit: i64,
+) -> Result<Vec<CaptureEvent>, Error> {
+    let rows = client
+        .query(
+            "SELECT body FROM capture_events WHERE tenant_id = $1 AND (ts, event_id) > ($2, $3)
+             AND ts < $4 ORDER BY ts, event_id LIMIT $5",
+            &[&tenant_id, &after_ts, &after_id, &until, &limit],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .filter_map(|r| serde_json::from_value(r.get("body")).ok())
+        .collect())
+}
+
 /// One stored analyst decision (`link_overrides`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkOverrideRow {
@@ -396,18 +419,35 @@ pub async fn link_overrides(
             &[&tenant_id, &attempt_id],
         )
         .await?;
-    Ok(rows
-        .iter()
-        .map(|r| LinkOverrideRow {
-            attempt_id: r.get("attempt_id"),
-            kind: r.get("kind"),
-            target: r.get("target"),
-            feedback: r.get("feedback"),
-            analyst_id: r.get("analyst_id"),
-            at: r.get("at"),
-            note: r.get("note"),
-        })
-        .collect())
+    Ok(rows.iter().map(override_row).collect())
+}
+
+/// Overrides for several attempts in one query, for exports (#13).
+pub async fn link_overrides_many(
+    client: &Client,
+    tenant_id: &str,
+    attempt_ids: &[String],
+) -> Result<Vec<LinkOverrideRow>, Error> {
+    let rows = client
+        .query(
+            "SELECT attempt_id, kind, target, feedback, analyst_id, at, note FROM link_overrides
+             WHERE tenant_id = $1 AND attempt_id = ANY($2) ORDER BY attempt_id, kind, target",
+            &[&tenant_id, &attempt_ids],
+        )
+        .await?;
+    Ok(rows.iter().map(override_row).collect())
+}
+
+fn override_row(r: &Row) -> LinkOverrideRow {
+    LinkOverrideRow {
+        attempt_id: r.get("attempt_id"),
+        kind: r.get("kind"),
+        target: r.get("target"),
+        feedback: r.get("feedback"),
+        analyst_id: r.get("analyst_id"),
+        at: r.get("at"),
+        note: r.get("note"),
+    }
 }
 
 /// Append one analyst campaign action (#33). `body` is the whole

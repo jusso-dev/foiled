@@ -118,6 +118,14 @@ pub const BINDINGS: &[Binding] = &[
         schema: "schemas/campaign-action.schema.json",
     },
     Binding {
+        data_dir: "testdata/exports/stix",
+        schema: "schemas/stix-bundle.schema.json",
+    },
+    Binding {
+        data_dir: "testdata/exports/misp",
+        schema: "schemas/misp-event.schema.json",
+    },
+    Binding {
         data_dir: "testdata/agent/jobs",
         schema: "schemas/agent/job.schema.json",
     },

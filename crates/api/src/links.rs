@@ -23,6 +23,20 @@ static RULES: &str = include_str!(concat!(env!("OUT_DIR"), "/attack_rules.json")
 static MATCHERS: &str = include_str!(concat!(env!("OUT_DIR"), "/matchers.json"));
 static SEQUENCES: &str = include_str!(concat!(env!("OUT_DIR"), "/sequences.json"));
 static ADVISORIES: &str = include_str!(concat!(env!("OUT_DIR"), "/advisories.json"));
+static ATTACK_SIDECAR: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../data/attack/techniques.json"
+));
+
+/// The pinned ATT&CK sidecar (`data/attack/techniques.json`, #26), for
+/// technique names and STIX ids in exports (#13). Checked by
+/// `foiled-lint`'s ATT&CK tests in CI, so a parse failure is a build bug.
+pub fn attack_sidecar() -> &'static foiled_core::attack::AttackSidecar {
+    static PARSED: OnceLock<foiled_core::attack::AttackSidecar> = OnceLock::new();
+    PARSED.get_or_init(|| {
+        serde_json::from_str(ATTACK_SIDECAR).expect("bundled ATT&CK sidecar parses")
+    })
+}
 
 /// The ATT&CK rules bundled at build time. Validated by `foiled-lint` in CI,
 /// so a parse failure is a build bug.

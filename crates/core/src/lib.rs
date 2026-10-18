@@ -21,6 +21,7 @@ pub mod enrichment;
 pub mod enrolment;
 pub mod honeyscore;
 pub mod hooks;
+pub mod intel;
 pub mod ioc;
 pub mod llm;
 pub mod mcp;

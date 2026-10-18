@@ -72,7 +72,11 @@ pub struct AttemptIocList {
 }
 
 /// Add ASN context to the IOCs about to be returned.
-async fn enrich(state: &AppState, tenant_id: &str, iocs: &mut [Ioc]) -> Result<(), ApiError> {
+pub(crate) async fn enrich(
+    state: &AppState,
+    tenant_id: &str,
+    iocs: &mut [Ioc],
+) -> Result<(), ApiError> {
     let observables = address_observables(iocs);
     if observables.is_empty() {
         return Ok(());

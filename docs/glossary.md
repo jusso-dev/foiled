@@ -60,7 +60,7 @@ CISA's Known Exploited Vulnerabilities catalogue, a public list of CVEs with con
 One rung on the ladder Foiled uses to link an attempt to a CVE: signatures, behavioural sequences, vulnerable-path hooks, pre-disclosure back-matching and vendor description correlation. Each tier produces evidence with a different weight in the confidence layer (#12).
 
 **MISP**
-An open source threat intelligence sharing platform and its event format. Foiled can export attempts and IOCs as MISP events (#13).
+An open source threat intelligence sharing platform and its event format. Foiled exports attempts and IOCs as MISP events (#13, [intel-outputs.md](intel-outputs.md#misp)).
 
 **mTLS**
 Mutual TLS: both client and server present certificates. Edge sensors use mTLS with an enrolment identity when they send data to the central ingest (#31).
@@ -108,7 +108,7 @@ A deployment that runs decoys and sends capture data to Foiled.
 Structured Threat Information Expression, the OASIS standard format for threat intelligence. Foiled exports STIX 2.1 bundles (#13) and reads ATT&CK as STIX data (#26).
 
 **TAXII**
-Trusted Automated Exchange of Intelligence Information, the protocol for serving and fetching STIX over HTTPS. Foiled can serve exports through a TAXII collection (#13).
+Trusted Automated Exchange of Intelligence Information, the protocol for serving and fetching STIX over HTTPS. Foiled will serve its published intel through a read-only TAXII 2.1 collection (#13, [intel-outputs.md](intel-outputs.md#taxii-21)).
 
 **"We assess as"**
 The required wording for a link between an attempt and a CVE that an analyst has not confirmed, for example "we assess as an attempt against `CVE-2099-0001`". The word "confirmed" is used only after analyst confirmation (#12, #27).

@@ -131,8 +131,8 @@ Foiled's legal hold is deliberately simple: **stop purging one decoy, or raise t
 ## Exports after purge
 
 - **Exports read only live rows and live objects.** Once a row or object is purged it cannot appear in a later export. Nothing keeps a shadow copy for exporting.
-- **Export bundles are short-lived** (`export_bundle`, 1 day). A bundle generated before a purge can contain data purged afterwards, which is why bundles expire quickly. Copies someone has already downloaded are outside Foiled's control.
-- **STIX `include_payloads` defaults to false** (#13). With `store_payloads: false` there are only hashes to include anyway. With it on, only live payloads are included.
+- **Export bundles are short-lived** (`export_bundle`, 1 day). Today no bundle is stored at all: STIX, MISP, CSV, JSON and TAXII outputs are built on request from live events ([intel-outputs.md](intel-outputs.md#privacy-retention-and-redaction)). The TTL applies once queued exports write bundles to R2. Copies someone has already downloaded are outside Foiled's control.
+- **`include_payloads` defaults to false** on every export (#13). With `store_payloads: false` there are only hashes to include anyway. With it on, only live payloads are included.
 - **The API returns 404** for an attempt id older than the `attempt` TTL, and for evidence (a pcap, a quarantined file) whose object has been purged even while the attempt row is still live. This lands with the attempts API (#21, #25).
 - Contribute-back to a central radar (#35, #37) is opt-in, separate, and has its own redaction and delay rules.
 

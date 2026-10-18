@@ -96,6 +96,14 @@ jobs:
           key: lint
       - name: Validate JSON Schemas and catalogue entries
         run: cargo run -p foiled-lint --locked -- .
+      - name: Validate STIX fixtures with the OASIS validator
+        # Pinned: the 3.3.x wheels on PyPI ship without the bundled STIX
+        # schemas. --strict fails on any warning except the checks waived in
+        # docs/intel-outputs.md#validation (103, 245, 302, 401).
+        run: |
+          python3 -m venv "$RUNNER_TEMP/stixv"
+          "$RUNNER_TEMP/stixv/bin/pip" install --quiet stix2-validator==3.2.0
+          "$RUNNER_TEMP/stixv/bin/stix2_validator" --version 2.1 --strict -d 103,245,302,401 testdata/exports/stix/
       - name: Demo app unit tests
         run: python3 -m unittest discover -s build/recipes/foiled-demo-app/app -v
       - name: Check nftables ruleset syntax

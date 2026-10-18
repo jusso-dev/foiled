@@ -130,6 +130,29 @@ fn ready<'a, T: Send + 'a>(v: Result<T, StoreError>) -> StoreFuture<'a, T> {
 }
 
 impl Store for MemoryStore {
+    fn events_after(
+        &self,
+        tenant_id: &str,
+        after: (i64, String),
+        until: i64,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<CaptureEvent>> {
+        let mut out: Vec<CaptureEvent> = self
+            .lock()
+            .events
+            .iter()
+            .filter(|e| e.tenant_id.as_deref() == Some(tenant_id) && e.ts < until)
+            .filter(|e| (e.ts, &e.event_id) > (after.0, &after.1))
+            .cloned()
+            .collect();
+        let source = |e: &CaptureEvent| e.source.as_ref().map(|s| (s.kind, s.id.clone()));
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|e| seen.insert((source(e), e.event_id.clone())));
+        out.sort_by(|a, b| (a.ts, &a.event_id).cmp(&(b.ts, &b.event_id)));
+        out.truncate(limit);
+        ready(Ok(out))
+    }
+
     fn token(&self, id: &str) -> StoreFuture<'_, Option<TokenRecord>> {
         ready(Ok(self.lock().tokens.get(id).cloned()))
     }
