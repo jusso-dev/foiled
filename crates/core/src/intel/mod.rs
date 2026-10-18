@@ -323,8 +323,13 @@ pub fn select(input: ExportInput, opts: &ExportOptions) -> Selection {
             }
         }
     }
+    // Links to ATT&CK groups (#29) name MITRE content too.
+    let attack_groups = out_attempts
+        .iter()
+        .flat_map(|r| &r.links)
+        .any(crate::actor::is_attack_group_link);
     let (attack_version, attack_notice) = match &input.attack {
-        Some(s) if !techniques.is_empty() => (
+        Some(s) if !techniques.is_empty() || attack_groups => (
             Some(s.attack_version.clone()),
             Some(format!("{} {}", s.notice, s.licence)),
         ),

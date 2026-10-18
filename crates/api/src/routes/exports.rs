@@ -165,6 +165,7 @@ pub fn export_input(
     iocs: Vec<Ioc>,
     overrides: &OverrideIndex,
     campaigns: &[foiled_core::campaign::Campaign],
+    actor_links: &BTreeMap<String, Vec<foiled_core::confidence::ConfidenceLink>>,
 ) -> ExportInput {
     let cfg_links = ConfidenceConfig::default();
     // Each member's own link (#33): its joins, carried-over state and noise,
@@ -201,6 +202,11 @@ pub fn export_input(
                 && let Some(l) = member_links.get(&(attempt.attempt_id.clone(), c.clone()))
             {
                 links.push(l.clone());
+            }
+            // Actor possible-associations (#29), already reduced by
+            // `actor::export_links` to confirmed (the only publishable) ones.
+            if let Some(list) = actor_links.get(&attempt.attempt_id) {
+                links.extend(list.iter().cloned());
             }
             let summary = extraction.for_attempt(&attempt.attempt_id);
             AttemptRecord {
@@ -293,6 +299,24 @@ pub(crate) async fn selection_capped(
         cap,
     )
     .await?;
+    // Actor links (#29) only when the export opts in. Pending and rejected
+    // links never leave, even with `include_unreviewed`: `export_links`
+    // keeps confirmed links only.
+    let actor_links = match m.inputs.as_ref() {
+        Some(inputs) if opts.include_actors => {
+            let (links, _, _) = crate::routes::actors::match_window(
+                state,
+                &who.tenant_id,
+                &mut m.campaigns.campaigns,
+                &m.attempts,
+                &m.iocs,
+                inputs,
+            )
+            .await?;
+            foiled_core::actor::export_links(&links)
+        }
+        _ => BTreeMap::new(),
+    };
     let attempts: Vec<Attempt> = m
         .attempts
         .into_iter()
@@ -326,6 +350,7 @@ pub(crate) async fn selection_capped(
         iocs,
         &overrides,
         &m.campaigns.campaigns,
+        &actor_links,
     );
     let scope = {
         use sha2::{Digest, Sha256};
