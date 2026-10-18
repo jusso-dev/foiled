@@ -6,13 +6,20 @@
 //! ([`executor`]), and reports the result. Evidence goes up as capture
 //! envelopes, buffered locally ([`buffer::OfflineBuffer`]) while the control
 //! plane is unreachable. There is no inbound management port and no shell.
+//!
+//! The same binary runs as an edge sensor (`role = "sensor"`, #31): it
+//! enrols with a one-time token ([`enrol`]), renews its own certificate,
+//! leases only jobs placed on it, and verifies signed builds before an
+//! update ([`update`]).
 
 pub mod agent;
 pub mod buffer;
 pub mod client;
 pub mod config;
 pub mod docker;
+pub mod enrol;
 pub mod executor;
 pub mod gate;
 pub mod logcapture;
 pub mod runtime;
+pub mod update;

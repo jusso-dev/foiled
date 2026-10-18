@@ -1,0 +1,40 @@
+# Example /etc/foiled/sensor.toml for an edge sensor running foiled-hostd
+# with role = "sensor" (#31, docs/deploy/edge-sensor.md). Copy and edit.
+# No database credentials, Cloudflare tokens, R2 keys or API tokens go here.
+# The enrolment token is passed as a file to `foiled-hostd enrol` and is
+# deleted once redeemed; it is never stored in this file.
+
+role = "sensor"
+# The sensor id shown when the tenant admin registered the sensor.
+host_id = "sen-example-1"
+# The mTLS ingest hostname. Placeholder: never commit real zone names.
+api_base = "https://ingest.example.invalid"
+# Written by `foiled-hostd enrol` and by renewals (owner-only).
+client_cert = "/var/lib/foiled/identity/sensor.crt"
+client_key = "/var/lib/foiled/identity/sensor.key"
+state_dir = "/var/lib/foiled"
+
+publicly_exposed = true
+# Edge sensors run emulations by default. Firecracker sandboxes on an edge
+# host are heavy and need sandbox_allowed on the sensor record.
+sandbox_runtime = "firecracker"
+
+allowlist = [
+  "emulator:redis/redis-7.0",
+]
+
+# Offline buffer cap. The sensor default is 256 MiB (hosts: 1 GiB).
+buffer_max_bytes = 268435456
+heartbeat_secs = 30
+poll_secs = 5
+
+# The control plane's job signing public key(s).
+[[trusted_keys]]
+id = "k1"
+public_key = "<hex Ed25519 public key>"
+
+# Offline release signing key(s). Builds must verify against one of these
+# before `foiled-hostd verify-update` stages them.
+[[release_keys]]
+id = "rel-2026"
+public_key = "<hex Ed25519 public key>"

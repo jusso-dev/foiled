@@ -89,28 +89,53 @@ impl Agent {
     }
 
     /// Send buffered events oldest first until the buffer is empty or the
-    /// control plane is unreachable. Returns how many were delivered.
+    /// control plane is unreachable. Returns how many were accepted.
+    ///
+    /// - Unreachable, 5xx or 429 (back-pressure): stop, keep everything,
+    ///   try again next tick.
+    /// - 401 or 403 (certificate revoked, retired or unknown): stop and keep
+    ///   everything. The data is fine; the identity is not.
+    /// - Any other refusal: the batch holds an event ingest will never take.
+    ///   Resend one at a time and drop only the refused events, counting
+    ///   them in `dropped_events`, so one bad event cannot wedge the buffer.
+    ///
+    /// Delivery is at least once. Ingest is idempotent on `event_id`, so a
+    /// resend after a crash or a split batch creates no duplicates.
     pub async fn flush(&mut self) -> Result<usize, ClientError> {
+        let unavailable = |e: std::io::Error| ClientError::Unavailable(e.to_string());
         let mut sent = 0;
         loop {
-            let batch = self
-                .buffer
-                .peek(MAX_BATCH)
-                .map_err(|e| ClientError::Unavailable(e.to_string()))?;
+            let batch = self.buffer.peek(MAX_BATCH).map_err(unavailable)?;
             if batch.is_empty() {
                 return Ok(sent);
             }
+            let mut refused = 0;
             match self.cp.send_events(&batch).await {
                 Ok(()) => {}
-                // The control plane will never accept this batch. Drop it so
-                // the buffer does not wedge; the drop shows in heartbeats.
-                Err(ClientError::Refused(..)) => {}
+                Err(e) if e.is_identity_problem() => return Err(e),
+                Err(ClientError::Refused(..)) => {
+                    for (i, event) in batch.iter().enumerate() {
+                        match self.cp.send_events(std::slice::from_ref(event)).await {
+                            Ok(()) => {}
+                            Err(e) if e.is_identity_problem() => {
+                                self.buffer.commit(i).map_err(unavailable)?;
+                                return Err(e);
+                            }
+                            Err(ClientError::Refused(..)) => {
+                                self.buffer.note_dropped(1);
+                                refused += 1;
+                            }
+                            Err(e) => {
+                                self.buffer.commit(i).map_err(unavailable)?;
+                                return Err(e);
+                            }
+                        }
+                    }
+                }
                 Err(e) => return Err(e),
             }
-            self.buffer
-                .commit(batch.len())
-                .map_err(|e| ClientError::Unavailable(e.to_string()))?;
-            sent += batch.len();
+            self.buffer.commit(batch.len()).map_err(unavailable)?;
+            sent += batch.len() - refused;
         }
     }
 

@@ -91,6 +91,7 @@ Rust crates: versions from `Cargo.lock` at the time of writing. JS packages: ver
 | serde | 1.0.229 | MIT OR Apache-2.0 | embed | yes | no | | #40 |
 | serde_json | 1.0.154 | MIT OR Apache-2.0 | embed | yes | no | | #40 |
 | jsonschema | 0.59.0 | MIT | embed (`foiled-lint`) | yes | no | | #19 |
+| rcgen | 0.14.10 | MIT OR Apache-2.0 | embed (`foiled-hostd` only, never the Worker) | yes | no | Generates the agent's key pair and CSR for enrolment and renewal (#31). Built with the `aws_lc_rs` backend that `reqwest`'s rustls already uses. Pulls in `pem` 4.0.0 (MIT), `yasna` 0.6.0, `time` 0.3.55, `time-core` 0.1.9, `deranged` 0.5.9, `num-conv` 0.2.2 and `powerfmt` 0.2.1 (all MIT OR Apache-2.0). Licences read from each crate's `Cargo.toml` on 18 Oct 2026. | #31 |
 | React (`react`, `react-dom`) | 19.3.1 | MIT | embed | yes | no | | #39 |
 | React Router (`react-router`, `@react-router/dev`) | 8.4.0 | MIT | embed | yes | no | | #40 |
 | Vite | 8.3.4 | MIT | build tool | yes | no | Not shipped at runtime. | #40 |
