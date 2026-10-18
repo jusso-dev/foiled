@@ -17,6 +17,7 @@ use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
+use foiled_core::enrich_pipeline::{EnrichPurgeCounts, EnrichPurgePlan, ProviderFailureRecord};
 use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, SeenFrom};
 use serde::{Deserialize, Serialize};
@@ -169,6 +170,14 @@ pub struct AuditQuery {
 /// Most events the default [`Store::events_after`] reads from one
 /// millisecond.
 pub const MAX_EVENTS_PER_MS: usize = 10_000;
+
+/// Result of taking rate-limit budget for one provider call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetOutcome {
+    Taken,
+    MinuteSpent,
+    DaySpent,
+}
 
 pub trait Store: Send + Sync {
     fn token(&self, id: &str) -> StoreFuture<'_, Option<TokenRecord>>;
@@ -398,13 +407,56 @@ pub trait Store: Send + Sync {
     /// store reads D1 `enrich_cache` in one batch of at most
     /// `max_statements` chunked statements (`d1_sql::enrich_lookup_plan`);
     /// pass the newest observables first, since the oldest are dropped when
-    /// the budget runs out.
+    /// the budget runs out. Rows kept for one tenant are returned only for
+    /// that `tenant_id`.
     fn enrichment_cache(
         &self,
         observables: Vec<Observable>,
         now_ms: i64,
         max_statements: usize,
+        tenant_id: Option<String>,
     ) -> StoreFuture<'_, Vec<CacheEntry>>;
+
+    /// Write an enrichment cache row (the `foiled-enrich` consumer, #11),
+    /// replacing the provider's earlier answer for the observable.
+    fn upsert_enrich_cache(&self, entry: CacheEntry) -> StoreFuture<'_, ()>;
+
+    /// Take one unit of a provider's minute and day budget at `now_ms`, or
+    /// none if either is spent (a minute unit taken before a spent day is
+    /// given back).
+    fn take_enrich_budget(
+        &self,
+        provider: &str,
+        now_ms: i64,
+        per_minute: u32,
+        per_day: u32,
+    ) -> StoreFuture<'_, BudgetOutcome>;
+
+    /// Recorded provider failures for one observable, for backoff.
+    fn enrich_failures(
+        &self,
+        observable: Observable,
+    ) -> StoreFuture<'_, Vec<ProviderFailureRecord>>;
+
+    /// Count a failed provider call. `error` is a short description, never
+    /// a response body or a key; `retry_at` comes from a `Retry-After`.
+    fn record_enrich_failure(
+        &self,
+        provider: &str,
+        observable: Observable,
+        now_ms: i64,
+        error: String,
+        retry_at: Option<i64>,
+    ) -> StoreFuture<'_, ()>;
+
+    /// Forget a provider's failures for an observable after it answers.
+    fn clear_enrich_failure(&self, provider: &str, observable: Observable) -> StoreFuture<'_, ()>;
+
+    /// Purge the enrichment tables (#16): cache rows past their own TTL,
+    /// rows past their provider's retention cap when `plan.retention` is
+    /// set, and failure rows that no longer affect any backoff. Each
+    /// statement deletes at most `plan.batch` rows.
+    fn purge_enrichment(&self, plan: EnrichPurgePlan) -> StoreFuture<'_, EnrichPurgeCounts>;
 
     fn record_heartbeat(
         &self,

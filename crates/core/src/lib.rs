@@ -18,6 +18,7 @@ pub mod catalogue;
 pub mod confidence;
 pub mod cvemap;
 pub mod decoy;
+pub mod enrich_pipeline;
 pub mod enrichment;
 pub mod enrolment;
 pub mod honeyscore;

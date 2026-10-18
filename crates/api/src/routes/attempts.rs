@@ -314,7 +314,7 @@ pub(crate) async fn cluster_inputs(
         crate::links::attack_rules(),
         crate::links::cve_rules(),
     );
-    let asns = source_asns(state, attempts).await;
+    let asns = source_asns(state, tenant_id, attempts).await;
     let advisories = crate::links::cve_rules()
         .advisories
         .iter()
@@ -424,6 +424,7 @@ pub(crate) async fn load_registry(
 /// clustering goes on without ASN features rather than failing.
 async fn source_asns(
     state: &AppState,
+    tenant_id: &str,
     attempts: &[Attempt],
 ) -> std::collections::BTreeMap<String, u32> {
     use foiled_core::enrichment::Observable;
@@ -444,7 +445,7 @@ async fn source_asns(
     if observables.is_empty() {
         return BTreeMap::new();
     }
-    let cached = crate::enrichment::cached_facts(state, observables).await;
+    let cached = crate::enrichment::cached_facts(state, tenant_id, observables).await;
     let mut newest: BTreeMap<Observable, (i64, u32)> = BTreeMap::new();
     for (observable, facts) in &cached.facts {
         for f in facts.iter().filter(|f| f.key == "asn.number") {

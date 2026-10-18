@@ -20,14 +20,31 @@
   ],
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<hyperdrive-config-id>" }],
   // Capture ingest (#9): the API produces, and the same Worker consumes.
+  // Enrichment (#11): the ingest consumer produces observables to
+  // foiled-enrich (the name must match `queue` in configs/enrichment.yaml),
+  // and the same Worker consumes them in batches: one ThreatSieve lookup
+  // carries up to a whole batch. A full batch of 100 is about 500 D1 queries
+  // (five per message at most), which needs the Workers Paid plan's 1,000
+  // per invocation; on the Free plan (50) set max_batch_size to 8 or less.
   "queues": {
-    "producers": [{ "binding": "INGEST", "queue": "foiled-ingest" }],
+    "producers": [
+      { "binding": "INGEST", "queue": "foiled-ingest" },
+      { "binding": "ENRICH", "queue": "foiled-enrich" }
+    ],
     "consumers": [
       {
         "queue": "foiled-ingest",
         "max_batch_size": 100,
         "max_retries": 5,
         "dead_letter_queue": "foiled-ingest-dlq"
+      },
+      {
+        "queue": "foiled-enrich",
+        "max_batch_size": 100,
+        "max_batch_timeout": 30,
+        "max_concurrency": 1,
+        "max_retries": 5,
+        "dead_letter_queue": "foiled-enrich-dlq"
       }
     ]
   },
@@ -41,6 +58,13 @@
     "JOB_SIGNING_KEY_ID": "k1",
     "R2_S3_HOST": "<account-id>.r2.cloudflarestorage.com"
   },
+  // ThreatSieve (#11) is opt-in and NOT bound here: a deploy with a service
+  // binding to a Worker that does not exist fails. Operators who run
+  // ThreatSieve add the THREATSIEVE binding to their private copy of this
+  // file (docs/deploy/workers.md, "Optional: ThreatSieve"). Without it,
+  // enrichment runs local_asn only.
+  // Hourly purge of expired enrichment cache and failure rows (#16).
+  "triggers": { "crons": ["17 * * * *"] },
   // Radar counters (#35).
   "analytics_engine_datasets": [{ "binding": "RADAR", "dataset": "foiled_radar" }]
 }

@@ -18,6 +18,7 @@ use serde::Serialize;
 pub mod auth;
 pub mod catalogue;
 pub mod d1_sql;
+pub mod enrich_consumer;
 pub mod enrichment;
 pub mod error;
 pub mod issuer;

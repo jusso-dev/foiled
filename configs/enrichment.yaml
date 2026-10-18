@@ -1,14 +1,14 @@
-# Enrichment providers (#11). Design: docs/enrichment.md.
-# Validated by schemas/enrichment-config.schema.json (foiled-lint).
+# Enrichment (#11). Design: docs/enrichment.md.
+# Validated by schemas/enrichment-config.schema.json (foiled-lint) and
+# bundled into the API Worker at build time: a change needs a redeploy.
 #
-# Every third-party provider is off by default. To turn one on, set
-# enabled: true and store your own key as the API Worker secret named in
-# api_key_env (for example: wrangler secret put GREYNOISE_API_KEY). Never put a
-# key in this file, in wrangler.jsonc or in CI. Only the variable NAME goes here.
-#
-# Third-party results are enrichment only. They are shown to the operator who
-# holds the key and are never resold, republished, exported or shared
-# (docs/compliance/licence-register.md).
+# External intel comes from one hub, ThreatSieve, the operator's own threat
+# intel platform, over a Cloudflare service binding. ThreatSieve holds the
+# per-source data (GreyNoise, CISA KEV, FIRST EPSS and so on) and says per
+# answer whether each source may be redistributed or used commercially.
+# Foiled keeps anything restricted out of exports and away from other
+# tenants (docs/compliance/licence-register.md). The key is a Worker secret
+# (wrangler secret put THREATSIEVE_API_KEY); only its NAME goes here.
 
 version: 1
 
@@ -16,17 +16,25 @@ version: 1
 queue: foiled-enrich
 
 cache:
-  # D1 holds cache rows and the per-provider rate limit counters.
+  # D1 holds cache rows, rate limit counters and failure backoff.
   store: d1
   # Used when a provider answers but knows nothing about the observable.
   negative_ttl_secs: 21600
   # Wait before asking a provider again after an error or a rate limit.
   error_backoff_secs: 300
 
-# When false, third-party Facts (every provider except local_asn and yara)
-# are left out of API responses. The API has no operator-only view yet.
-# Check each provider's terms before changing it. Bundled at build time.
+# When false, Facts from third-party providers are left out of API
+# responses. Shown regardless: local_asn, yara, and ThreatSieve answers whose
+# every source allows redistribution and commercial use.
 show_to_tenants: false
+
+# Restricted ThreatSieve answers (any source with commercial_use or
+# redistributable false or unknown, for example GreyNoise, CrowdSec or
+# abuse.ch feeds) are cached per tenant and never exported. When true, a
+# tenant sees the restricted answers its own lookups fetched. Off by
+# default: whether those sources' terms allow showing their data to your
+# tenants is a licence decision for your counsel, not a technical one.
+show_restricted_to_requester: false
 
 providers:
   # Local IP-range-to-ASN and country table. No network calls. Does nothing
@@ -39,81 +47,20 @@ providers:
     dataset_key: enrichment/asn.csv
     ttl_secs: 604800
 
-  # GreyNoise Community. noise and riot feed the noise score (#25, #27).
-  # The free Community tier allows about 50 lookups a week, hence 7 a day.
-  # Raise per_day to match a paid plan.
-  greynoise:
+  # ThreatSieve lookup hub: POST /v1/lookup over the service binding named
+  # in binding, with the key from api_key_env as a bearer token (scope
+  # intel:read). Off until the binding and the secret exist.
+  threatsieve:
     enabled: false
-    observables: [ip]
-    endpoint: https://api.greynoise.io/v3/community/{ip}
-    api_key_env: GREYNOISE_API_KEY
-    api_key_required: false
+    observables: [ip, domain, url, sha256, cve]
+    binding: THREATSIEVE
+    api_key_env: THREATSIEVE_API_KEY
+    include: [reputation, network, cve, relationships]
+    # Upper bound; ThreatSieve's own ttl_seconds wins when shorter.
     ttl_secs: 86400
+    # Observables per lookup (at most 500).
+    batch_size: 500
+    # Lookups, not observables, per minute and per day.
     rate_limit:
-      per_minute: 2
-      per_day: 7
-
-  # CrowdSec CTI smoke. Reputation, behaviours, ATT&CK techniques and CVEs.
-  # Set per_day to your plan's quota.
-  crowdsec:
-    enabled: false
-    observables: [ip]
-    endpoint: https://cti.api.crowdsec.net/v2/smoke/{ip}
-    api_key_env: CROWDSEC_CTI_KEY
-    api_key_required: true
-    ttl_secs: 86400
-    rate_limit:
-      per_minute: 5
-      per_day: 30
-
-  # DShield (SANS ISC). No key, but a contact User-Agent is required, for
-  # example "foiled-enrich (contact: soc@example.org)". CC BY-NC-SA 4.0 and
-  # "do not resell": never leaves the operator's console.
-  dshield:
-    enabled: false
-    observables: [ip]
-    endpoint: https://isc.sans.edu/api/ip/{ip}?json
-    user_agent_env: DSHIELD_CONTACT_UA
-    api_key_required: false
-    ttl_secs: 86400
-    rate_limit:
-      per_minute: 10
-      per_day: 1000
-
-  # Shadowserver. Vetted access; requests are signed with the key and secret.
-  # Also subscribe your own sensor ranges for remediation reports.
-  shadowserver:
-    enabled: false
-    observables: [ip]
-    endpoint: https://transform.shadowserver.org/api2/
-    api_key_env: SHADOWSERVER_API_KEY
-    api_secret_env: SHADOWSERVER_API_SECRET
-    api_key_required: true
-    ttl_secs: 86400
-    rate_limit:
-      per_minute: 5
-      per_day: 500
-
-  # Hunt.io. Paid and optional. C2 and infrastructure pivots for campaign and
-  # actor links (#29, #33). Set endpoint from your Hunt.io contract.
-  huntio:
-    enabled: false
-    observables: [ip, domain]
-    api_key_env: HUNTIO_API_KEY
-    api_key_required: true
-    ttl_secs: 86400
-    rate_limit:
-      per_minute: 5
-      per_day: 100
-
-  # AbuseIPDB. Optional. Abuse confidence and report counts.
-  abuseipdb:
-    enabled: false
-    observables: [ip]
-    endpoint: https://api.abuseipdb.com/api/v2/check?ipAddress={ip}&maxAgeInDays=90
-    api_key_env: ABUSEIPDB_KEY
-    api_key_required: true
-    ttl_secs: 86400
-    rate_limit:
-      per_minute: 10
-      per_day: 1000
+      per_minute: 30
+      per_day: 5000

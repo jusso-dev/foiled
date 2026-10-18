@@ -12,11 +12,13 @@ use foiled_core::auth::{Role, agent_scopes, parse_scopes};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::catalogue::DecoyKind;
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
-use foiled_core::enrichment::{CacheEntry, Observable};
+use foiled_core::enrich_pipeline::{EnrichMessage, ProviderFailureRecord};
+use foiled_core::enrichment::{AsnTable, CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
 use foiled_core::sigv4::Credentials;
 use serde::Deserialize;
 use tower_service::Service;
+use worker::MessageExt;
 use worker::send::SendFuture;
 use worker::wasm_bindgen::JsValue;
 use worker::{
@@ -29,8 +31,9 @@ use crate::d1_sql as sql;
 use crate::issuer::{CertIssuer, IssuedCert, IssuerError, IssuerFuture};
 use crate::routes::ingest::UploadConfig;
 use crate::store::{
-    AgentCerts, AgentQuery, AuditQuery, DecoyQuery, EnrolmentTokenRecord, IdentityRecord, IpIocRow,
-    JobRecord, LinkOverride, NewCert, Store, StoreError, StoreFuture, TokenRecord,
+    AgentCerts, AgentQuery, AuditQuery, BudgetOutcome, DecoyQuery, EnrolmentTokenRecord,
+    IdentityRecord, IpIocRow, JobRecord, LinkOverride, NewCert, Store, StoreError, StoreFuture,
+    TokenRecord,
 };
 use crate::{AppState, router};
 
@@ -85,17 +88,64 @@ fn upload_config(env: &Env) -> Option<UploadConfig> {
     })
 }
 
-/// Ingest Queue consumer: write envelopes to Postgres, count them in
-/// Analytics Engine for the radar (#35). Delivery is at least once; the
-/// insert is idempotent on event_id, so a retry after a partial failure is
-/// safe.
+/// Hourly cron (`triggers` in `wrangler.jsonc`): purge the enrichment
+/// tables (#16), a bounded batch per run (`enrichment::purge`).
+#[event(scheduled)]
+async fn purge(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
+    let store = match (env.d1("DB"), env.hyperdrive("HYPERDRIVE")) {
+        (Ok(db), Ok(hyperdrive)) => CfStore {
+            db,
+            hyperdrive,
+            ingest: None,
+        },
+        _ => {
+            worker::console_error!("purge: D1 or Hyperdrive binding missing");
+            return;
+        }
+    };
+    match crate::enrichment::purge(&store, now_ms()).await {
+        Ok(c) => worker::console_log!(
+            "purge: enrichment expired {}, past retention {}, failures {}",
+            c.expired,
+            c.past_retention,
+            c.failures
+        ),
+        Err(_) => worker::console_error!("purge: enrichment purge failed; next run retries"),
+    }
+}
+
+/// Queue consumer for both queues this Worker reads. workers-rs allows one
+/// queue handler per Worker, so the batch's queue name decides: the
+/// `foiled-enrich` queue (named in `configs/enrichment.yaml`) goes to the
+/// enrichment consumer, everything else is capture ingest.
 #[event(queue)]
-async fn consume(batch: MessageBatch<CaptureEvent>, env: Env, _ctx: Context) -> worker::Result<()> {
-    let events: Vec<CaptureEvent> = batch
-        .messages()?
-        .into_iter()
-        .map(|m| m.into_body())
-        .collect();
+async fn consume(
+    batch: MessageBatch<serde_json::Value>,
+    env: Env,
+    _ctx: Context,
+) -> worker::Result<()> {
+    let enrich_queue = crate::enrichment::bundled_enrich_config().map(|c| c.queue.as_str());
+    if Some(batch.queue().as_str()) == enrich_queue {
+        enrich_batch(batch, env).await
+    } else {
+        ingest_batch(batch, env).await
+    }
+}
+
+/// Ingest: write envelopes to Postgres, count them in Analytics Engine for
+/// the radar (#35), then send their observables to `foiled-enrich` (#11),
+/// best effort. Delivery is at least once; the insert is idempotent on
+/// event_id, so a retry after a partial failure is safe.
+async fn ingest_batch(batch: MessageBatch<serde_json::Value>, env: Env) -> worker::Result<()> {
+    let mut events: Vec<CaptureEvent> = Vec::new();
+    for m in batch.messages()? {
+        match serde_json::from_value::<CaptureEvent>(m.into_body()) {
+            Ok(e) => events.push(e),
+            // Only the ingest API sends here, so this is a bug; drop it
+            // rather than retry forever.
+            Err(e) => worker::console_error!("ingest consumer: dropping undecodable message: {e}"),
+        }
+    }
     let store = CfStore {
         db: env.d1("DB")?,
         hyperdrive: env.hyperdrive("HYPERDRIVE")?,
@@ -125,6 +175,7 @@ async fn consume(batch: MessageBatch<CaptureEvent>, env: Env, _ctx: Context) -> 
                     }
                 }
             }
+            send_for_enrichment(&env, &events).await;
             batch.ack_all();
         }
         Err(foiled_pg::InsertError::Unstamped(id)) => {
@@ -138,6 +189,270 @@ async fn consume(batch: MessageBatch<CaptureEvent>, env: Env, _ctx: Context) -> 
         }
     }
     Ok(())
+}
+
+/// Queue messages are at most 128 KB and a batch at most 100 messages.
+const ENRICH_SEND_CHUNK: usize = 100;
+
+/// Send the batch's observables (event and IOC observables, attempt
+/// sources included) to `foiled-enrich`. Best effort: the events are
+/// already stored, so a failed send is logged and the batch still acked.
+async fn send_for_enrichment(env: &Env, events: &[CaptureEvent]) {
+    if crate::enrichment::bundled_enrich_config().is_none() {
+        return;
+    }
+    let Ok(queue) = env.queue("ENRICH") else {
+        return;
+    };
+    let messages = foiled_core::enrich_pipeline::messages_for_events(events);
+    for chunk in messages.chunks(ENRICH_SEND_CHUNK) {
+        if let Err(e) = queue.send_batch(chunk.to_vec()).await {
+            worker::console_error!("enrich producer: {e}");
+            return;
+        }
+    }
+}
+
+/// The `foiled-enrich` consumer (#11): the whole batch at once, so the
+/// ThreatSieve lookups are batched (`enrich_consumer::process_batch`), then
+/// each message acked or retried on its own.
+async fn enrich_batch(batch: MessageBatch<serde_json::Value>, env: Env) -> worker::Result<()> {
+    let Some(config) = crate::enrichment::bundled_enrich_config() else {
+        worker::console_error!("enrich consumer: configs/enrichment.yaml did not load; acking");
+        batch.ack_all();
+        return Ok(());
+    };
+    let store = CfStore {
+        db: env.d1("DB")?,
+        hyperdrive: env.hyperdrive("HYPERDRIVE")?,
+        ingest: None,
+    };
+    let asn = if config.providers.local_asn.enabled {
+        asn_table(&env, &config.providers.local_asn.dataset_key).await
+    } else {
+        None
+    };
+    let secret = |name: &str| -> Option<String> { env.secret(name).ok().map(|s| s.to_string()) };
+    // No binding: ThreatSieve is reported as not configured, never guessed.
+    let threatsieve = if config.providers.threatsieve.enabled {
+        env.service(&config.providers.threatsieve.binding)
+            .ok()
+            .map(|fetcher| ThreatSieveHttp { fetcher })
+    } else {
+        None
+    };
+    let messages = batch.messages()?;
+    let mut decoded = Vec::with_capacity(messages.len());
+    let mut kept = Vec::with_capacity(messages.len());
+    for m in messages {
+        match serde_json::from_value::<EnrichMessage>(m.body().clone()) {
+            Ok(msg) => {
+                decoded.push(msg);
+                kept.push(m);
+            }
+            Err(e) => {
+                worker::console_error!("enrich consumer: dropping undecodable message: {e}");
+                m.ack();
+            }
+        }
+    }
+    let deps = crate::enrich_consumer::Deps {
+        store: &store,
+        threatsieve: threatsieve
+            .as_ref()
+            .map(|t| t as &dyn crate::enrich_consumer::ProviderHttp),
+        secret: &secret,
+        asn: asn.as_deref(),
+        config,
+        now_ms: now_ms(),
+    };
+    let reports = crate::enrich_consumer::process_batch(&decoded, &deps).await;
+    let mut warned = std::collections::BTreeSet::new();
+    for (m, (outcome, report)) in kept.iter().zip(reports) {
+        for (provider, result) in &report {
+            if let crate::enrich_consumer::ProviderResult::Failed(e)
+            | crate::enrich_consumer::ProviderResult::NotConfigured(e) = result
+            {
+                // One line per distinct problem, not one per message.
+                if warned.insert((provider.clone(), e.clone())) {
+                    worker::console_warn!("enrich {provider}: {e}");
+                }
+            }
+        }
+        match outcome {
+            crate::enrich_consumer::Outcome::Ack => m.ack(),
+            crate::enrich_consumer::Outcome::Drop => {
+                worker::console_warn!("enrich consumer: dropped an invalid message");
+                m.ack();
+            }
+            crate::enrich_consumer::Outcome::Retry { delay_secs } => m.retry_with_options(
+                &worker::QueueRetryOptionsBuilder::new()
+                    .with_delay_seconds(delay_secs)
+                    .build(),
+            ),
+        }
+    }
+    Ok(())
+}
+
+thread_local! {
+    /// The operator's ASN table and the R2 ETag it was loaded from, kept
+    /// for the life of the isolate.
+    static ASN_TABLE: std::cell::RefCell<Option<(String, std::rc::Rc<AsnTable>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The ASN table from the private evidence bucket at `key`, reloaded when
+/// the object's ETag changes. `None` when no dataset is uploaded or it does
+/// not parse (logged), so `local_asn` is skipped rather than guessed.
+async fn asn_table(env: &Env, key: &str) -> Option<std::rc::Rc<AsnTable>> {
+    let bucket = env.bucket("EVIDENCE").ok()?;
+    let head = match bucket.head(key).await {
+        Ok(Some(h)) => h,
+        Ok(None) => return None,
+        Err(e) => {
+            worker::console_error!("asn table: {e}");
+            return None;
+        }
+    };
+    let etag = head.etag();
+    if let Some(t) = ASN_TABLE.with(|c| {
+        c.borrow()
+            .as_ref()
+            .filter(|(e, _)| *e == etag)
+            .map(|(_, t)| t.clone())
+    }) {
+        return Some(t);
+    }
+    let text = bucket
+        .get(key)
+        .execute()
+        .await
+        .ok()??
+        .body()?
+        .text()
+        .await
+        .ok()?;
+    match AsnTable::from_csv(&text) {
+        Ok(t) => {
+            let t = std::rc::Rc::new(t);
+            ASN_TABLE.with(|c| *c.borrow_mut() = Some((etag, t.clone())));
+            Some(t)
+        }
+        Err(e) => {
+            worker::console_error!("asn table: {e}");
+            None
+        }
+    }
+}
+
+/// ThreatSieve over its service binding: the request never leaves
+/// Cloudflare. `redirect: manual` (a redirect is an error), a timeout that
+/// aborts the subrequest through an `AbortSignal` on the request, and the
+/// body capped while it is read.
+struct ThreatSieveHttp {
+    fetcher: worker::Fetcher,
+}
+
+/// Read a response body, failing as soon as it passes `cap` bytes.
+async fn read_capped(res: &mut worker::Response, cap: usize) -> Result<Vec<u8>, String> {
+    use futures_util::StreamExt;
+    if let Some(len) = res
+        .headers()
+        .get("content-length")
+        .ok()
+        .flatten()
+        .and_then(|l| l.trim().parse::<usize>().ok())
+        && len > cap
+    {
+        return Err("response too large".into());
+    }
+    let mut stream = res.stream().map_err(|e| format!("read failed: {e}"))?;
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("read failed: {e}"))?;
+        if body.len() + chunk.len() > cap {
+            return Err("response too large".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+impl crate::enrich_consumer::ProviderHttp for ThreatSieveHttp {
+    fn send(
+        &self,
+        req: crate::enrich_consumer::ProviderRequest,
+    ) -> crate::enrich_consumer::HttpFuture<'_> {
+        use crate::enrich_consumer::SendError;
+        Box::pin(async move {
+            let fail = |e: String| SendError::Failed(e);
+            let headers = worker::Headers::new();
+            for (k, v) in &req.headers {
+                headers.set(k, v).map_err(|e| fail(e.to_string()))?;
+            }
+            let mut init = worker::RequestInit::new();
+            init.with_method(match req.method {
+                foiled_core::enrich_pipeline::HttpMethod::Get => worker::Method::Get,
+                foiled_core::enrich_pipeline::HttpMethod::Post => worker::Method::Post,
+            })
+            .with_headers(headers)
+            .with_redirect(worker::RequestRedirect::Manual)
+            .with_body(req.body.as_deref().map(JsValue::from_str));
+            let request =
+                worker::Request::new_with_init(&req.url, &init).map_err(|e| fail(e.to_string()))?;
+            // workers-rs has no signal on RequestInit, so the signal is
+            // added by re-wrapping the request in a web_sys one.
+            let controller = worker::AbortController::default();
+            let signal = controller.signal();
+            let with_signal = worker::web_sys::RequestInit::new();
+            with_signal.set_signal(Some(&signal));
+            let request =
+                worker::web_sys::Request::new_with_request_and_init(request.inner(), &with_signal)
+                    .map(worker::Request::from)
+                    .map_err(|e| fail(format!("{e:?}")))?;
+            let cap = foiled_core::enrich_pipeline::MAX_RESPONSE_BYTES;
+            let mut call = Box::pin(async {
+                let res = self
+                    .fetcher
+                    .fetch_request(request)
+                    .await
+                    .map_err(|e| format!("fetch failed: {e}"))?;
+                let mut res =
+                    worker::Response::try_from(res).map_err(|e| format!("bad answer: {e}"))?;
+                let status = res.status_code();
+                let retry_after = res.headers().get("retry-after").ok().flatten();
+                let bytes = read_capped(&mut res, cap).await?;
+                Ok::<_, String>((status, retry_after, bytes))
+            });
+            let mut timer = Box::pin(worker::Delay::from(std::time::Duration::from_millis(
+                u64::from(foiled_core::enrich_pipeline::FETCH_TIMEOUT_MS),
+            )));
+            let raced = std::future::poll_fn(|cx| {
+                use std::future::Future;
+                if let std::task::Poll::Ready(r) = call.as_mut().poll(cx) {
+                    return std::task::Poll::Ready(Some(r));
+                }
+                if timer.as_mut().poll(cx).is_ready() {
+                    return std::task::Poll::Ready(None);
+                }
+                std::task::Poll::Pending
+            })
+            .await;
+            let Some(result) = raced else {
+                // Cancel the subrequest rather than leave it running.
+                drop(call);
+                controller.abort();
+                return Err(SendError::TimedOut);
+            };
+            let (status, retry_after, bytes) = result.map_err(fail)?;
+            Ok(crate::enrich_consumer::HttpReply {
+                status,
+                body: String::from_utf8_lossy(&bytes).into_owned(),
+                retry_after,
+            })
+        })
+    }
 }
 
 /// Where the request came from. `CF-Connecting-IP` is set by Cloudflare's
@@ -267,6 +582,24 @@ struct CfStore {
     ingest: Option<Queue>,
 }
 
+/// One `enrich_failures` row.
+#[derive(Deserialize)]
+struct FailureRow {
+    provider: String,
+    kind: String,
+    value: String,
+    failures: f64,
+    last_failed_at: f64,
+    retry_at: Option<f64>,
+}
+
+/// One `RETURNING used` row from a budget take.
+#[derive(Deserialize)]
+struct UsedRow {
+    #[allow(dead_code)]
+    used: f64,
+}
+
 /// Queues accept batches of up to 100 messages and 256 KB.
 const QUEUE_BATCH_BYTES: usize = 200 * 1024;
 
@@ -302,6 +635,7 @@ struct EnrichRow {
     fetched_at: f64,
     ttl_secs: f64,
     facts: String,
+    tenant_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -975,6 +1309,7 @@ impl Store for CfStore {
         observables: Vec<Observable>,
         now_ms: i64,
         max_statements: usize,
+        tenant_id: Option<String>,
     ) -> StoreFuture<'_, Vec<CacheEntry>> {
         wrap(async move {
             // One D1 batch: one statement per kind and chunk of values, each
@@ -986,9 +1321,11 @@ impl Store for CfStore {
             }
             let mut statements = Vec::with_capacity(plan.len());
             for (kind, values) in &plan {
-                let mut args = Vec::with_capacity(values.len() + 2);
+                let mut args = Vec::with_capacity(values.len() + 3);
                 args.push(s(kind));
                 args.push(n(now_ms));
+                // A NULL tenant matches only shared rows.
+                args.push(opt(tenant_id.as_deref()));
                 args.extend(values.iter().map(|v| s(v)));
                 statements.push(
                     self.db
@@ -1008,6 +1345,7 @@ impl Store for CfStore {
                         row.fetched_at as i64,
                         row.ttl_secs as i64,
                         &row.facts,
+                        row.tenant_id.as_deref(),
                     ) {
                         Some(e) => out.push(e),
                         None => worker::console_warn!(
@@ -1018,6 +1356,212 @@ impl Store for CfStore {
                 }
             }
             Ok(out)
+        })
+    }
+
+    fn upsert_enrich_cache(&self, entry: CacheEntry) -> StoreFuture<'_, ()> {
+        wrap(async move {
+            let facts = serde_json::to_string(&entry.facts).map_err(err)?;
+            self.db
+                .prepare(sql::ENRICH_CACHE_UPSERT)
+                .bind(&[
+                    s(&entry.key()),
+                    s(&entry.provider),
+                    s(entry.observable.kind.as_str()),
+                    s(&entry.observable.value),
+                    n(entry.fetched_at),
+                    n(i64::try_from(entry.ttl_secs).unwrap_or(i64::MAX)),
+                    s(&facts),
+                    opt(entry.tenant_id.as_deref()),
+                ])
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
+            Ok(())
+        })
+    }
+
+    fn take_enrich_budget(
+        &self,
+        provider: &str,
+        now_ms: i64,
+        per_minute: u32,
+        per_day: u32,
+    ) -> StoreFuture<'_, BudgetOutcome> {
+        let p = provider.to_string();
+        wrap(async move {
+            let (minute, day) = sql::budget_windows(now_ms);
+            let take = |window: &'static str, start: i64, limit: u32| {
+                self.db.prepare(sql::ENRICH_BUDGET_TAKE).bind(&[
+                    s(&p),
+                    s(window),
+                    n(start),
+                    n(i64::from(limit.max(1))),
+                ])
+            };
+            let got: Option<UsedRow> = take("minute", minute, per_minute)
+                .map_err(err)?
+                .first(None)
+                .await
+                .map_err(err)?;
+            if got.is_none() {
+                return Ok(BudgetOutcome::MinuteSpent);
+            }
+            let got: Option<UsedRow> = take("day", day, per_day)
+                .map_err(err)?
+                .first(None)
+                .await
+                .map_err(err)?;
+            if got.is_none() {
+                self.db
+                    .prepare(sql::ENRICH_BUDGET_REFUND)
+                    .bind(&[s(&p), s("minute"), n(minute)])
+                    .map_err(err)?
+                    .run()
+                    .await
+                    .map_err(err)?;
+                return Ok(BudgetOutcome::DaySpent);
+            }
+            // Counters older than yesterday are no use to anyone.
+            self.db
+                .prepare(sql::ENRICH_BUDGET_PRUNE)
+                .bind(&[s(&p), n(day - 86_400_000)])
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
+            Ok(BudgetOutcome::Taken)
+        })
+    }
+
+    fn enrich_failures(
+        &self,
+        observable: Observable,
+    ) -> StoreFuture<'_, Vec<ProviderFailureRecord>> {
+        wrap(async move {
+            let rows = self
+                .db
+                .prepare(sql::ENRICH_FAILURES_FOR)
+                .bind(&[s(observable.kind.as_str()), s(&observable.value)])
+                .map_err(err)?
+                .all()
+                .await
+                .map_err(err)?
+                .results::<FailureRow>()
+                .map_err(err)?;
+            Ok(rows
+                .into_iter()
+                .filter(|r| r.kind == observable.kind.as_str() && r.value == observable.value)
+                .map(|r| ProviderFailureRecord {
+                    provider: r.provider,
+                    observable: observable.clone(),
+                    failures: r.failures.max(1.0) as u32,
+                    last_failed_at: r.last_failed_at as i64,
+                    retry_at: r.retry_at.map(|v| v as i64),
+                })
+                .collect())
+        })
+    }
+
+    fn record_enrich_failure(
+        &self,
+        provider: &str,
+        observable: Observable,
+        now_ms: i64,
+        error: String,
+        retry_at: Option<i64>,
+    ) -> StoreFuture<'_, ()> {
+        let p = provider.to_string();
+        wrap(async move {
+            self.db
+                .prepare(sql::ENRICH_FAILURE_RECORD)
+                .bind(&[
+                    s(&observable.cache_key(&p)),
+                    s(&p),
+                    s(observable.kind.as_str()),
+                    s(&observable.value),
+                    n(now_ms),
+                    s(&error),
+                    opt_n(retry_at),
+                ])
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
+            Ok(())
+        })
+    }
+
+    fn clear_enrich_failure(&self, provider: &str, observable: Observable) -> StoreFuture<'_, ()> {
+        let key = observable.cache_key(provider);
+        wrap(async move {
+            self.db
+                .prepare(sql::ENRICH_FAILURE_CLEAR)
+                .bind(&[s(&key)])
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
+            Ok(())
+        })
+    }
+
+    fn purge_enrichment(
+        &self,
+        plan: foiled_core::enrich_pipeline::EnrichPurgePlan,
+    ) -> StoreFuture<'_, foiled_core::enrich_pipeline::EnrichPurgeCounts> {
+        wrap(async move {
+            // Rows deleted by one statement, from D1's result metadata.
+            let run = |stmt: &str, args: Vec<JsValue>| {
+                let stmt = stmt.to_string();
+                async move {
+                    let result = self
+                        .db
+                        .prepare(&stmt)
+                        .bind(&args)
+                        .map_err(err)?
+                        .run()
+                        .await
+                        .map_err(err)?;
+                    Ok::<u64, StoreError>(
+                        result
+                            .meta()
+                            .ok()
+                            .flatten()
+                            .and_then(|m| m.changes)
+                            .unwrap_or(0) as u64,
+                    )
+                }
+            };
+            let batch = n(i64::from(plan.batch));
+            let mut counts = foiled_core::enrich_pipeline::EnrichPurgeCounts {
+                expired: run(
+                    sql::ENRICH_PURGE_EXPIRED,
+                    vec![n(plan.now_ms), batch.clone()],
+                )
+                .await?,
+                ..Default::default()
+            };
+            if let Some(r) = &plan.retention {
+                for (provider, before) in &r.providers {
+                    counts.past_retention += run(
+                        sql::ENRICH_PURGE_PROVIDER,
+                        vec![s(provider), n(*before), batch.clone()],
+                    )
+                    .await?;
+                }
+                let mut args = vec![n(r.default_before), batch.clone()];
+                args.extend(r.providers.iter().map(|(p, _)| s(p)));
+                counts.past_retention +=
+                    run(&sql::enrich_purge_default(r.providers.len()), args).await?;
+            }
+            counts.failures = run(
+                sql::ENRICH_PURGE_FAILURES,
+                vec![n(plan.failures_before), n(plan.now_ms), batch],
+            )
+            .await?;
+            Ok(counts)
         })
     }
 

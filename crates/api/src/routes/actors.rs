@@ -237,6 +237,7 @@ pub(crate) async fn match_window(
     }
     let countries = source_countries(
         state,
+        tenant_id,
         subjects
             .iter()
             .flat_map(|s| s.sources.iter().map(String::as_str)),
@@ -262,6 +263,7 @@ pub(crate) async fn match_window(
 /// cache cannot be read the link is built without it.
 async fn source_countries<'a>(
     state: &AppState,
+    tenant_id: &str,
     addresses: impl Iterator<Item = &'a str>,
 ) -> BTreeMap<String, String> {
     use foiled_core::enrichment::Observable;
@@ -272,7 +274,8 @@ async fn source_countries<'a>(
         }
     }
     let cached =
-        crate::enrichment::cached_facts(state, by_observable.keys().cloned().collect()).await;
+        crate::enrichment::cached_facts(state, tenant_id, by_observable.keys().cloned().collect())
+            .await;
     let mut out = BTreeMap::new();
     for (o, facts) in &cached.facts {
         let newest = facts

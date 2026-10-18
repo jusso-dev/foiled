@@ -15,5 +15,8 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 
+[dev-dependencies]
+serde_yaml_ng = "0.10"
+
 [lints]
 workspace = true

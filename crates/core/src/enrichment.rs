@@ -31,6 +31,13 @@ pub const GREYNOISE: &str = "greynoise";
 pub const CROWDSEC: &str = "crowdsec";
 /// Provider id for DShield (SANS ISC).
 pub const DSHIELD: &str = "dshield";
+/// Provider id for ThreatSieve, the operator's intel hub, for Facts whose
+/// every contributing source allows redistribution and commercial use.
+pub const THREATSIEVE: &str = "threatsieve";
+/// Provider id for ThreatSieve Facts with any source that does not allow
+/// redistribution or commercial use, or whose terms are unknown. Never
+/// exported, and kept per tenant (`docs/enrichment.md`).
+pub const THREATSIEVE_RESTRICTED: &str = "threatsieve_restricted";
 
 /// Providers whose data is never exported, published or resold. Facts from
 /// these are shown only inside the entitled operator's console.
@@ -45,6 +52,7 @@ pub const NEVER_REDISTRIBUTE: &[&str] = &[
     "huntio",
     "abuseipdb",
     LOCAL_ASN,
+    THREATSIEVE_RESTRICTED,
 ];
 
 /// Confidence given to GreyNoise facts. GreyNoise Community does not report a
@@ -76,6 +84,8 @@ pub enum ObservableKind {
     Domain,
     Sha256,
     Url,
+    /// A CVE id (`CVE-2099-0001`), for CVE context from ThreatSieve.
+    Cve,
 }
 
 impl ObservableKind {
@@ -85,6 +95,7 @@ impl ObservableKind {
             ObservableKind::Domain => "domain",
             ObservableKind::Sha256 => "sha256",
             ObservableKind::Url => "url",
+            ObservableKind::Cve => "cve",
         }
     }
 }
@@ -103,6 +114,7 @@ pub enum ObservableError {
     BadDomain(String),
     BadSha256(String),
     BadUrl(String),
+    BadCve(String),
 }
 
 impl fmt::Display for ObservableError {
@@ -112,6 +124,7 @@ impl fmt::Display for ObservableError {
             Self::BadDomain(v) => write!(f, "'{v}' is not a domain name"),
             Self::BadSha256(v) => write!(f, "'{v}' is not a lower or upper case SHA-256 hex"),
             Self::BadUrl(v) => write!(f, "'{v}' is not an http, https or ftp URL"),
+            Self::BadCve(v) => write!(f, "'{v}' is not a CVE id"),
         }
     }
 }
@@ -152,6 +165,13 @@ impl Observable {
                 }
                 value.to_owned()
             }
+            ObservableKind::Cve => {
+                let c = value.to_ascii_uppercase();
+                if !is_cve_id(&c) {
+                    return Err(ObservableError::BadCve(value.to_owned()));
+                }
+                c
+            }
         };
         Ok(Self { kind, value })
     }
@@ -166,6 +186,10 @@ impl Observable {
 
     pub fn domain(value: &str) -> Result<Self, ObservableError> {
         Self::new(ObservableKind::Domain, value)
+    }
+
+    pub fn cve(value: &str) -> Result<Self, ObservableError> {
+        Self::new(ObservableKind::Cve, value)
     }
 
     /// Cache key for this observable and provider: `provider:kind:value`.
@@ -319,7 +343,55 @@ pub struct Fact {
     pub raw_ref: Option<String>,
 }
 
+/// Longest serialised Fact value accepted into the cache.
+pub const MAX_FACT_VALUE_BYTES: usize = 8 * 1024;
+
 impl Fact {
+    /// Why this Fact may not be written to the cache: the checks of
+    /// `schemas/fact.schema.json` plus a size cap on the value and a match
+    /// between the Fact's provider and the provider that produced it. Empty
+    /// when it is fine.
+    pub fn problems(&self, expected_provider: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let provider_ok = !self.provider.is_empty()
+            && self.provider.len() <= 32
+            && self.provider.as_bytes()[0].is_ascii_lowercase()
+            && self
+                .provider
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+        if !provider_ok {
+            out.push(format!("bad provider id '{}'", clip(&self.provider)));
+        }
+        if self.provider != expected_provider {
+            out.push(format!(
+                "Fact names provider '{}' but came from '{expected_provider}'",
+                clip(&self.provider)
+            ));
+        }
+        let key_ok = self.key.len() <= 96
+            && self.key.split('.').count() >= 2
+            && self.key.split('.').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            });
+        if !key_ok {
+            out.push(format!("bad key '{}'", clip(&self.key)));
+        }
+        if self.confidence > 100 {
+            out.push("confidence above 100".into());
+        }
+        if serde_json::to_vec(&self.value).map_or(usize::MAX, |v| v.len()) > MAX_FACT_VALUE_BYTES {
+            out.push(format!("value over {MAX_FACT_VALUE_BYTES} bytes"));
+        }
+        if self.raw_ref.as_ref().is_some_and(|r| r.len() > 512) {
+            out.push("raw_ref over 512 characters".into());
+        }
+        out
+    }
+
     /// True while `now_ms` is before `observed_at + ttl_secs`.
     pub fn is_fresh(&self, now_ms: i64) -> bool {
         now_ms < expiry(self.observed_at, self.ttl_secs)
@@ -490,12 +562,21 @@ pub struct CacheEntry {
     pub fetched_at: i64,
     pub ttl_secs: u64,
     pub facts: Vec<Fact>,
+    /// Set when the row may only be read by the tenant whose lookup wrote
+    /// it (ThreatSieve answers with a source that may not be shared).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
 }
 
 impl CacheEntry {
-    /// The D1 primary key: `provider:kind:value`.
+    /// The D1 primary key: `provider:kind:value`, plus `@tenant` for a row
+    /// kept for one tenant.
     pub fn key(&self) -> String {
-        self.observable.cache_key(&self.provider)
+        let base = self.observable.cache_key(&self.provider);
+        match &self.tenant_id {
+            Some(t) => format!("{base}@{t}"),
+            None => base,
+        }
     }
 
     /// True while `now_ms` is before `fetched_at + ttl_secs`. A fetch time in
@@ -548,7 +629,7 @@ fn parse_object(body: &str) -> Result<Object, ParseError> {
 }
 
 /// Untrusted provider text: control characters removed, length capped.
-fn clip(s: &str) -> String {
+pub(crate) fn clip(s: &str) -> String {
     s.chars()
         .filter(|c| !c.is_control())
         .take(MAX_TEXT)
@@ -955,11 +1036,14 @@ impl Provider for AsnTable {
 // Reading the cache
 // ---------------------------------------------------------------------------
 
-/// Providers whose data is the operator's own or Foiled's: `local_asn` is
-/// the operator's own table (still never redistributed) and `yara` runs
-/// Foiled's own rules. This is an allowlist: every other provider, including
-/// one added to the config later, is treated as third party.
-pub const FIRST_PARTY: &[&str] = &[LOCAL_ASN, "yara"];
+/// Providers whose Facts every tenant may see: `local_asn` is the operator's
+/// own table (still never redistributed), `yara` runs Foiled's own rules,
+/// and `threatsieve` is only written for answers whose every source allows
+/// redistribution and commercial use (anything else is
+/// `threatsieve_restricted`, kept per tenant). This is an allowlist: every
+/// other provider, including one added to the config later, is treated as
+/// third party.
+pub const FIRST_PARTY: &[&str] = &[LOCAL_ASN, "yara", THREATSIEVE];
 
 /// Known third-party provider names, used to catch their data relabelled
 /// under another provider's name (`greynoise.noise` as a key).
@@ -994,6 +1078,7 @@ impl CacheEntry {
         fetched_at: i64,
         ttl_secs: i64,
         facts_json: &str,
+        tenant_id: Option<&str>,
     ) -> Option<Self> {
         let kind: ObservableKind = serde_json::from_value(Value::String(kind.to_owned())).ok()?;
         let observable = Observable::new(kind, value).ok()?;
@@ -1004,18 +1089,25 @@ impl CacheEntry {
             fetched_at,
             ttl_secs: u64::try_from(ttl_secs).ok()?,
             facts,
+            tenant_id: tenant_id.map(str::to_owned),
         })
     }
 }
 
 /// Who is reading cached Facts and when.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReadPolicy {
+pub struct ReadPolicy<'a> {
     pub now_ms: i64,
+    /// The reading tenant. Rows kept for one tenant are read only by it.
+    pub tenant_id: Option<&'a str>,
     /// `show_to_tenants` in `configs/enrichment.yaml`. When false (the
     /// shipped default) third-party Facts are left out of anything a tenant
     /// user can read.
     pub show_third_party: bool,
+    /// `show_restricted_to_requester` in `configs/enrichment.yaml`. When
+    /// false (the shipped default) a tenant's own restricted rows are not
+    /// shown to it either.
+    pub show_restricted_to_requester: bool,
 }
 
 /// The Facts that may be used from cache rows, grouped by observable:
@@ -1033,7 +1125,7 @@ pub struct ReadPolicy {
 /// Observables are in order, with no duplicates; Facts keep row order.
 pub fn usable_facts(
     entries: &[CacheEntry],
-    policy: ReadPolicy,
+    policy: ReadPolicy<'_>,
     retention: &crate::retention::RetentionConfig,
 ) -> Vec<ObservedFacts> {
     let mut by: BTreeMap<Observable, Vec<Fact>> = BTreeMap::new();
@@ -1049,13 +1141,26 @@ pub fn usable_facts(
         if policy.now_ms.saturating_sub(e.fetched_at) >= cap_ms {
             continue;
         }
-        if !policy.show_third_party && is_third_party(&e.provider) {
+        // A row kept for one tenant is that tenant's own lookup: never shown
+        // to anybody else, and to that tenant only when the operator has
+        // opted in (`show_restricted_to_requester`), whatever
+        // `show_to_tenants` says.
+        let own = match &e.tenant_id {
+            Some(t)
+                if policy.tenant_id == Some(t.as_str()) && policy.show_restricted_to_requester =>
+            {
+                true
+            }
+            Some(_) => continue,
+            None => false,
+        };
+        if !own && !policy.show_third_party && is_third_party(&e.provider) {
             continue;
         }
         let facts = e.facts.iter().filter(|f| {
             f.provider.eq_ignore_ascii_case(&e.provider)
                 && f.is_fresh(policy.now_ms)
-                && (policy.show_third_party || !third_party_namespace(&f.key))
+                && (own || policy.show_third_party || !third_party_namespace(&f.key))
         });
         by.entry(e.observable.clone())
             .or_default()
@@ -1316,6 +1421,7 @@ mod tests {
             fetched_at: NOW,
             ttl_secs: 60,
             facts: Vec::new(),
+            tenant_id: None,
         };
         assert_eq!(entry.key(), "greynoise:ip:203.0.113.7");
         assert!(entry.is_fresh(NOW));
@@ -1844,6 +1950,7 @@ mod tests {
             fetched_at,
             ttl_secs: ttl,
             facts,
+            tenant_id: None,
         }
     }
 
@@ -1869,14 +1976,26 @@ mod tests {
             DAY,
         )])
         .unwrap();
-        let e = CacheEntry::from_row(LOCAL_ASN, "ip", "::ffff:203.0.113.7", NOW, 86_400, &facts)
-            .unwrap();
+        let e = CacheEntry::from_row(
+            LOCAL_ASN,
+            "ip",
+            "::ffff:203.0.113.7",
+            NOW,
+            86_400,
+            &facts,
+            None,
+        )
+        .unwrap();
         assert_eq!(e.observable.value, "203.0.113.7");
         assert_eq!(e.facts.len(), 1);
-        assert!(CacheEntry::from_row(LOCAL_ASN, "ipv9", "203.0.113.7", NOW, 1, "[]").is_none());
-        assert!(CacheEntry::from_row(LOCAL_ASN, "ip", "nope", NOW, 1, "[]").is_none());
-        assert!(CacheEntry::from_row(LOCAL_ASN, "ip", "203.0.113.7", NOW, -1, "[]").is_none());
-        assert!(CacheEntry::from_row(LOCAL_ASN, "ip", "203.0.113.7", NOW, 1, "{").is_none());
+        assert!(
+            CacheEntry::from_row(LOCAL_ASN, "ipv9", "203.0.113.7", NOW, 1, "[]", None).is_none()
+        );
+        assert!(CacheEntry::from_row(LOCAL_ASN, "ip", "nope", NOW, 1, "[]", None).is_none());
+        assert!(
+            CacheEntry::from_row(LOCAL_ASN, "ip", "203.0.113.7", NOW, -1, "[]", None).is_none()
+        );
+        assert!(CacheEntry::from_row(LOCAL_ASN, "ip", "203.0.113.7", NOW, 1, "{", None).is_none());
     }
 
     #[test]
@@ -1885,7 +2004,9 @@ mod tests {
         let now = NOW + 1000;
         let policy = ReadPolicy {
             now_ms: now,
+            tenant_id: None,
             show_third_party: false,
+            show_restricted_to_requester: false,
         };
         let entries = vec![
             // Fresh row, one fresh and one expired Fact, one Fact that
@@ -1987,11 +2108,96 @@ mod tests {
             &entries,
             ReadPolicy {
                 now_ms: now,
+                tenant_id: None,
                 show_third_party: true,
+                show_restricted_to_requester: false,
             },
             &ret,
         );
         assert_eq!(shown[0].facts.len(), 6);
         assert!(shown[0].facts.iter().any(|f| f.provider == GREYNOISE));
+    }
+
+    #[test]
+    fn restricted_rows_need_the_requester_opt_in_and_never_cross_tenants() {
+        let ret = crate::retention::RetentionConfig::default();
+        let now = NOW + 1000;
+        let mut restricted = row(
+            THREATSIEVE_RESTRICTED,
+            "203.0.113.7",
+            NOW,
+            DAY,
+            vec![fact_at(
+                THREATSIEVE_RESTRICTED,
+                "threatsieve.classification",
+                Value::from("malicious"),
+                NOW,
+                DAY,
+            )],
+        );
+        restricted.tenant_id = Some("t1".into());
+        let shared = row(
+            THREATSIEVE,
+            "203.0.113.7",
+            NOW,
+            DAY,
+            vec![fact_at(
+                THREATSIEVE,
+                "asn.number",
+                Value::from(64500),
+                NOW,
+                DAY,
+            )],
+        );
+        let rows = vec![restricted, shared];
+        let keys = |tenant: &str, opt_in: bool, show_third_party: bool| -> Vec<String> {
+            let policy = ReadPolicy {
+                now_ms: now,
+                tenant_id: Some(tenant),
+                show_third_party,
+                show_restricted_to_requester: opt_in,
+            };
+            usable_facts(&rows, policy, &ret)
+                .into_iter()
+                .flat_map(|o| o.facts)
+                .map(|f| f.key)
+                .collect()
+        };
+        // Shipped default: only the shared, unrestricted answer.
+        assert_eq!(keys("t1", false, false), ["asn.number"]);
+        assert_eq!(
+            keys("t1", false, true),
+            ["asn.number"],
+            "show_to_tenants is not the opt-in"
+        );
+        // Opted in: the requester sees its own restricted answer.
+        assert_eq!(
+            keys("t1", true, false),
+            ["threatsieve.classification", "asn.number"]
+        );
+        // Never another tenant, whatever the flags.
+        assert_eq!(keys("t2", true, true), ["asn.number"]);
+    }
+
+    #[test]
+    fn fact_problems_catch_bad_and_relabelled_facts() {
+        let ok = fact_at(LOCAL_ASN, "asn.number", Value::from(64498), NOW, DAY);
+        assert!(ok.problems(LOCAL_ASN).is_empty());
+        assert!(!ok.problems(GREYNOISE).is_empty(), "provider mismatch");
+        let mut bad = ok.clone();
+        bad.key = "Bad Key".into();
+        assert!(!bad.problems(LOCAL_ASN).is_empty());
+        let mut bad = ok.clone();
+        bad.key = "nodot".into();
+        assert!(!bad.problems(LOCAL_ASN).is_empty());
+        let mut bad = ok.clone();
+        bad.confidence = 101;
+        assert!(!bad.problems(LOCAL_ASN).is_empty());
+        let mut bad = ok.clone();
+        bad.value = Value::String("x".repeat(MAX_FACT_VALUE_BYTES));
+        assert!(!bad.problems(LOCAL_ASN).is_empty());
+        let mut bad = ok;
+        bad.provider = "Local-ASN".into();
+        assert!(!bad.problems("Local-ASN").is_empty());
     }
 }

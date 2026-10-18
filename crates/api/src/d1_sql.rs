@@ -8,6 +8,7 @@ pub const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/d1/0002_host_jobs.sql"),
     include_str!("../../../migrations/d1/0003_enrolment.sql"),
     include_str!("../../../migrations/d1/0004_enrich_cache.sql"),
+    include_str!("../../../migrations/d1/0005_enrich_consumer.sql"),
 ];
 
 pub const TOKEN_BY_ID: &str = "SELECT id, tenant_id, role, scopes, secret_sha256, expires_at, revoked \
@@ -198,17 +199,20 @@ pub const RECORD_AGENT_SEEN: &str = "UPDATE agents SET last_seen_at = ?3, last_i
 /// D1 binds at most 100 parameters per statement.
 pub const D1_MAX_BOUND_PARAMS: usize = 100;
 
-/// Observable values per lookup statement: the bound limit less the kind
-/// and the clock.
-pub const ENRICH_LOOKUP_CHUNK: usize = D1_MAX_BOUND_PARAMS - 2;
+/// Observable values per lookup statement: the bound limit less the kind,
+/// the clock and the tenant.
+pub const ENRICH_LOOKUP_CHUNK: usize = D1_MAX_BOUND_PARAMS - 3;
 
-/// Cache rows for some values of one kind that are still fresh. `?1` kind,
-/// `?2` now (unix ms), `?3`.. the values. Uses `enrich_cache_observable`.
+/// Cache rows for some values of one kind that are still fresh and that
+/// the tenant may read (shared rows, and its own). `?1` kind, `?2` now
+/// (unix ms), `?3` tenant or NULL, `?4`.. the values. Uses
+/// `enrich_cache_observable`.
 pub fn enrich_cache_lookup(values: usize) -> String {
-    let list: Vec<String> = (0..values).map(|i| format!("?{}", i + 3)).collect();
+    let list: Vec<String> = (0..values).map(|i| format!("?{}", i + 4)).collect();
     format!(
-        "SELECT provider, kind, value, fetched_at, ttl_secs, facts FROM enrich_cache \
-         WHERE kind = ?1 AND value IN ({}) AND fetched_at + ttl_secs * 1000 > ?2",
+        "SELECT provider, kind, value, fetched_at, ttl_secs, facts, tenant_id FROM enrich_cache \
+         WHERE kind = ?1 AND value IN ({}) AND fetched_at + ttl_secs * 1000 > ?2 \
+         AND (tenant_id IS NULL OR tenant_id = ?3)",
         list.join(", ")
     )
 }
@@ -250,6 +254,86 @@ pub fn enrich_lookup_plan(
     // Grouping by kind can split the budget unevenly; never exceed it.
     plan.truncate(max_statements);
     plan
+}
+
+// Enrichment consumer writes (#11).
+
+/// Write a cache row, replacing the provider's earlier answer for the same
+/// observable (and tenant, for a tenant row). `?1` key, `?2` provider, `?3`
+/// kind, `?4` value, `?5` fetched_at, `?6` ttl_secs, `?7` Facts JSON, `?8`
+/// tenant or NULL.
+pub const ENRICH_CACHE_UPSERT: &str = "INSERT INTO enrich_cache (cache_key, provider, kind, value, fetched_at, ttl_secs, facts, tenant_id) \
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+     ON CONFLICT (cache_key) DO UPDATE SET fetched_at = ?5, ttl_secs = ?6, facts = ?7";
+
+/// Take one unit of a provider's budget for one window, only while under
+/// the limit. Returns the new count, or no row when the budget is spent.
+/// `?1` provider, `?2` window (`minute` or `day`), `?3` window start, `?4`
+/// limit (at least 1).
+pub const ENRICH_BUDGET_TAKE: &str = "INSERT INTO enrich_budget (provider, window, window_start, used) VALUES (?1, ?2, ?3, 1) \
+     ON CONFLICT (provider, window, window_start) DO UPDATE SET used = used + 1 WHERE used < ?4 \
+     RETURNING used";
+
+/// Give back a unit taken from one window (the minute unit, when the day
+/// budget turned out to be spent).
+pub const ENRICH_BUDGET_REFUND: &str = "UPDATE enrich_budget SET used = used - 1 \
+     WHERE provider = ?1 AND window = ?2 AND window_start = ?3 AND used > 0";
+
+/// Drop a provider's counters older than `?2` (unix ms).
+pub const ENRICH_BUDGET_PRUNE: &str =
+    "DELETE FROM enrich_budget WHERE provider = ?1 AND window_start < ?2";
+
+/// Failures recorded for one observable. `?1` kind, `?2` value.
+pub const ENRICH_FAILURES_FOR: &str = "SELECT provider, kind, value, failures, last_failed_at, retry_at FROM enrich_failures \
+     WHERE kind = ?1 AND value = ?2";
+
+/// Count a failure. `?1` key, `?2` provider, `?3` kind, `?4` value, `?5`
+/// now, `?6` error text, `?7` Retry-After time or NULL.
+pub const ENRICH_FAILURE_RECORD: &str = "INSERT INTO enrich_failures (cache_key, provider, kind, value, failures, last_failed_at, last_error, retry_at) \
+     VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7) \
+     ON CONFLICT (cache_key) DO UPDATE SET failures = failures + 1, last_failed_at = ?5, last_error = ?6, retry_at = ?7";
+
+/// Forget failures once the provider answers. `?1` key.
+pub const ENRICH_FAILURE_CLEAR: &str = "DELETE FROM enrich_failures WHERE cache_key = ?1";
+
+/// Delete cache rows past their own TTL, at most `?2` of them. `?1` now.
+/// (D1 has no `DELETE ... LIMIT`, hence the subquery.)
+pub const ENRICH_PURGE_EXPIRED: &str = "DELETE FROM enrich_cache WHERE cache_key IN \
+     (SELECT cache_key FROM enrich_cache WHERE fetched_at + ttl_secs * 1000 <= ?1 LIMIT ?2)";
+
+/// Delete one provider's rows fetched at or before `?2` (its retention
+/// cap), at most `?3`. `?1` provider.
+pub const ENRICH_PURGE_PROVIDER: &str = "DELETE FROM enrich_cache WHERE cache_key IN \
+     (SELECT cache_key FROM enrich_cache WHERE provider = ?1 AND fetched_at <= ?2 LIMIT ?3)";
+
+/// Delete rows of every provider not among the `listed` ones (`?3`
+/// onwards) fetched at or before `?1` (the default retention cap), at most
+/// `?2`.
+pub fn enrich_purge_default(listed: usize) -> String {
+    let not_in = if listed == 0 {
+        String::new()
+    } else {
+        let list: Vec<String> = (0..listed).map(|i| format!("?{}", i + 3)).collect();
+        format!(" AND provider NOT IN ({})", list.join(", "))
+    };
+    format!(
+        "DELETE FROM enrich_cache WHERE cache_key IN \
+         (SELECT cache_key FROM enrich_cache WHERE fetched_at <= ?1{not_in} LIMIT ?2)"
+    )
+}
+
+/// Delete failure rows last seen at or before `?1` with no `Retry-After`
+/// after `?2` (now), at most `?3`.
+pub const ENRICH_PURGE_FAILURES: &str = "DELETE FROM enrich_failures WHERE cache_key IN \
+     (SELECT cache_key FROM enrich_failures WHERE last_failed_at <= ?1 \
+     AND (retry_at IS NULL OR retry_at <= ?2) LIMIT ?3)";
+
+/// Start of the minute and the UTC day holding `now_ms`.
+pub fn budget_windows(now_ms: i64) -> (i64, i64) {
+    (
+        now_ms - now_ms.rem_euclid(60_000),
+        now_ms - now_ms.rem_euclid(86_400_000),
+    )
 }
 
 #[cfg(test)]
@@ -967,7 +1051,23 @@ mod tests {
     }
 
     fn lookup(c: &Connection, kind: &str, now: i64, values: &[String]) -> Vec<(String, String)> {
-        let mut args: Vec<rusqlite::types::Value> = vec![kind.to_string().into(), now.into()];
+        lookup_as(c, kind, now, None, values)
+    }
+
+    fn lookup_as(
+        c: &Connection,
+        kind: &str,
+        now: i64,
+        tenant: Option<&str>,
+        values: &[String],
+    ) -> Vec<(String, String)> {
+        let mut args: Vec<rusqlite::types::Value> = vec![
+            kind.to_string().into(),
+            now.into(),
+            tenant
+                .map(|t| rusqlite::types::Value::from(t.to_string()))
+                .unwrap_or(rusqlite::types::Value::Null),
+        ];
         args.extend(
             values
                 .iter()
@@ -1017,6 +1117,48 @@ mod tests {
         assert_eq!(got, vec!["greynoise", "local_asn"]);
         assert!(lookup(&c, "domain", now, &[hostile]).is_empty());
 
+        // A tenant row is read by its tenant only; CVE rows are allowed.
+        c.execute(
+            ENRICH_CACHE_UPSERT,
+            params![
+                "threatsieve_restricted:ip:203.0.113.7@t1",
+                "threatsieve_restricted",
+                "ip",
+                "203.0.113.7",
+                now,
+                3600,
+                "[]",
+                "t1"
+            ],
+        )
+        .unwrap();
+        c.execute(
+            ENRICH_CACHE_UPSERT,
+            params![
+                "threatsieve:cve:CVE-2099-0001",
+                "threatsieve",
+                "cve",
+                "CVE-2099-0001",
+                now,
+                3600,
+                "[]",
+                None::<String>
+            ],
+        )
+        .unwrap();
+        let providers = |tenant| {
+            let mut p: Vec<String> = lookup_as(&c, "ip", now, tenant, &["203.0.113.7".into()])
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect();
+            p.sort();
+            p
+        };
+        assert!(providers(Some("t1")).contains(&"threatsieve_restricted".to_string()));
+        assert!(!providers(Some("t2")).contains(&"threatsieve_restricted".to_string()));
+        assert!(!providers(None).contains(&"threatsieve_restricted".to_string()));
+        assert_eq!(lookup(&c, "cve", now, &["CVE-2099-0001".into()]).len(), 1);
+
         // 250 addresses and a domain: three IP statements and one domain
         // statement, every one under D1's bound parameter limit.
         let mut obs: Vec<Observable> = (0..250)
@@ -1031,7 +1173,7 @@ mod tests {
         assert_eq!(plan.iter().map(|(_, v)| v.len()).sum::<usize>(), 252);
         let mut hits = Vec::new();
         for (kind, values) in &plan {
-            assert!(values.len() + 2 <= D1_MAX_BOUND_PARAMS);
+            assert!(values.len() + 3 <= D1_MAX_BOUND_PARAMS);
             hits.extend(lookup(&c, kind, now, values));
         }
         assert_eq!(hits.len(), 3, "{hits:?}");
@@ -1056,5 +1198,180 @@ mod tests {
         );
         // The default budget stays inside the D1 Free plan.
         assert!(enrich_lookup_plan(&many, 20).len() <= 20);
+    }
+
+    #[test]
+    fn enrichment_budget_cache_and_failure_statements() {
+        let c = db();
+        let now = 1_800_000_000_123;
+        let (minute, day) = budget_windows(now);
+        assert_eq!(minute % 60_000, 0);
+        assert_eq!(day % 86_400_000, 0);
+        let take = |window: &str, start: i64, limit: i64| -> Option<i64> {
+            c.query_row(
+                ENRICH_BUDGET_TAKE,
+                params!["greynoise", window, start, limit],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap()
+        };
+        // Two a minute: the third take is refused and changes nothing.
+        assert_eq!(take("minute", minute, 2), Some(1));
+        assert_eq!(take("minute", minute, 2), Some(2));
+        assert_eq!(take("minute", minute, 2), None);
+        // A new minute starts again.
+        assert_eq!(take("minute", minute + 60_000, 2), Some(1));
+        c.execute(ENRICH_BUDGET_REFUND, params!["greynoise", "minute", minute])
+            .unwrap();
+        assert_eq!(take("minute", minute, 2), Some(2));
+        c.execute(ENRICH_BUDGET_PRUNE, params!["greynoise", minute + 1])
+            .unwrap();
+        let left: i64 = c
+            .query_row("SELECT COUNT(*) FROM enrich_budget", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 1);
+        assert_eq!(take("day", day, 7), Some(1));
+
+        // Cache upsert replaces the provider's earlier answer.
+        for (fetched, facts) in [(now, "[]"), (now + 5, "[{\"x\":1}]")] {
+            c.execute(
+                ENRICH_CACHE_UPSERT,
+                params![
+                    "greynoise:ip:203.0.113.7",
+                    "greynoise",
+                    "ip",
+                    "203.0.113.7",
+                    fetched,
+                    86_400,
+                    facts,
+                    None::<String>
+                ],
+            )
+            .unwrap();
+        }
+        let (fetched, facts): (i64, String) = c
+            .query_row("SELECT fetched_at, facts FROM enrich_cache", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((fetched, facts.as_str()), (now + 5, "[{\"x\":1}]"));
+
+        // Failures count up and clear.
+        for t in [now, now + 1] {
+            c.execute(
+                ENRICH_FAILURE_RECORD,
+                params![
+                    "crowdsec:ip:203.0.113.7",
+                    "crowdsec",
+                    "ip",
+                    "203.0.113.7",
+                    t,
+                    "503",
+                    t + 60_000
+                ],
+            )
+            .unwrap();
+        }
+        let (n, at, retry): (i64, i64, i64) = c
+            .query_row(ENRICH_FAILURES_FOR, params!["ip", "203.0.113.7"], |r| {
+                Ok((r.get(3)?, r.get(4)?, r.get(5)?))
+            })
+            .unwrap();
+        assert_eq!((n, at, retry), (2, now + 1, now + 60_001));
+        c.execute(ENRICH_FAILURE_CLEAR, params!["crowdsec:ip:203.0.113.7"])
+            .unwrap();
+        assert!(
+            c.query_row(ENRICH_FAILURES_FOR, params!["ip", "203.0.113.7"], |r| r
+                .get::<_, i64>(3))
+                .optional()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn enrich_purge_deletes_expired_and_capped_rows_in_bounded_batches() {
+        let c = db();
+        let now: i64 = 1_792_285_400_000;
+        let day: i64 = 86_400_000;
+        let put = |key: &str, provider: &str, fetched: i64, ttl: i64| {
+            c.execute(
+                ENRICH_CACHE_UPSERT,
+                params![
+                    key,
+                    provider,
+                    "ip",
+                    "203.0.113.7",
+                    fetched,
+                    ttl,
+                    "[]",
+                    None::<String>
+                ],
+            )
+            .unwrap();
+        };
+        put("a", "threatsieve", now - 2 * day, 3600); // expired
+        put("b", "threatsieve", now - 2 * day, 86_400 * 30); // fresh, past a 1 day cap
+        put("c", "local_asn", now - 2 * day, 86_400 * 30); // fresh, inside the 7 day default
+        put("d", "local_asn", now - 8 * day, 86_400 * 30); // past the default cap
+        put("e", "threatsieve", now, 60); // fresh
+        let keys = || -> Vec<String> {
+            let mut s = c
+                .prepare("SELECT cache_key FROM enrich_cache ORDER BY cache_key")
+                .unwrap();
+            s.query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        // Bounded: one row per statement here.
+        assert_eq!(c.execute(ENRICH_PURGE_EXPIRED, params![now, 1]).unwrap(), 1);
+        assert_eq!(keys(), ["b", "c", "d", "e"]);
+        assert_eq!(
+            c.execute(ENRICH_PURGE_EXPIRED, params![now, 10]).unwrap(),
+            0
+        );
+        assert_eq!(
+            c.execute(ENRICH_PURGE_PROVIDER, params!["threatsieve", now - day, 10])
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.execute(
+                &enrich_purge_default(1),
+                params![now - 7 * day, 10, "threatsieve"]
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(keys(), ["c", "e"]);
+        assert_eq!(
+            c.execute(&enrich_purge_default(0), params![now - 7 * day, 10])
+                .unwrap(),
+            0
+        );
+
+        // Failures: stale ones go, a pending Retry-After keeps its row.
+        for (key, last, retry) in [
+            ("f1", now - 2 * day, None),
+            ("f2", now - 2 * day, Some(now + 60_000)),
+            ("f3", now, None),
+        ] {
+            c.execute(
+                ENRICH_FAILURE_RECORD,
+                params![key, "threatsieve", "ip", "203.0.113.7", last, "503", retry],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            c.execute(ENRICH_PURGE_FAILURES, params![now - day, now, 10])
+                .unwrap(),
+            1
+        );
+        let left: i64 = c
+            .query_row("SELECT count(*) FROM enrich_failures", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 2);
     }
 }
