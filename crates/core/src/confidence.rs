@@ -24,7 +24,8 @@ pub enum LinkKind {
 /// Where a piece of evidence came from. Producers: #12 (rule, sequence,
 /// vuln_path_hook, vendor_desc, predisclosure_backmatch, catalogue_prior),
 /// #11 (enrichment), #25 (noise_score), #28 (llm), #33 (campaign_cluster),
-/// #26 (rule, for techniques), analysts (analyst).
+/// #26 (rule, for techniques), #29 (actor_ttp_overlap,
+/// actor_indicator_overlap, actor_targeting), analysts (analyst).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceSource {
@@ -39,6 +40,15 @@ pub enum EvidenceSource {
     Analyst,
     CampaignCluster,
     NoiseScore,
+    /// An actor profile from a public source uses the techniques seen,
+    /// weighted by how rare they are among public profiles (#29).
+    ActorTtpOverlap,
+    /// An indicator seen on the decoys (infrastructure or tooling) is listed
+    /// in a public report about the actor (#29).
+    ActorIndicatorOverlap,
+    /// The CVEs or products hit match what a public report says the actor
+    /// targets (#29). Never enough on its own.
+    ActorTargeting,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +145,9 @@ impl Default for ConfidenceConfig {
                 (Enrichment, w(10, 15)),
                 (Llm, w(20, 20)),
                 (CampaignCluster, w(45, 55)),
+                (ActorTtpOverlap, w(25, 30)),
+                (ActorIndicatorOverlap, w(30, 40)),
+                (ActorTargeting, w(10, 10)),
                 (Analyst, w(0, 0)),
                 (NoiseScore, w(0, 0)),
             ]),
@@ -335,6 +348,21 @@ pub fn score(
         caps.push("pre-disclosure evidence alone capped below publish".into());
     }
     let catalogue_only = only(&[EvidenceSource::CataloguePrior]);
+    // Actor associations (#29) are capped in code, whatever the weights:
+    // without an indicator from a public report they stay low, and without
+    // an analyst they never reach high or publish.
+    if kind == LinkKind::AttemptActor {
+        if !by_source.contains_key(&EvidenceSource::ActorIndicatorOverlap)
+            && total >= i32::from(t.medium)
+        {
+            total = i32::from(t.medium) - 1;
+            caps.push("actor association without a shared indicator capped below medium".into());
+        }
+        if total >= i32::from(t.high) {
+            total = i32::from(t.high) - 1;
+            caps.push("actor association capped below high until an analyst confirms it".into());
+        }
+    }
 
     let mut score = total.clamp(0, 100) as u8;
     let mut confirmed = false;
@@ -367,7 +395,11 @@ pub fn score(
     // pre-disclosure-only or catalogue-only links without an analyst.
     let publishable = !suppressed
         && score >= t.publish_min
-        && (reviewed || !(llm_only || predisclosure_only || catalogue_only));
+        && (reviewed
+            || !(llm_only
+                || predisclosure_only
+                || catalogue_only
+                || kind == LinkKind::AttemptActor));
     Some(ConfidenceLink {
         kind,
         attempt_id: attempt_id.to_string(),
@@ -381,7 +413,10 @@ pub fn score(
         r#override: analyst,
         publishable,
         ui_highlight: !suppressed && score >= t.ui_highlight_min,
-        auto_state_promote: !suppressed && score >= t.auto_state_promote_min && !llm_only,
+        auto_state_promote: !suppressed
+            && score >= t.auto_state_promote_min
+            && !llm_only
+            && (reviewed || kind != LinkKind::AttemptActor),
         radar_queue: !suppressed && score >= t.radar_queue_min,
     })
 }
@@ -630,6 +665,97 @@ mod tests {
         )
         .unwrap();
         assert_eq!(l.wording, "confirmed association");
+    }
+
+    #[test]
+    fn actor_links_never_reach_high_or_publish_without_an_analyst() {
+        let mut cfg = ConfidenceConfig::default();
+        // Even generous, misconfigured weights cannot lift an actor link.
+        for s in [ActorTtpOverlap, ActorIndicatorOverlap, ActorTargeting] {
+            cfg.weights.insert(
+                s,
+                SourceWeight {
+                    points: 100,
+                    cap: 100,
+                },
+            );
+        }
+        let actor = |evidence, o| {
+            score(&cfg, LinkKind::AttemptActor, "a", "cluster-x", evidence, o).unwrap()
+        };
+        let strong = actor(
+            vec![
+                ev("t", ActorTtpOverlap, 100),
+                ev("i", ActorIndicatorOverlap, 100),
+                ev("g", ActorTargeting, 100),
+            ],
+            None,
+        );
+        assert_eq!((strong.score, strong.band), (69, Band::Medium));
+        assert!(!strong.publishable && !strong.auto_state_promote);
+        assert_eq!(strong.wording, "possible association");
+        assert!(strong.caps_applied.iter().any(|c| c.contains("below high")));
+
+        let ttp_only = actor(
+            vec![ev("t", ActorTtpOverlap, 100), ev("g", ActorTargeting, 100)],
+            None,
+        );
+        assert_eq!((ttp_only.score, ttp_only.band), (39, Band::Low));
+        assert!(
+            ttp_only
+                .caps_applied
+                .iter()
+                .any(|c| c.contains("without a shared indicator"))
+        );
+
+        // Campaign clustering evidence on an actor link (from any
+        // producer) cannot lift it either.
+        let clustered = actor(
+            vec![
+                ev("c1", CampaignCluster, 100),
+                ev("c2", CampaignCluster, 100),
+                ev("t", ActorTtpOverlap, 100),
+            ],
+            None,
+        );
+        assert!(
+            clustered.score < cfg.thresholds.medium,
+            "{}",
+            clustered.score
+        );
+        assert!(!clustered.publishable);
+        let clustered = actor(
+            vec![
+                ev("c1", CampaignCluster, 100),
+                ev("i", ActorIndicatorOverlap, 100),
+            ],
+            None,
+        );
+        assert!(clustered.score < cfg.thresholds.high && !clustered.publishable);
+
+        let tp = Override {
+            feedback: Feedback::TruePositive,
+            analyst_id: "a".into(),
+            at: 1,
+            note: "matches the report's loader".into(),
+        };
+        let confirmed = actor(vec![ev("i", ActorIndicatorOverlap, 100)], Some(tp));
+        assert!(confirmed.publishable);
+        assert_eq!(confirmed.wording, "confirmed association");
+
+        let def = score(
+            &ConfidenceConfig::default(),
+            LinkKind::AttemptActor,
+            "a",
+            "cluster-x",
+            vec![ev("i", ActorIndicatorOverlap, 100)],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            def.score, 30,
+            "one full-strength indicator adds 30 by default"
+        );
     }
 
     #[test]

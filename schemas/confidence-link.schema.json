@@ -60,6 +60,6 @@
     "radar_queue": { "type": "boolean" }
   },
   "$defs": {
-    "source": { "enum": ["rule", "sequence", "vuln_path_hook", "catalogue_prior", "vendor_desc", "predisclosure_backmatch", "enrichment", "llm", "analyst", "campaign_cluster", "noise_score"] }
+    "source": { "enum": ["rule", "sequence", "vuln_path_hook", "catalogue_prior", "vendor_desc", "predisclosure_backmatch", "enrichment", "llm", "analyst", "campaign_cluster", "noise_score", "actor_ttp_overlap", "actor_indicator_overlap", "actor_targeting"] }
   }
 }

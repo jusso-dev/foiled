@@ -21,6 +21,9 @@ weights:
   enrichment: { points: 10, cap: 15 }
   llm: { points: 20, cap: 20 }                       # LLM can add at most 20 and never reaches high alone
   campaign_cluster: { points: 45, cap: 55 }         # clustering alone stays below publish_min and high (#33)
+  actor_ttp_overlap: { points: 25, cap: 30 }        # actor links (#29): capped in code below medium without an indicator,
+  actor_indicator_overlap: { points: 30, cap: 40 }  # and below high and never published without an analyst
+  actor_targeting: { points: 10, cap: 10 }
   analyst: { points: 0, cap: 0 }                     # analysts override, they do not add points
   noise_score: { points: 0, cap: 0 }                 # applied as a penalty, see noise_max_penalty
 # A mass-scanning source (noise score 100) loses up to this many points, but
