@@ -3,6 +3,7 @@
 pub mod agents;
 pub mod attempts;
 pub mod audit;
+pub mod campaigns;
 pub mod catalogue;
 pub mod decoys;
 pub mod exports;

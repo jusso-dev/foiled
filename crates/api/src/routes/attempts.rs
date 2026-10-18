@@ -4,7 +4,9 @@
 //!
 //! Attempts are a read model: built on request from the capture events in a
 //! time window with the deterministic grouping in `foiled_core::attempt`,
-//! so the same evidence always gives the same attempts and ids. Windows are
+//! so the same evidence always gives the same attempts and ids.
+//! `campaign_id` is filled from campaign clustering over the same window
+//! (#33, `foiled_core::campaign`). Windows are
 //! bounded (default 7 days, at most 20,000 events) to stay inside Workers
 //! CPU limits; a materialised table can replace this without changing the
 //! contract.
@@ -87,8 +89,9 @@ pub(crate) async fn attempts_and_events(
     Ok((m.attempts, m.events, m.truncated))
 }
 
-/// Attempts plus events, without IOC extraction (`ioc_refs` stay empty),
-/// for routes that never return attempts (links and overrides).
+/// Attempts plus events, without IOC extraction or campaign clustering
+/// (`ioc_refs` stay empty, `campaign_id` stays null), for routes that never
+/// return attempts (links and overrides).
 pub(crate) async fn attempts_and_events_without_iocs(
     state: &AppState,
     tenant_id: &str,
@@ -99,12 +102,15 @@ pub(crate) async fn attempts_and_events_without_iocs(
     Ok((m.attempts, m.events))
 }
 
-/// Whether to extract IOCs (#34) while building a window.
+/// Whether to build the intel read model (IOCs #34 and campaigns #33)
+/// while building a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Iocs {
-    /// Extract and fill `ioc_refs` on the attempts.
+    /// Extract IOCs, cluster campaigns, and fill `ioc_refs` and
+    /// `campaign_id` on the attempts (and `campaign_ids` on the IOCs).
     Attach,
-    /// Skip extraction; `ioc_refs` stay empty and `iocs` is empty.
+    /// Skip both; `ioc_refs` stay empty, `campaign_id` null, and `iocs` and
+    /// `campaigns` are empty.
     Skip,
 }
 
@@ -115,6 +121,8 @@ pub(crate) struct WindowModel {
     pub events: Vec<foiled_core::capture::CaptureEvent>,
     /// IOCs extracted from the attempts (#34), without enrichment.
     pub iocs: foiled_core::ioc::Extraction,
+    /// Campaigns clustered from the attempts (#33).
+    pub campaigns: foiled_core::campaign::Clustering,
     pub truncated: bool,
 }
 
@@ -142,25 +150,118 @@ pub(crate) async fn window_model(
     let mut attempts = build(&events, DEFAULT_IDLE_GAP_MS, &signals);
     // Payload storage is off by default (#16), so inline bodies never
     // become IOC values here; their hashes do.
-    let iocs = match iocs {
+    let (iocs, campaigns) = match iocs {
         Iocs::Attach => {
-            let x = foiled_core::ioc::extract(
+            let cfg = foiled_core::confidence::ConfidenceConfig::default();
+            let mut x = foiled_core::ioc::extract(
                 &attempts,
                 &events,
-                &foiled_core::confidence::ConfidenceConfig::default(),
+                &cfg,
                 foiled_core::ioc::ExtractOptions::default(),
             );
             foiled_core::ioc::attach_refs(&mut attempts, &x);
-            x
+            let c = campaigns(state, tenant_id, &attempts, &events, &x, &cfg).await?;
+            foiled_core::campaign::attach(&mut attempts, &mut x, &c);
+            (x, c)
         }
-        Iocs::Skip => foiled_core::ioc::Extraction::default(),
+        Iocs::Skip => Default::default(),
     };
     Ok(WindowModel {
         attempts,
         events,
         iocs,
+        campaigns,
         truncated,
     })
+}
+
+/// Cluster a window's attempts into campaigns (#33), with ASN context from
+/// cached enrichment Facts (#11), advisory dates from the bundled CVE rule
+/// packs (#12) and the tenant's stored analyst actions.
+async fn campaigns(
+    state: &AppState,
+    tenant_id: &str,
+    attempts: &[Attempt],
+    events: &[foiled_core::capture::CaptureEvent],
+    iocs: &foiled_core::ioc::Extraction,
+    cfg: &foiled_core::confidence::ConfidenceConfig,
+) -> Result<foiled_core::campaign::Clustering, ApiError> {
+    use foiled_core::campaign;
+    let signals = campaign::attempt_signals(
+        attempts,
+        events,
+        crate::links::attack_rules(),
+        crate::links::cve_rules(),
+    );
+    let asns = source_asns(state, tenant_id, attempts).await?;
+    let advisories = crate::links::cve_rules()
+        .advisories
+        .iter()
+        .map(|a| (a.cve_id.to_ascii_uppercase(), a.published_at))
+        .collect();
+    let actions = state
+        .store
+        .campaign_actions(tenant_id, campaign::MAX_ACTIONS)
+        .await?;
+    Ok(campaign::cluster(
+        &campaign::Input {
+            tenant_id,
+            attempts,
+            iocs,
+            signals: &signals,
+            asns: &asns,
+            advisories: &advisories,
+            actions: &actions,
+            now: (state.clock)(),
+        },
+        campaign::Params::default(),
+        cfg,
+    ))
+}
+
+/// Source address to ASN number, from the newest cached `asn.number` Fact
+/// for each address. Addresses with no Fact are left out.
+async fn source_asns(
+    state: &AppState,
+    tenant_id: &str,
+    attempts: &[Attempt],
+) -> Result<std::collections::BTreeMap<String, u32>, ApiError> {
+    use foiled_core::enrichment::Observable;
+    use std::collections::BTreeMap;
+    let mut by_observable: BTreeMap<Observable, Vec<&str>> = BTreeMap::new();
+    for a in attempts {
+        if let Ok(o) = Observable::ip(&a.src) {
+            by_observable.entry(o).or_default().push(a.src.as_str());
+        }
+    }
+    if by_observable.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let observed = state
+        .store
+        .enrichment_facts(tenant_id, by_observable.keys().cloned().collect())
+        .await?;
+    let mut newest: BTreeMap<Observable, (i64, u32)> = BTreeMap::new();
+    for o in observed {
+        for f in o.facts.iter().filter(|f| f.key == "asn.number") {
+            let Some(n) = f.value.as_u64().and_then(|n| u32::try_from(n).ok()) else {
+                continue;
+            };
+            let e = newest
+                .entry(o.observable.clone())
+                .or_insert((f.observed_at, n));
+            if (f.observed_at, n) > *e {
+                *e = (f.observed_at, n);
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    for (o, (_, n)) in newest {
+        for src in by_observable.get(&o).into_iter().flatten() {
+            out.insert((*src).to_string(), n);
+        }
+    }
+    Ok(out)
 }
 
 /// `since` and `until` with defaults: the 7 days up to now.

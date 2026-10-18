@@ -1039,8 +1039,9 @@ paths:
       description: |
         Scored with the confidence layer (`docs/confidence.md`): every
         evidence item, every contribution and every cap is listed. Wording is
-        "we assess as" until an analyst confirms. Actor and campaign links
-        arrive with #29 and #33.
+        "we assess as" until an analyst confirms. Actor links arrive with
+        #29; campaign membership links are served per campaign at
+        `/v0/campaigns/{campaign_id}/evidence` (#33).
       x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [attempts:read]
@@ -1137,26 +1138,220 @@ paths:
       tags: [intel]
       operationId: listCampaigns
       summary: List campaigns
-      x-foiled-status: planned
-      x-foiled-issue: 33
+      description: |
+        Clustered on request from the attempts in a window (default the last
+        7 days, at most 31 days and 20,000 events) with the deterministic
+        clustering in `docs/campaigns.md`: shared infrastructure, TTPs,
+        targeting and payloads, joined through an inverted index and
+        union-find, with stored analyst actions replayed on top. Tenant
+        scoped. Newest activity first. Confidence is worded "possible" until
+        an analyst confirms; clustering alone never publishes. `notes` lists
+        analyst actions that did not apply in this window.
+      parameters:
+        - { name: since, in: query, schema: { type: integer }, description: "Unix ms, inclusive." }
+        - { name: until, in: query, schema: { type: integer }, description: "Unix ms, exclusive." }
+        - { name: status, in: query, schema: { type: string, enum: [emerging, active, closed] } }
+        - { name: attempt_id, in: query, schema: { type: string } }
+        - { name: sensor_id, in: query, schema: { type: string } }
+        - { name: decoy_id, in: query, schema: { type: string } }
+        - { name: cve, in: query, schema: { type: string }, description: "Case-insensitive CVE id among the campaign's CVEs." }
+        - { name: ioc_id, in: query, schema: { type: string }, description: "An IOC shared by at least two members (#34)." }
+        - { name: min_confidence, in: query, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { $ref: "#/components/parameters/Limit" }
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [campaigns:read]
       responses:
-        "200": { description: "Campaigns." }
+        "200":
+          description: Campaigns.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, truncated, notes]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/campaign.schema.json" }
+                  truncated: { type: boolean }
+                  notes: { type: array, items: { type: string } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /v0/campaigns/{campaign_id}:
     get:
       tags: [intel]
       operationId: getCampaign
       summary: Get a campaign
-      x-foiled-status: planned
-      x-foiled-issue: 33
+      description: Campaign ids are stable for the same evidence and actions. Pass the same `since` and `until` as the list call for campaigns older than 7 days.
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [campaigns:read]
       parameters:
-        - { name: campaign_id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/CampaignId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
       responses:
-        "200": { description: "The campaign." }
+        "200":
+          description: The campaign.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/campaign.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/campaigns/{campaign_id}/attempts:
+    get:
+      tags: [intel]
+      operationId: getCampaignAttempts
+      summary: Member attempts of a campaign
+      description: Newest activity first, each with `campaign_id` set. Needs `attempts:read` as well as `campaigns:read`.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [campaigns:read, attempts:read]
+      parameters:
+        - { $ref: "#/components/parameters/CampaignId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Member attempts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [campaign_id, items, truncated]
+                properties:
+                  campaign_id: { type: string }
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/attempt.schema.json" }
+                  truncated: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/campaigns/{campaign_id}/evidence:
+    get:
+      tags: [intel]
+      operationId: getCampaignEvidence
+      summary: Confidence and join evidence for a campaign
+      description: |
+        The full #27 explanation behind the campaign's `confidence_ref`: the
+        campaign link (kind `attempt_campaign`, attempt: the seed) and one
+        link per member, each listing the features that joined it, its noise
+        score, and an analyst confirmation when an action put it there.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [campaigns:read]
+      parameters:
+        - { $ref: "#/components/parameters/CampaignId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: Evidence.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [campaign_id, confidence, members, truncated]
+                properties:
+                  campaign_id: { type: string }
+                  confidence: { $ref: "../schemas/confidence-link.schema.json" }
+                  members:
+                    type: array
+                    items: { $ref: "../schemas/confidence-link.schema.json" }
+                  truncated: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/campaigns/{campaign_id}/actions:
+    get:
+      tags: [intel]
+      operationId: listCampaignActions
+      summary: Analyst actions that name a campaign
+      description: Stored actions where the campaign is the target, a merged-in campaign or the result of a split, oldest first. Read from storage, so actions on campaigns outside the current window are still listed.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [campaigns:read]
+      parameters:
+        - { $ref: "#/components/parameters/CampaignId" }
+      responses:
+        "200":
+          description: Actions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [campaign_id, items]
+                properties:
+                  campaign_id: { type: string }
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/campaign-action.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [intel]
+      operationId: actOnCampaign
+      summary: Label, set status, merge, split or give feedback on a campaign (audited)
+      description: |
+        Stored append-only and replayed over the clustering on every read
+        (`docs/campaigns.md#analyst-actions`). Written to the audit log as
+        `campaign.<action>`. `merge` folds campaigns from the same window
+        into this one; `split` moves member attempts into a campaign of
+        their own, and the side holding the seed keeps the id; `feedback`
+        `true_positive` confirms (score 100, wording "confirmed"). Raw
+        capture events and attempts are never changed. Pass the same
+        `since` and `until` as the read that found the campaign.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [campaigns:write]
+      parameters:
+        - { $ref: "#/components/parameters/CampaignId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action, note]
+              properties:
+                action: { type: string, enum: [label, status, merge, split, feedback] }
+                title: { type: string, minLength: 1, maxLength: 120, description: "label only." }
+                status: { type: [string, "null"], enum: [emerging, active, closed, null], description: "status only. Null or absent clears the override." }
+                campaign_ids: { type: array, minItems: 1, maxItems: 20, items: { type: string }, description: "merge only." }
+                attempt_ids: { type: array, minItems: 1, maxItems: 500, items: { type: string }, description: "split only. Members of this campaign." }
+                feedback: { type: string, enum: [true_positive, false_positive, unsure], description: "feedback only." }
+                note: { type: string, maxLength: 1000 }
+      responses:
+        "200":
+          description: The stored action and the campaign as it is now (null if the action dissolved it).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [action, campaign]
+                properties:
+                  action: { $ref: "../schemas/campaign-action.schema.json" }
+                  campaign:
+                    oneOf:
+                      - { $ref: "../schemas/campaign.schema.json" }
+                      - { type: "null" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
 
   /v0/iocs:
     get:
@@ -1531,6 +1726,11 @@ components:
       in: path
       required: true
       schema: { type: string }
+    CampaignId:
+      name: campaign_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^cmp_[a-f0-9]{24}$" }
     HostId:
       name: host_id
       in: path
