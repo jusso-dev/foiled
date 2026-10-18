@@ -82,8 +82,8 @@ What it does, step by step:
     ```
 
     ```text
-    indicator_type,indicator,first_seen,last_seen,event_count,decoy_ids,catalogue_ids,hook_cves
-    ipv4,10.86.0.1,2026-10-18T03:12:40Z,2026-10-18T03:12:41Z,3,<decoy id>,foiled/demo-app/1.0.0,FOILED-DEMO-0001
+    indicator_type,indicator,first_seen,last_seen,event_count,decoy_ids,catalogue_ids,hook_cves,asn,as_org,country
+    ipv4,10.86.0.1,2026-10-18T03:12:40Z,2026-10-18T03:12:41Z,3,<decoy id>,foiled/demo-app/1.0.0,FOILED-DEMO-0001,,,
     ```
 
 **About the address in the lab.** Docker's userland proxy forwards loopback connections, so the decoy sees the bridge gateway (`10.86.0.1`) rather than `127.0.0.1`. On a VPS with the ADR 0003 DNAT rules, the decoy and the export see the attacker's real source address, which is the MVP success metric.

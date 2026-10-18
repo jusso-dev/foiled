@@ -1,0 +1,75 @@
+{
+  "ioc_id": "ioc_ce39b0f40a6cbcc95c0e98b7",
+  "type": "ip",
+  "value": "198.51.100.23",
+  "display": "198[.]51[.]100[.]23",
+  "roles": [
+    "source"
+  ],
+  "origin": "observed",
+  "redacted": false,
+  "file_ioc_limited": false,
+  "first_seen": 1792285500000,
+  "last_seen": 1792285500000,
+  "sightings": 1,
+  "attempt_ids": [
+    "att_1f168ea9598d08f00bc25e5e"
+  ],
+  "campaign_ids": [],
+  "decoy_ids": [
+    "dcy-redis-1"
+  ],
+  "catalogue_ids": [
+    "emulator/redis/7.0"
+  ],
+  "event_ids": [
+    "fd-06"
+  ],
+  "extracted_from": [
+    "application:src.ip"
+  ],
+  "enrichment": [
+    {
+      "provider": "local_asn",
+      "key": "asn.number",
+      "value": 64497,
+      "observed_at": 1792285700000,
+      "shareable": false
+    },
+    {
+      "provider": "local_asn",
+      "key": "asn.org",
+      "value": "Example Transit",
+      "observed_at": 1792285700000,
+      "shareable": false
+    },
+    {
+      "provider": "local_asn",
+      "key": "geo.country",
+      "value": "NZ",
+      "observed_at": 1792285700000,
+      "shareable": false
+    }
+  ],
+  "confidence": {
+    "score": 8,
+    "band": "low",
+    "wording": "we assess as",
+    "publishable": false,
+    "evidence": [
+      {
+        "signal_id": "decoy:dcy-redis-1",
+        "source": "catalogue_prior",
+        "weight": 100,
+        "summary": "seen at decoy dcy-redis-1, which has no legitimate users"
+      },
+      {
+        "signal_id": "noise:ioc_ce39b0f40a6cbcc95c0e98b7",
+        "source": "noise_score",
+        "weight": 10,
+        "summary": "lowest source noise score across sightings is 10"
+      }
+    ],
+    "caps_applied": []
+  }
+}

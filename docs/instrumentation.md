@@ -149,7 +149,7 @@ Other rules:
 
 - **#12, CVE mapping tier 3** (vulnerable-code-path trigger detection): a `trigger` hit for a hook whose manifest names a `cve_id`, on a decoy whose catalogue entry declares that hook, is the tier 3 signal for that CVE. Tier 3 consumes hook events; it does not implement hooks.
 - **#27, confidence**: each hit becomes evidence with `source: vuln_path_hook` and `ref` set to the hook event id. It is the strongest default tier weight (above sequence fingerprints and signatures), so hook plus sequence can reach `high`.
-- **#34, IOC extraction**: `cmd_lines` become `cmdline` IOCs, `implant_refs` and quarantine hashes become `file_sha256`, slice hashes become `payload_sha256`, and the ordered hook pattern feeds the `behaviour_fingerprint`.
+- **#34, IOC extraction** ([iocs.md](iocs.md)): `cmd_lines` become `cmdline` IOCs, `implant_refs` and quarantine hashes become `file_sha256`, slice hashes become `payload_sha256`, and the ordered hook pattern feeds the `behaviour_fingerprint`.
 - **#25, attempts**: `hook_hits[]` on the attempt is exactly the `hook_hits` output, and quarantine `payload_ref`s land in `payload_refs[]`. A `trigger` hit moves the attempt to `exploit`; a `post_exploit` hit moves it to `post-exploitation`.
 
 ## Demo walk-through

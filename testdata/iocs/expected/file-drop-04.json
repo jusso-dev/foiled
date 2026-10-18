@@ -1,0 +1,74 @@
+{
+  "ioc_id": "ioc_1a4c34d118d544a59901a8c3",
+  "type": "behaviour_fingerprint",
+  "value": "bf1:77ce3f6dfa237e38a2e822c54b183b87",
+  "display": "bf1:77ce3f6dfa237e38a2e822c54b183b87",
+  "roles": [
+    "behaviour"
+  ],
+  "origin": "observed",
+  "redacted": false,
+  "file_ioc_limited": false,
+  "first_seen": 1792285400000,
+  "last_seen": 1792285435000,
+  "sightings": 1,
+  "attempt_ids": [
+    "att_9c09513968e521d297116de5"
+  ],
+  "campaign_ids": [],
+  "decoy_ids": [
+    "dcy-demo-1"
+  ],
+  "catalogue_ids": [
+    "foiled/demo-app/1.0.0"
+  ],
+  "event_ids": [
+    "fd-01",
+    "fd-02",
+    "fd-03",
+    "fd-04",
+    "fd-05"
+  ],
+  "extracted_from": [
+    "attempt:steps"
+  ],
+  "enrichment": [],
+  "fingerprint": {
+    "version": 1,
+    "steps": [
+      "http POST /api/upload?path",
+      "hook demo-app.upload-path-traversal trigger",
+      "hook demo-app.upload-path-traversal post_exploit",
+      "exec chmod",
+      "quarantine"
+    ]
+  },
+  "confidence": {
+    "score": 68,
+    "band": "medium",
+    "wording": "we assess as",
+    "publishable": true,
+    "evidence": [
+      {
+        "signal_id": "decoy:dcy-demo-1",
+        "source": "catalogue_prior",
+        "weight": 100,
+        "summary": "seen at decoy dcy-demo-1, which has no legitimate users"
+      },
+      {
+        "signal_id": "hook:att_9c09513968e521d297116de5:demo-app.upload-path-traversal",
+        "source": "vuln_path_hook",
+        "weight": 100,
+        "summary": "seen in attempt att_9c09513968e521d297116de5, where vulnerable-path hook demo-app.upload-path-traversal fired",
+        "ref": "fd-02"
+      },
+      {
+        "signal_id": "noise:ioc_1a4c34d118d544a59901a8c3",
+        "source": "noise_score",
+        "weight": 10,
+        "summary": "lowest source noise score across sightings is 10"
+      }
+    ],
+    "caps_applied": []
+  }
+}

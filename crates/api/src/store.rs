@@ -17,6 +17,7 @@ use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState};
+use foiled_core::enrichment::{Observable, ObservedFacts};
 use serde::{Deserialize, Serialize};
 
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>;
@@ -217,6 +218,18 @@ pub trait Store: Send + Sync {
 
     /// Source IPs seen since `since` (Unix ms), oldest first.
     fn ip_iocs(&self, tenant_id: &str, since: i64) -> StoreFuture<'_, Vec<IpIocRow>>;
+
+    /// Cached enrichment Facts (#11) for these observables, used for ASN
+    /// context on IOCs (#34). Observables with no cached Facts are left
+    /// out. The default knows none: the Worker store answers from the
+    /// enrichment cache once the `foiled-enrich` consumer writes it.
+    fn enrichment_facts(
+        &self,
+        _tenant_id: &str,
+        _observables: Vec<Observable>,
+    ) -> StoreFuture<'_, Vec<ObservedFacts>> {
+        Box::pin(std::future::ready(Ok(Vec::new())))
+    }
 
     fn record_heartbeat(
         &self,

@@ -1,0 +1,86 @@
+{
+  "ioc_id": "ioc_f9739ffff772dab1a83fdcc1",
+  "type": "ip",
+  "value": "203.0.113.50",
+  "display": "203[.]0[.]113[.]50",
+  "roles": [
+    "source"
+  ],
+  "origin": "observed",
+  "redacted": false,
+  "file_ioc_limited": true,
+  "first_seen": 1792285323000,
+  "last_seen": 1792285324009,
+  "sightings": 4,
+  "attempt_ids": [
+    "att_7becbc03c1bf0363d7ce1575"
+  ],
+  "campaign_ids": [],
+  "decoy_ids": [
+    "dcy-demo-1"
+  ],
+  "catalogue_ids": [
+    "foiled/demo-app/1.0.0"
+  ],
+  "event_ids": [
+    "mem-01",
+    "mem-02",
+    "mem-03",
+    "mem-04"
+  ],
+  "extracted_from": [
+    "application:src.ip",
+    "hook:src.ip"
+  ],
+  "enrichment": [
+    {
+      "provider": "local_asn",
+      "key": "asn.number",
+      "value": 64498,
+      "observed_at": 1792285700000,
+      "shareable": false
+    },
+    {
+      "provider": "local_asn",
+      "key": "asn.org",
+      "value": "Example Hosting",
+      "observed_at": 1792285700000,
+      "shareable": false
+    },
+    {
+      "provider": "local_asn",
+      "key": "geo.country",
+      "value": "US",
+      "observed_at": 1792285700000,
+      "shareable": false
+    }
+  ],
+  "confidence": {
+    "score": 68,
+    "band": "medium",
+    "wording": "we assess as",
+    "publishable": true,
+    "evidence": [
+      {
+        "signal_id": "decoy:dcy-demo-1",
+        "source": "catalogue_prior",
+        "weight": 100,
+        "summary": "seen at decoy dcy-demo-1, which has no legitimate users"
+      },
+      {
+        "signal_id": "hook:att_7becbc03c1bf0363d7ce1575:demo-app.upload-path-traversal",
+        "source": "vuln_path_hook",
+        "weight": 100,
+        "summary": "seen in attempt att_7becbc03c1bf0363d7ce1575, where vulnerable-path hook demo-app.upload-path-traversal fired",
+        "ref": "mem-03"
+      },
+      {
+        "signal_id": "noise:ioc_f9739ffff772dab1a83fdcc1",
+        "source": "noise_score",
+        "weight": 10,
+        "summary": "lowest source noise score across sightings is 10"
+      }
+    ],
+    "caps_applied": []
+  }
+}

@@ -1,5 +1,6 @@
 //! `GET /v0/attempts` and `GET /v0/attempts/{id}` (#25), and the attempt
-//! timeline `GET /v0/attempts/{id}/timeline` (#10).
+//! timeline `GET /v0/attempts/{id}/timeline` (#10). `ioc_refs` on every
+//! attempt is filled from IOC extraction over the same window (#34).
 //!
 //! Attempts are a read model: built on request from the capture events in a
 //! time window with the deterministic grouping in `foiled_core::attempt`,
@@ -82,6 +83,49 @@ pub(crate) async fn attempts_and_events(
     since: i64,
     until: i64,
 ) -> Result<(Vec<Attempt>, Vec<foiled_core::capture::CaptureEvent>, bool), ApiError> {
+    let m = window_model(state, tenant_id, since, until, Iocs::Attach).await?;
+    Ok((m.attempts, m.events, m.truncated))
+}
+
+/// Attempts plus events, without IOC extraction (`ioc_refs` stay empty),
+/// for routes that never return attempts (links and overrides).
+pub(crate) async fn attempts_and_events_without_iocs(
+    state: &AppState,
+    tenant_id: &str,
+    since: i64,
+    until: i64,
+) -> Result<(Vec<Attempt>, Vec<foiled_core::capture::CaptureEvent>), ApiError> {
+    let m = window_model(state, tenant_id, since, until, Iocs::Skip).await?;
+    Ok((m.attempts, m.events))
+}
+
+/// Whether to extract IOCs (#34) while building a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Iocs {
+    /// Extract and fill `ioc_refs` on the attempts.
+    Attach,
+    /// Skip extraction; `ioc_refs` stay empty and `iocs` is empty.
+    Skip,
+}
+
+/// Everything built from one window of a tenant's capture events.
+pub(crate) struct WindowModel {
+    /// With `ioc_refs` filled from `iocs`.
+    pub attempts: Vec<Attempt>,
+    pub events: Vec<foiled_core::capture::CaptureEvent>,
+    /// IOCs extracted from the attempts (#34), without enrichment.
+    pub iocs: foiled_core::ioc::Extraction,
+    pub truncated: bool,
+}
+
+/// Build attempts and their IOCs for a tenant over a window.
+pub(crate) async fn window_model(
+    state: &AppState,
+    tenant_id: &str,
+    since: i64,
+    until: i64,
+    iocs: Iocs,
+) -> Result<WindowModel, ApiError> {
     if until <= since || until - since > 31 * DAY_MS {
         return Err(ApiError::bad_request(
             "window must be positive and at most 31 days",
@@ -95,14 +139,43 @@ pub(crate) async fn attempts_and_events(
     let mut events = events;
     events.truncate(MAX_WINDOW_EVENTS);
     let signals = crate::links::matcher_signals(&events);
-    let attempts = build(&events, DEFAULT_IDLE_GAP_MS, &signals);
-    Ok((attempts, events, truncated))
+    let mut attempts = build(&events, DEFAULT_IDLE_GAP_MS, &signals);
+    // Payload storage is off by default (#16), so inline bodies never
+    // become IOC values here; their hashes do.
+    let iocs = match iocs {
+        Iocs::Attach => {
+            let x = foiled_core::ioc::extract(
+                &attempts,
+                &events,
+                &foiled_core::confidence::ConfidenceConfig::default(),
+                foiled_core::ioc::ExtractOptions::default(),
+            );
+            foiled_core::ioc::attach_refs(&mut attempts, &x);
+            x
+        }
+        Iocs::Skip => foiled_core::ioc::Extraction::default(),
+    };
+    Ok(WindowModel {
+        attempts,
+        events,
+        iocs,
+        truncated,
+    })
+}
+
+/// `since` and `until` with defaults: the 7 days up to now.
+pub(crate) fn window_bounds(
+    state: &AppState,
+    since: Option<i64>,
+    until: Option<i64>,
+) -> (i64, i64) {
+    let until = until.unwrap_or_else(|| (state.clock)() + 1);
+    let since = since.unwrap_or(until - 7 * DAY_MS);
+    (since, until)
 }
 
 fn window(state: &AppState, q: &AttemptQuery) -> (i64, i64) {
-    let until = q.until.unwrap_or_else(|| (state.clock)() + 1);
-    let since = q.since.unwrap_or(until - 7 * DAY_MS);
-    (since, until)
+    window_bounds(state, q.since, q.until)
 }
 
 async fn list(
@@ -268,7 +341,8 @@ async fn attempt_links(
     q: &AttemptQuery,
 ) -> Result<Vec<foiled_core::confidence::ConfidenceLink>, ApiError> {
     let (since, until) = window(state, q);
-    let (attempts, events, _) = attempts_and_events(state, tenant_id, since, until).await?;
+    let (attempts, events) =
+        attempts_and_events_without_iocs(state, tenant_id, since, until).await?;
     let attempt = attempts
         .into_iter()
         .find(|a| a.attempt_id == attempt_id)
@@ -323,6 +397,15 @@ async fn override_link(
     crate::error::JsonBody(body): crate::error::JsonBody<OverrideBody>,
 ) -> Result<Json<foiled_core::confidence::ConfidenceLink>, ApiError> {
     let who = auth.require(Scope::AttemptsWrite)?.clone();
+    // IOC confidence is one score per indicator across every attempt it was
+    // seen in, so a per-attempt override has nothing to attach to. The
+    // OpenAPI enum and the link_overrides CHECK leave attempt_ioc out for
+    // the same reason (docs/iocs.md#confidence).
+    if body.kind == foiled_core::confidence::LinkKind::AttemptIoc {
+        return Err(ApiError::bad_request(
+            "attempt_ioc links are scored per indicator and cannot be overridden per attempt",
+        ));
+    }
     if body.note.chars().count() > 1000 {
         return Err(ApiError::bad_request(
             "note must be at most 1000 characters",

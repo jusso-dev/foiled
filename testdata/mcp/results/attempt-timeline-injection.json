@@ -43,7 +43,11 @@
       }
     ],
     "first_seen": 1792285328000,
-    "ioc_refs": [],
+    "ioc_refs": [
+      "ioc_30775fa473982bab0556dc29",
+      "ioc_5430732e1ade2152a6677414",
+      "ioc_3dba4c03af2181b2f5d07a86"
+    ],
     "last_seen": 1792285328000,
     "missing_event_ids": [],
     "notes": [],

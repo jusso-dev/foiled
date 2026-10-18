@@ -319,7 +319,7 @@ async fn ingested_sources_appear_in_the_ioc_csv() {
     let row = lines.next().unwrap();
     assert!(row.starts_with("ipv4,203.0.113.7,"), "{row}");
     assert!(row.contains(",2,"), "two events: {row}");
-    assert!(row.ends_with(",FOILED-DEMO-0001"), "{row}");
+    assert!(row.ends_with(",FOILED-DEMO-0001,,,"), "{row}");
     assert!(lines.next().is_none());
 
     // Hosts cannot export, and without a bearer token there is no access.

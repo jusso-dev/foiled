@@ -563,7 +563,7 @@ paths:
       tags: [attempts]
       operationId: overrideAttemptLink
       summary: Analyst override or feedback on a link (audited)
-      description: "`true_positive` confirms (score 100, wording confirmed), `false_positive` suppresses, `unsure` records feedback without changing the score. Written to the audit log as `link.override`."
+      description: "`true_positive` confirms (score 100, wording confirmed), `false_positive` suppresses, `unsure` records feedback without changing the score. Written to the audit log as `link.override`. `attempt_ioc` links are not accepted: an IOC is scored once across every attempt it was seen in, so there is no per-attempt link to override (docs/iocs.md)."
       x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [attempts:write]
@@ -589,6 +589,44 @@ paths:
             application/json:
               schema: { $ref: "../schemas/confidence-link.schema.json" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/attempts/{attempt_id}/iocs:
+    get:
+      tags: [intel]
+      operationId: getAttemptIocs
+      summary: IOCs extracted from one attempt
+      description: |
+        The attempt's IOCs in the order of its `ioc_refs`. `file_ioc_limited`
+        is true when the attempt reached post-exploitation without a
+        captured file (or reported a memory-only implant); `notes` say so in
+        words and no file hash is invented (`docs/iocs.md`).
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [iocs:read]
+      parameters:
+        - { $ref: "#/components/parameters/AttemptId" }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: The attempt's IOCs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attempt_id, file_ioc_limited, notes, items, truncated]
+                properties:
+                  attempt_id: { type: string }
+                  file_ioc_limited: { type: boolean }
+                  notes: { type: array, items: { type: string } }
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/ioc.schema.json" }
+                  truncated: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -623,17 +661,67 @@ paths:
       tags: [intel]
       operationId: searchIocs
       summary: Search IOCs
+      description: |
+        Extracted on request from the attempts in a window (default the last
+        7 days, at most 31 days and 20,000 events) with the deterministic
+        extraction in `docs/iocs.md`, deduplicated by type and value.
+        Newest activity first. `value` matches exactly, accepts defanged
+        input (`203[.]0[.]113[.]7`, `hxxp://`) and ignores case for
+        addresses, names, hashes and fingerprints. `value` is hostile text:
+        render `display`. Address IOCs carry ASN context from cached
+        enrichment Facts (#11) when present.
       parameters:
-        - { name: type, in: query, schema: { type: string } }
-        - { name: value, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: integer }, description: "Unix ms, inclusive." }
+        - { name: until, in: query, schema: { type: integer }, description: "Unix ms, exclusive." }
+        - { name: type, in: query, schema: { $ref: "#/components/schemas/IocType" } }
+        - { name: value, in: query, schema: { type: string, maxLength: 2048 } }
+        - { name: role, in: query, schema: { type: string, enum: [source, request, payload, callback, stage2, post_exploit, behaviour] } }
         - { name: attempt_id, in: query, schema: { type: string } }
         - { name: campaign_id, in: query, schema: { type: string } }
-      x-foiled-status: planned
-      x-foiled-issue: 34
+        - { name: file_ioc_limited, in: query, schema: { type: boolean } }
+        - { $ref: "#/components/parameters/Limit" }
+      x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [iocs:read]
       responses:
-        "200": { description: "Matching IOCs." }
+        "200":
+          description: Matching IOCs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, truncated]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/ioc.schema.json" }
+                  truncated: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v0/iocs/{ioc_id}:
+    get:
+      tags: [intel]
+      operationId: getIoc
+      summary: Get one IOC
+      description: IOC ids are stable for the same type and value. Pass the same `since` and `until` as the search for indicators older than 7 days.
+      x-foiled-status: implemented
+      x-foiled-store: postgres
+      x-foiled-scopes: [iocs:read]
+      parameters:
+        - { name: ioc_id, in: path, required: true, schema: { type: string, pattern: "^ioc_[a-f0-9]{24}$" } }
+        - { name: since, in: query, schema: { type: integer } }
+        - { name: until, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: The IOC.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/ioc.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /v0/review-queue:
     get:
@@ -716,10 +804,13 @@ paths:
       summary: IOC CSV export (source IPs seen at the tenant's decoys)
       description: |
         One row per source IP: `indicator_type, indicator, first_seen,
-        last_seen, event_count, decoy_ids, catalogue_ids, hook_cves`. Reads
+        last_seen, event_count, decoy_ids, catalogue_ids, hook_cves, asn,
+        as_org, country`. The ASN columns hold only context from providers
+        that may be redistributed (`docs/iocs.md#asn-context`). Reads
         live rows only, so data removed by the retention purge never returns
         (#16). Cells are RFC 4180 quoted and formula-safe. The richer IOC
-        model (#34) and STIX, MISP and TAXII outputs (#13) build on this.
+        model (`/v0/iocs`, #34) and STIX, MISP and TAXII outputs (#13) build
+        on this.
       x-foiled-status: implemented
       x-foiled-store: postgres
       x-foiled-scopes: [exports:read]
@@ -1071,6 +1162,9 @@ components:
     DecoyKind:
       type: string
       enum: [sandbox, emulation]
+    IocType:
+      type: string
+      enum: [ip, ipv6, domain, url, http_path, http_ua, request_substring, payload_sha256, file_sha256, cmdline, dns_query, behaviour_fingerprint]
     DecoyState:
       type: string
       enum: [pending, starting, healthy, rotating, stopped, quarantined, failed, destroyed]
