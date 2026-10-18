@@ -140,23 +140,46 @@ export default function AttemptPage({ loaderData: d, actionData }: Route.Compone
           <div className="panel__body">
             <Facts
               items={[
-                ["Source", <span className="mono">{toPrintable(a.src)}</span>],
+                [
+                  "Source",
+                  <span key="Source" className="mono">
+                    {toPrintable(a.src)}
+                  </span>,
+                ],
                 [
                   "Decoy",
-                  <Link className="link mono" to={`/decoys/${encodeURIComponent(a.decoy_id)}`}>
+                  <Link
+                    key="Decoy"
+                    className="link mono"
+                    to={`/decoys/${encodeURIComponent(a.decoy_id)}`}
+                  >
                     {a.decoy_id}
                   </Link>,
                 ],
-                ["Catalogue entry", <span className="mono">{a.catalogue_id}</span>],
+                [
+                  "Catalogue entry",
+                  <span key="Catalogue entry" className="mono">
+                    {a.catalogue_id}
+                  </span>,
+                ],
                 ["Kind", a.decoy_kind],
-                ["Sensor", <span className="mono">{a.sensor_id ?? "research host"}</span>],
-                ["First seen", <Time ms={a.first_seen} />],
-                ["Last seen", <Time ms={a.last_seen} />],
+                [
+                  "Sensor",
+                  <span key="Sensor" className="mono">
+                    {a.sensor_id ?? "research host"}
+                  </span>,
+                ],
+                ["First seen", <Time key="First seen" ms={a.first_seen} />],
+                ["Last seen", <Time key="Last seen" ms={a.last_seen} />],
                 ["Events", String(a.event_ids.length)],
                 [
                   "Campaign",
                   a.campaign_id ? (
-                    <Link className="link mono" to={`/campaigns/${a.campaign_id}${wq}`}>
+                    <Link
+                      key="Campaign"
+                      className="link mono"
+                      to={`/campaigns/${a.campaign_id}${wq}`}
+                    >
                       {a.campaign_id}
                     </Link>
                   ) : (
@@ -272,19 +295,23 @@ export default function AttemptPage({ loaderData: d, actionData }: Route.Compone
               items={[
                 [
                   "Filter",
-                  <code className="mono">
+                  <code key="Filter" className="mono">
                     {d.timeline.data.pcap.filter || "(source is not an IP)"}
                   </code>,
                 ],
-                ["From", <Time ms={d.timeline.data.pcap.from_ms} />],
-                ["To", <Time ms={d.timeline.data.pcap.to_ms} />],
+                ["From", <Time key="From" ms={d.timeline.data.pcap.from_ms} />],
+                ["To", <Time key="To" ms={d.timeline.data.pcap.to_ms} />],
                 [
                   "R2 prefix",
-                  <code className="mono">{toPrintable(d.timeline.data.pcap.r2_prefix)}</code>,
+                  <code key="R2 prefix" className="mono">
+                    {toPrintable(d.timeline.data.pcap.r2_prefix)}
+                  </code>,
                 ],
                 [
                   "Output",
-                  <code className="mono">{toPrintable(d.timeline.data.pcap.output_path)}</code>,
+                  <code key="Output" className="mono">
+                    {toPrintable(d.timeline.data.pcap.output_path)}
+                  </code>,
                 ],
               ]}
             />

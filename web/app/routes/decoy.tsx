@@ -150,11 +150,12 @@ export default function DecoyPage({ loaderData: d, actionData }: Route.Component
           <div className="panel__body">
             <Facts
               items={[
-                ["State", <DecoyStateTag state={decoy.state} />],
+                ["State", <DecoyStateTag key="State" state={decoy.state} />],
                 ["Label", decoy.label ? toPrintable(decoy.label) : "none"],
                 [
                   "Catalogue entry",
                   <Link
+                    key="Catalogue entry"
                     className="link mono"
                     to={`/launch?entry=${encodeURIComponent(decoy.catalogue_id)}`}
                   >
@@ -162,20 +163,30 @@ export default function DecoyPage({ loaderData: d, actionData }: Route.Component
                   </Link>,
                 ],
                 ["Kind", decoy.decoy_kind],
-                ["Placed on", <span className="mono">{decoy.host_id ?? "not placed yet"}</span>],
+                [
+                  "Placed on",
+                  <span key="Placed on" className="mono">
+                    {decoy.host_id ?? "not placed yet"}
+                  </span>,
+                ],
                 ["Generation", String(decoy.generation)],
-                ["Created", <Time ms={decoy.created_at} />],
-                ["Updated", <Time ms={decoy.updated_at} />],
+                ["Created", <Time key="Created" ms={decoy.created_at} />],
+                ["Updated", <Time key="Updated" ms={decoy.updated_at} />],
                 [
                   "Expires",
-                  <span>
+                  <span key="Expires">
                     <Time ms={decoy.expires_at} />{" "}
                     <span className="muted">
                       {remaining > 0 ? `(in ${formatDuration(remaining)})` : "(due to rotate)"}
                     </span>
                   </span>,
                 ],
-                ["Created by", <span className="mono">{decoy.created_by}</span>],
+                [
+                  "Created by",
+                  <span key="Created by" className="mono">
+                    {decoy.created_by}
+                  </span>,
+                ],
               ]}
             />
             <p>

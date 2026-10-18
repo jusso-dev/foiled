@@ -167,26 +167,46 @@ export default function WriteUpPage({ loaderData: d, actionData }: Route.Compone
           <div className="panel__body">
             <Facts
               items={[
-                ["Slug", <span className="mono">{toPrintable(w.slug)}</span>],
+                [
+                  "Slug",
+                  <span key="Slug" className="mono">
+                    {toPrintable(w.slug)}
+                  </span>,
+                ],
                 ["TLP", `TLP:${w.tlp.toUpperCase()}`],
-                ["Embargo until", w.embargo_until ? <Time ms={w.embargo_until} /> : "none"],
-                ["CVEs", <span className="mono">{w.cve_ids.join(", ") || "none"}</span>],
+                [
+                  "Embargo until",
+                  w.embargo_until ? <Time key="Embargo until" ms={w.embargo_until} /> : "none",
+                ],
+                [
+                  "CVEs",
+                  <span key="CVEs" className="mono">
+                    {w.cve_ids.join(", ") || "none"}
+                  </span>,
+                ],
                 [
                   "Techniques",
-                  <span className="mono">{w.technique_ids.join(", ") || "none"}</span>,
+                  <span key="Techniques" className="mono">
+                    {w.technique_ids.join(", ") || "none"}
+                  </span>,
                 ],
-                ["Author", <span className="mono">{toPrintable(w.author_id)}</span>],
+                [
+                  "Author",
+                  <span key="Author" className="mono">
+                    {toPrintable(w.author_id)}
+                  </span>,
+                ],
                 [
                   "Reviewer",
-                  <span className="mono">
+                  <span key="Reviewer" className="mono">
                     {w.reviewer_id ? toPrintable(w.reviewer_id) : "none yet"}
                   </span>,
                 ],
-                ["Updated", <Time ms={w.updated_at} />],
+                ["Updated", <Time key="Updated" ms={w.updated_at} />],
                 [
                   "From review item",
                   w.source_item_id ? (
-                    <Link className="link mono" to="/review?status=all">
+                    <Link key="From review item" className="link mono" to="/review?status=all">
                       {w.source_item_id}
                     </Link>
                   ) : (

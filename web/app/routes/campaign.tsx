@@ -184,8 +184,8 @@ export default function CampaignPage({ loaderData: d, actionData }: Route.Compon
           <div className="panel__body">
             <Facts
               items={[
-                ["First seen", <Time ms={c.first_seen} />],
-                ["Last seen", <Time ms={c.last_seen} />],
+                ["First seen", <Time key="First seen" ms={c.first_seen} />],
+                ["Last seen", <Time key="Last seen" ms={c.last_seen} />],
                 ["Attempts", String(c.attempt_ids.length)],
                 ["Decoys", String(c.decoy_ids.length)],
                 ["Sensors", String(c.sensor_ids.length)],
@@ -195,7 +195,7 @@ export default function CampaignPage({ loaderData: d, actionData }: Route.Compon
                 ],
                 [
                   "Seed",
-                  <Link className="link mono" to={`/attempts/${c.seed.attempt_id}${wq}`}>
+                  <Link key="Seed" className="link mono" to={`/attempts/${c.seed.attempt_id}${wq}`}>
                     {c.seed.attempt_id}
                   </Link>,
                 ],

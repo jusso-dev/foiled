@@ -195,13 +195,25 @@ function ConfirmDownload({
         </Notice>
         <Facts
           items={[
-            ["SHA-256", <span className="mono wrap-any">{item.sha256}</span>],
+            [
+              "SHA-256",
+              <span key="SHA-256" className="mono wrap-any">
+                {item.sha256}
+              </span>,
+            ],
             ["Size", formatBytes(item.size)],
-            ["Captured on", <span className="mono">{toPrintable(item.decoy_id)}</span>],
+            [
+              "Captured on",
+              <span key="Captured on" className="mono">
+                {toPrintable(item.decoy_id)}
+              </span>,
+            ],
             [
               "Path in guest",
               item.guest_path ? (
-                <span className="mono">{toPrintable(item.guest_path)}</span>
+                <span key="Path in guest" className="mono">
+                  {toPrintable(item.guest_path)}
+                </span>
               ) : (
                 "unknown"
               ),

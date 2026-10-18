@@ -67,7 +67,7 @@ export default function IocPage({ loaderData: d }: Route.ComponentProps) {
           <div className="panel__body">
             <Facts
               items={[
-                ["Value (defanged)", <IocValue ioc={i} />],
+                ["Value (defanged)", <IocValue key="Value (defanged)" ioc={i} />],
                 ["Roles", i.roles.map(words).join(", ")],
                 [
                   "Origin",
@@ -75,12 +75,14 @@ export default function IocPage({ loaderData: d }: Route.ComponentProps) {
                     ? "Seen by a Foiled decoy"
                     : "Enrichment pivot (never shared)",
                 ],
-                ["First seen", <Time ms={i.first_seen} />],
-                ["Last seen", <Time ms={i.last_seen} />],
+                ["First seen", <Time key="First seen" ms={i.first_seen} />],
+                ["Last seen", <Time key="Last seen" ms={i.last_seen} />],
                 ["Sightings", formatCount(i.sightings)],
                 [
                   "Read from",
-                  <span className="mono">{i.extracted_from.map(toPrintable).join(", ")}</span>,
+                  <span key="Read from" className="mono">
+                    {i.extracted_from.map(toPrintable).join(", ")}
+                  </span>,
                 ],
               ]}
             />
@@ -89,6 +91,7 @@ export default function IocPage({ loaderData: d }: Route.ComponentProps) {
                 <h3 className="explain__h">Behaviour fingerprint steps</h3>
                 <ol className="bullets mono">
                   {i.fingerprint.steps.map((s, n) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: steps can repeat and never reorder
                     <li key={`${n}-${s}`}>{toPrintable(s)}</li>
                   ))}
                 </ol>

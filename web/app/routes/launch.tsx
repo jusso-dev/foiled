@@ -259,19 +259,24 @@ function EntrySummary({ entry }: { entry: CatalogueEntry }) {
         <p>{KIND_NOTE[entry.decoy_kind]}</p>
         <Facts
           items={[
-            ["Entry", <span className="mono">{entry.id}</span>],
+            [
+              "Entry",
+              <span key="Entry" className="mono">
+                {entry.id}
+              </span>,
+            ],
             ["Vendor", toPrintable(entry.vendor)],
             ["Status", entry.status],
             [
               "Ports",
-              <span className="mono">
+              <span key="Ports" className="mono">
                 {entry.listen_ports.map((p) => `${p.port}/${p.protocol}`).join(", ")}
               </span>,
             ],
             [
               "Expected techniques",
               entry.expected_techniques?.length ? (
-                <span className="mono">
+                <span key="Expected techniques" className="mono">
                   {entry.expected_techniques.join(", ")} (priors, not proof)
                 </span>
               ) : (
@@ -496,7 +501,12 @@ function Confirm({
           <div className="panel__body">
             <Facts
               items={[
-                ["Entry", <span className="mono">{entry.id}</span>],
+                [
+                  "Entry",
+                  <span key="Entry" className="mono">
+                    {entry.id}
+                  </span>,
+                ],
                 ["Kind", entry.decoy_kind],
                 ["Status", entry.status],
                 ["Label", config.label ? toPrintable(config.label) : "none"],
@@ -504,7 +514,7 @@ function Confirm({
                 [
                   "Placement",
                   config.placement === "sensor" ? (
-                    <span>
+                    <span key="Placement">
                       Edge sensor{" "}
                       <span className="mono">
                         {sensor?.label
