@@ -31,7 +31,7 @@ use sha2::{Digest, Sha256};
 use super::uuid5::{is_uuid, uuid_v5};
 use super::{
     FOILED_NAMESPACE, REFERENCE_EPOCH_MS, STIX_SCO_NAMESPACE, Selection, band_name, canonical,
-    confirmed, ioc_sentence, link_sentence, link_wording, timestamp,
+    confirmed, ioc_sentence_counted, link_sentence, link_wording, timestamp,
 };
 use crate::confidence::{ConfidenceLink, LinkKind};
 use crate::ioc::{Ioc, IocRole, IocType};
@@ -428,10 +428,187 @@ fn link_target(
     }
 }
 
+/// Foiled's own `identity`, the creator of every object it makes.
+pub fn identity() -> Value {
+    json!({
+        "type": "identity",
+        "spec_version": "2.1",
+        "id": identity_id(),
+        "created": timestamp(REFERENCE_EPOCH_MS),
+        "modified": timestamp(REFERENCE_EPOCH_MS),
+        "name": "Foiled",
+        "identity_class": "system",
+        "description": "Foiled deception platform. Observations come from decoys, which have no legitimate users.",
+    })
+}
+
+/// What one IOC maps to, apart from its sighting.
+pub struct IocObjects {
+    /// The observable's id, when STIX has an observable for the type.
+    pub sco: Option<String>,
+    /// The indicator's id, when the IOC has a pattern.
+    pub indicator: Option<String>,
+    /// The observable and its ASN, the indicator, and for a file hash a
+    /// `malware` instance and its `indicates` relationship, each with the
+    /// time it counts as added.
+    pub objects: Vec<(Value, i64)>,
+}
+
+/// The objects for one IOC seen in `attempts` attempts.
+pub fn ioc_objects(i: &Ioc, attempts: usize, tlp: Tlp) -> IocObjects {
+    let tlp_id = tlp_marking_id(tlp);
+    let mut out = IocObjects {
+        sco: None,
+        indicator: None,
+        objects: Vec::new(),
+    };
+    if let Some(mut o) = observable(i) {
+        out.sco = Some(o["id"].as_str().unwrap_or_default().into());
+        o["object_marking_refs"] = json!([tlp_id]);
+        // Shareable ASN context (already through `export_refs`).
+        if let Some(mut asn) = autonomous_system(i) {
+            o["belongs_to_refs"] = json!([asn["id"]]);
+            asn["object_marking_refs"] = json!([tlp_id]);
+            out.objects.push((asn, i.last_seen));
+        }
+        out.objects.push((o, i.last_seen));
+    }
+    let Some((pat, pattern_type)) = pattern(i) else {
+        return out;
+    };
+    let sentence = ioc_sentence_counted(i, attempts);
+    let id = foiled_id("indicator", &i.ioc_id);
+    let mut m = common("indicator", &id, i.first_seen, i.last_seen, tlp);
+    m.insert(
+        "name".into(),
+        json!(format!("{}: {}", i.ioc_type.as_str(), i.display)),
+    );
+    m.insert("description".into(), json!(sentence));
+    m.insert("indicator_types".into(), json!(["malicious-activity"]));
+    m.insert("pattern".into(), json!(pat));
+    m.insert("pattern_type".into(), json!(pattern_type));
+    m.insert("valid_from".into(), json!(timestamp(i.first_seen)));
+    m.insert("confidence".into(), json!(i.confidence.score));
+    m.insert(
+        "labels".into(),
+        json!([format!("foiled-band:{}", band_name(i.confidence.band))]),
+    );
+    m.insert("x_foiled_ioc_id".into(), json!(i.ioc_id));
+    m.insert("x_foiled_ioc_type".into(), json!(i.ioc_type.as_str()));
+    m.insert(
+        "x_foiled_roles".into(),
+        json!(i.roles.iter().map(|r| role_name(*r)).collect::<Vec<_>>()),
+    );
+    m.insert("x_foiled_wording".into(), json!(i.confidence.wording));
+    m.insert(
+        "x_foiled_publishable".into(),
+        json!(i.confidence.publishable),
+    );
+    m.insert("x_foiled_redacted".into(), json!(i.redacted));
+    m.insert(
+        "x_foiled_file_ioc_limited".into(),
+        json!(i.file_ioc_limited),
+    );
+    if !i.enrichment.is_empty() {
+        m.insert(
+            "x_foiled_enrichment".into(),
+            Value::Array(
+                i.enrichment
+                    .iter()
+                    .map(|e| json!({"provider": e.provider, "key": e.key, "value": e.value}))
+                    .collect(),
+            ),
+        );
+    }
+    if !i.campaign_ids.is_empty() {
+        m.insert("x_foiled_campaign_ids".into(), json!(i.campaign_ids));
+    }
+    if let Some(fp) = &i.fingerprint {
+        m.insert(
+            "x_foiled_fingerprint".into(),
+            json!({"version": fp.version, "steps": fp.steps}),
+        );
+    }
+    out.objects.push((Value::Object(m), i.last_seen));
+    out.indicator = Some(id.clone());
+
+    // A captured file: an unclassified malware instance with the file as
+    // its sample. YARA family names (#11) can name it later.
+    if i.ioc_type == IocType::FileSha256
+        && let Some(file) = &out.sco
+    {
+        let mid = foiled_id("malware", &i.ioc_id);
+        let mut mw = common("malware", &mid, i.first_seen, i.last_seen, tlp);
+        mw.insert(
+            "name".into(),
+            json!(format!(
+                "Unclassified file {}",
+                &i.value[..12.min(i.value.len())]
+            )),
+        );
+        mw.insert(
+            "description".into(),
+            json!("A file Foiled captured after exploitation. It has not been classified."),
+        );
+        mw.insert("malware_types".into(), json!(["unknown"]));
+        mw.insert("is_family".into(), json!(false));
+        mw.insert("sample_refs".into(), json!([file]));
+        out.objects.push((Value::Object(mw), i.last_seen));
+        let rid = foiled_id("relationship", &format!("{id}|indicates|{mid}"));
+        let mut r = common("relationship", &rid, i.first_seen, i.last_seen, tlp);
+        r.insert("relationship_type".into(), json!("indicates"));
+        r.insert("source_ref".into(), json!(id));
+        r.insert("target_ref".into(), json!(mid));
+        r.insert("confidence".into(), json!(i.confidence.score));
+        r.insert("description".into(), json!(sentence));
+        out.objects.push((Value::Object(r), i.last_seen));
+    }
+    out
+}
+
+/// The ids of the objects one IOC maps to that can be versioned and so
+/// revoked: indicator, sighting, and for a file hash its malware and
+/// `indicates` relationship. Observables are left out.
+pub fn ioc_revocable_ids(ioc_id: &str) -> Vec<String> {
+    let id = foiled_id("indicator", ioc_id);
+    let mid = foiled_id("malware", ioc_id);
+    vec![
+        foiled_id("relationship", &format!("{id}|indicates|{mid}")),
+        foiled_id("sighting", ioc_id),
+        mid,
+        id,
+    ]
+}
+
+/// The sighting of an IOC's indicator, over the `observed-data` of the
+/// attempts it was seen in.
+pub fn sighting<'a>(
+    i: &Ioc,
+    indicator: &str,
+    observed: impl IntoIterator<Item = &'a String>,
+    tlp: Tlp,
+) -> Value {
+    let sid = foiled_id("sighting", &i.ioc_id);
+    let mut s = common("sighting", &sid, i.first_seen, i.last_seen, tlp);
+    s.insert("sighting_of_ref".into(), json!(indicator));
+    s.insert("first_seen".into(), json!(timestamp(i.first_seen)));
+    s.insert(
+        "last_seen".into(),
+        json!(timestamp(i.last_seen.max(i.first_seen))),
+    );
+    s.insert("count".into(), json!(u64::from(i.sightings).min(MAX_COUNT)));
+    s.insert("where_sighted_refs".into(), json!([identity_id()]));
+    let observed: BTreeSet<&String> = observed.into_iter().collect();
+    if !observed.is_empty() {
+        s.insert("observed_data_refs".into(), json!(observed));
+    }
+    s.insert("confidence".into(), json!(i.confidence.score));
+    Value::Object(s)
+}
+
 /// Every object for a selection, in bundle order.
 pub fn objects(sel: &Selection) -> Vec<StixObject> {
     let tlp = sel.tlp;
-    let tlp_id = tlp_marking_id(tlp);
     let ident = identity_id();
     let mut out: BTreeMap<String, StixObject> = BTreeMap::new();
     // Each object is serialised as soon as it is built, so the whole set
@@ -443,19 +620,7 @@ pub fn objects(sel: &Selection) -> Vec<StixObject> {
             .or_insert_with(|| StixObject::new(&value, added));
     };
 
-    put(
-        json!({
-            "type": "identity",
-            "spec_version": "2.1",
-            "id": ident,
-            "created": timestamp(REFERENCE_EPOCH_MS),
-            "modified": timestamp(REFERENCE_EPOCH_MS),
-            "name": "Foiled",
-            "identity_class": "system",
-            "description": "Foiled deception platform. Observations come from decoys, which have no legitimate users.",
-        }),
-        REFERENCE_EPOCH_MS,
-    );
+    put(identity(), REFERENCE_EPOCH_MS);
     put(tlp_marking(tlp), REFERENCE_EPOCH_MS);
     let notice_id = sel.attack_notice.as_ref().map(|notice| {
         let version = sel.attack_version.clone().unwrap_or_default();
@@ -483,108 +648,15 @@ pub fn objects(sel: &Selection) -> Vec<StixObject> {
     let mut sco_of: BTreeMap<&str, String> = BTreeMap::new();
     let mut indicator_of: BTreeMap<&str, String> = BTreeMap::new();
     for i in &sel.iocs {
-        if let Some(mut o) = observable(i) {
-            sco_of.insert(
-                i.ioc_id.as_str(),
-                o["id"].as_str().unwrap_or_default().into(),
-            );
-            o["object_marking_refs"] = json!([tlp_id]);
-            // Shareable ASN context (already through `export_refs`).
-            if let Some(mut asn) = autonomous_system(i) {
-                o["belongs_to_refs"] = json!([asn["id"]]);
-                asn["object_marking_refs"] = json!([tlp_id]);
-                put(asn, i.last_seen);
-            }
-            put(o, i.last_seen);
+        let built = ioc_objects(i, i.attempt_ids.len(), tlp);
+        if let Some(s) = built.sco {
+            sco_of.insert(i.ioc_id.as_str(), s);
         }
-        let Some((pat, pattern_type)) = pattern(i) else {
-            continue;
-        };
-        let id = foiled_id("indicator", &i.ioc_id);
-        let mut m = common("indicator", &id, i.first_seen, i.last_seen, tlp);
-        m.insert(
-            "name".into(),
-            json!(format!("{}: {}", i.ioc_type.as_str(), i.display)),
-        );
-        m.insert("description".into(), json!(ioc_sentence(i)));
-        m.insert("indicator_types".into(), json!(["malicious-activity"]));
-        m.insert("pattern".into(), json!(pat));
-        m.insert("pattern_type".into(), json!(pattern_type));
-        m.insert("valid_from".into(), json!(timestamp(i.first_seen)));
-        m.insert("confidence".into(), json!(i.confidence.score));
-        m.insert(
-            "labels".into(),
-            json!([format!("foiled-band:{}", band_name(i.confidence.band))]),
-        );
-        m.insert("x_foiled_ioc_id".into(), json!(i.ioc_id));
-        m.insert("x_foiled_ioc_type".into(), json!(i.ioc_type.as_str()));
-        m.insert(
-            "x_foiled_roles".into(),
-            json!(i.roles.iter().map(|r| role_name(*r)).collect::<Vec<_>>()),
-        );
-        m.insert("x_foiled_wording".into(), json!(i.confidence.wording));
-        m.insert(
-            "x_foiled_publishable".into(),
-            json!(i.confidence.publishable),
-        );
-        m.insert("x_foiled_redacted".into(), json!(i.redacted));
-        m.insert(
-            "x_foiled_file_ioc_limited".into(),
-            json!(i.file_ioc_limited),
-        );
-        if !i.enrichment.is_empty() {
-            m.insert(
-                "x_foiled_enrichment".into(),
-                Value::Array(
-                    i.enrichment
-                        .iter()
-                        .map(|e| json!({"provider": e.provider, "key": e.key, "value": e.value}))
-                        .collect(),
-                ),
-            );
+        if let Some(ind) = built.indicator {
+            indicator_of.insert(i.ioc_id.as_str(), ind);
         }
-        if !i.campaign_ids.is_empty() {
-            m.insert("x_foiled_campaign_ids".into(), json!(i.campaign_ids));
-        }
-        if let Some(fp) = &i.fingerprint {
-            m.insert(
-                "x_foiled_fingerprint".into(),
-                json!({"version": fp.version, "steps": fp.steps}),
-            );
-        }
-        put(Value::Object(m), i.last_seen);
-        indicator_of.insert(i.ioc_id.as_str(), id.clone());
-
-        // A captured file: an unclassified malware instance with the file
-        // as its sample. YARA family names (#11) can name it later.
-        if i.ioc_type == IocType::FileSha256
-            && let Some(file) = sco_of.get(i.ioc_id.as_str())
-        {
-            let mid = foiled_id("malware", &i.ioc_id);
-            let mut mw = common("malware", &mid, i.first_seen, i.last_seen, tlp);
-            mw.insert(
-                "name".into(),
-                json!(format!(
-                    "Unclassified file {}",
-                    &i.value[..12.min(i.value.len())]
-                )),
-            );
-            mw.insert(
-                "description".into(),
-                json!("A file Foiled captured after exploitation. It has not been classified."),
-            );
-            mw.insert("malware_types".into(), json!(["unknown"]));
-            mw.insert("is_family".into(), json!(false));
-            mw.insert("sample_refs".into(), json!([file]));
-            put(Value::Object(mw), i.last_seen);
-            let rid = foiled_id("relationship", &format!("{id}|indicates|{mid}"));
-            let mut r = common("relationship", &rid, i.first_seen, i.last_seen, tlp);
-            r.insert("relationship_type".into(), json!("indicates"));
-            r.insert("source_ref".into(), json!(id));
-            r.insert("target_ref".into(), json!(mid));
-            r.insert("confidence".into(), json!(i.confidence.score));
-            r.insert("description".into(), json!(ioc_sentence(i)));
-            put(Value::Object(r), i.last_seen);
+        for (v, added) in built.objects {
+            put(v, added);
         }
     }
 
@@ -720,26 +792,12 @@ pub fn objects(sel: &Selection) -> Vec<StixObject> {
         let Some(ind) = indicator_of.get(i.ioc_id.as_str()) else {
             continue;
         };
-        let sid = foiled_id("sighting", &i.ioc_id);
-        let mut s = common("sighting", &sid, i.first_seen, i.last_seen, tlp);
-        s.insert("sighting_of_ref".into(), json!(ind));
-        s.insert("first_seen".into(), json!(timestamp(i.first_seen)));
-        s.insert(
-            "last_seen".into(),
-            json!(timestamp(i.last_seen.max(i.first_seen))),
-        );
-        s.insert("count".into(), json!(u64::from(i.sightings).min(MAX_COUNT)));
-        s.insert("where_sighted_refs".into(), json!([ident]));
         let observed: BTreeSet<&String> = i
             .attempt_ids
             .iter()
             .filter_map(|a| observed_of.get(a.as_str()))
             .collect();
-        if !observed.is_empty() {
-            s.insert("observed_data_refs".into(), json!(observed));
-        }
-        s.insert("confidence".into(), json!(i.confidence.score));
-        put(Value::Object(s), i.last_seen);
+        put(sighting(i, ind, observed, tlp), i.last_seen);
     }
 
     propagate_added(&mut out);
@@ -839,7 +897,8 @@ fn propagate_added(objects: &mut BTreeMap<String, StixObject>) {
     }
 }
 
-fn rank(ty: &str) -> u8 {
+/// Bundle order of a type: what objects refer to sorts before them.
+pub fn rank(ty: &str) -> u8 {
     match ty {
         "identity" => 0,
         "marking-definition" => 1,

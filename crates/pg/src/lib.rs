@@ -52,6 +52,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         "0010_review_writeups_radar",
         include_str!("../../../migrations/postgres/0010_review_writeups_radar.sql"),
     ),
+    (
+        "0011_stix_log",
+        include_str!("../../../migrations/postgres/0011_stix_log.sql"),
+    ),
 ];
 
 /// Arbitrary constant key for the migration advisory lock.
@@ -935,6 +939,442 @@ async fn insert_version(
                 &actor_id,
                 &w.updated_at,
                 &json(w),
+// ---------------------------------------------------------------------------
+// Materialised STIX object log behind TAXII (#13)
+// ---------------------------------------------------------------------------
+
+/// The head of one object: `(id, created, latest_version, latest_sha256,
+/// revoked)`.
+pub type HistoryRow = (String, Option<String>, String, String, bool);
+
+/// A version to append.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionRow {
+    pub id: String,
+    pub version: String,
+    pub created: Option<String>,
+    pub object_type: String,
+    pub content: String,
+    pub content_sha256: String,
+    /// Every id the version refers to.
+    pub refs: Vec<String>,
+}
+
+/// A stored version as served: `(id, object_type, version, date_added,
+/// content)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredRow {
+    pub id: String,
+    pub object_type: String,
+    pub version: String,
+    pub date_added: i64,
+    pub content: String,
+}
+
+/// `match[version]`: a row matches when it is any of these.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VersionMatch {
+    pub first: bool,
+    pub last: bool,
+    pub all: bool,
+    pub exact: Vec<String>,
+}
+
+/// One materialised day: `(day_ms, signature, object_ids, progress JSON,
+/// served_ms)`.
+pub type DayRow = (i64, String, Vec<String>, Option<String>, i64);
+
+/// One of a day's attempts: `(attempt_id, AttemptRecord JSON)`.
+pub type AttemptRow = (String, String);
+
+/// An IOC the merge published: `(ioc_id, type, value)`.
+pub type PublishedRow = (String, String, String);
+
+/// Inside a transaction: lock the tenant's lease row and fail (SQLSTATE
+/// `P0001`, "stix lease lost") unless its generation is `fence`. The share
+/// lock holds off a takeover until the transaction ends, so a write either
+/// commits under the generation it checked or not at all.
+async fn fence(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    fence: i64,
+) -> Result<(), Error> {
+    client
+        .execute(
+            "SELECT stix_fence($1, $2, $3)",
+            &[&tenant_id, &collection, &fence],
+        )
+        .await?;
+    Ok(())
+}
+
+async fn in_tx<T>(
+    client: &Client,
+    body: impl std::future::Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
+    client.batch_execute("BEGIN").await?;
+    match body.await {
+        Ok(v) => {
+            client.batch_execute("COMMIT").await?;
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = client.batch_execute("ROLLBACK").await;
+            Err(e)
+        }
+    }
+}
+
+pub async fn stix_history(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    ids: &[String],
+) -> Result<Vec<HistoryRow>, Error> {
+    let rows = client
+        .query(
+            "SELECT h.id::text AS id, h.created, h.latest_version::text AS latest,
+                    h.latest_sha256,
+                    coalesce((v.content::jsonb ->> 'revoked') = 'true', false) AS revoked
+             FROM stix_object_heads h
+             JOIN stix_object_versions v
+               ON v.tenant_id = h.tenant_id AND v.collection_id = h.collection_id
+              AND v.id = h.id AND v.version = h.latest_version
+             WHERE h.tenant_id = $1 AND h.collection_id = $2 AND h.id = ANY($3)",
+            &[&tenant_id, &collection, &ids],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            (
+                r.get("id"),
+                r.get("created"),
+                r.get("latest"),
+                r.get("latest_sha256"),
+                r.get("revoked"),
+            )
+        })
+        .collect())
+}
+
+/// Append versions in one transaction under one `date_added`, later than
+/// every row already in the collection and no earlier than `now`. Rows
+/// whose content equals the object's current head are skipped. A row whose
+/// `(id, version)` exists is a conflict: the insert fails with a unique
+/// violation and nothing is written, so two writers that planned from the
+/// same head never lose a version silently. `evidence` raises each
+/// object's newest evidence time; each head keeps the union of its
+/// versions' references. A transaction-level advisory lock per tenant and
+/// collection serialises appends, so commit order is `date_added` order.
+/// Fenced by the lease generation. Returns the rows written.
+pub async fn stix_append(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    rows: &[VersionRow],
+    evidence: &[(String, i64)],
+    now: i64,
+    fence_gen: i64,
+) -> Result<u64, Error> {
+    in_tx(client, async {
+        fence(client, tenant_id, collection, fence_gen).await?;
+        stix_append_in_tx(client, tenant_id, collection, rows, evidence, now).await
+    })
+    .await
+}
+
+async fn stix_append_in_tx(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    rows: &[VersionRow],
+    evidence: &[(String, i64)],
+    now: i64,
+) -> Result<u64, Error> {
+    let lock_key = format!("stix|{tenant_id}|{collection}");
+    client
+        .execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 13))",
+            &[&lock_key],
+        )
+        .await?;
+    let newest: Option<i64> = client
+        .query_one(
+            "SELECT max(date_added) AS newest FROM stix_object_versions
+             WHERE tenant_id = $1 AND collection_id = $2",
+            &[&tenant_id, &collection],
+        )
+        .await?
+        .get("newest");
+    let date_added = newest.map_or(now, |n| now.max(n + 1));
+    let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+    let versions: Vec<&str> = rows.iter().map(|r| r.version.as_str()).collect();
+    let created: Vec<Option<&str>> = rows.iter().map(|r| r.created.as_deref()).collect();
+    let types: Vec<&str> = rows.iter().map(|r| r.object_type.as_str()).collect();
+    let contents: Vec<&str> = rows.iter().map(|r| r.content.as_str()).collect();
+    let hashes: Vec<&str> = rows.iter().map(|r| r.content_sha256.as_str()).collect();
+    let refs: Vec<String> = rows
+        .iter()
+        .map(|r| serde_json::to_string(&r.refs).unwrap_or_else(|_| "[]".into()))
+        .collect();
+    let inserted: i64 = client
+        .query_one(
+            "WITH ins AS (
+                 INSERT INTO stix_object_versions
+                     (tenant_id, collection_id, id, version, created, object_type, date_added,
+                      content, content_sha256)
+                 SELECT $1, $2, u.id, u.version, u.created, u.object_type, $3, u.content, u.sha
+                 FROM unnest($4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[])
+                     AS u(id, version, created, object_type, content, sha)
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM stix_object_heads h
+                     WHERE h.tenant_id = $1 AND h.collection_id = $2 AND h.id = u.id
+                       AND h.latest_sha256 = u.sha)
+                 RETURNING id, version, created, content_sha256
+             ), refs AS (
+                 SELECT u.id, ARRAY(SELECT jsonb_array_elements_text(u.refs::jsonb)) AS refs
+                 FROM unnest($4::text[], $10::text[]) AS u(id, refs)
+             ), heads AS (
+                 INSERT INTO stix_object_heads
+                     (tenant_id, collection_id, id, created, latest_version, latest_sha256, refs)
+                 SELECT $1, $2, ins.id, ins.created, ins.version, ins.content_sha256,
+                        coalesce(refs.refs, '{}')
+                 FROM ins LEFT JOIN refs ON refs.id = ins.id
+                 ON CONFLICT (tenant_id, collection_id, id) DO UPDATE
+                     SET latest_sha256 = CASE
+                             WHEN EXCLUDED.latest_version > stix_object_heads.latest_version
+                             THEN EXCLUDED.latest_sha256
+                             ELSE stix_object_heads.latest_sha256 END,
+                         latest_version = greatest(stix_object_heads.latest_version,
+                                                   EXCLUDED.latest_version),
+                         refs = ARRAY(SELECT DISTINCT x FROM unnest(
+                             stix_object_heads.refs || EXCLUDED.refs) AS x ORDER BY x)
+                 RETURNING 1
+             )
+             SELECT count(*) AS n FROM ins",
+            &[
+                &tenant_id,
+                &collection,
+                &date_added,
+                &ids,
+                &versions,
+                &created,
+                &types,
+                &contents,
+                &hashes,
+                &refs,
+            ],
+        )
+        .await?
+        .get("n");
+    let ev_ids: Vec<&str> = evidence.iter().map(|(id, _)| id.as_str()).collect();
+    let ev_ms: Vec<i64> = evidence.iter().map(|(_, ms)| *ms).collect();
+    client
+        .execute(
+            "UPDATE stix_object_heads h SET max_evidence_ms = greatest(h.max_evidence_ms, u.ev)
+             FROM (SELECT id, max(ev) AS ev FROM unnest($3::text[], $4::bigint[]) AS x(id, ev)
+                   GROUP BY id) AS u
+             WHERE h.tenant_id = $1 AND h.collection_id = $2 AND h.id = u.id",
+            &[&tenant_id, &collection, &ev_ids, &ev_ms],
+        )
+        .await?;
+    Ok(inserted as u64)
+}
+
+/// The TAXII query: rows after `added_after` and after the cursor, filtered
+/// by id, type and version (any of first, last, all or exact versions),
+/// ordered by `(date_added, id, version)`.
+#[allow(clippy::too_many_arguments)]
+pub async fn stix_query(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    added_after: Option<i64>,
+    after: Option<(i64, &str, &str)>,
+    ids: Option<&[String]>,
+    types: Option<&[String]>,
+    versions: &VersionMatch,
+    limit: i64,
+) -> Result<Vec<StoredRow>, Error> {
+    let (after_ms, after_id, after_version) = match after {
+        Some((ms, id, v)) => (Some(ms), id, v),
+        None => (None, "", ""),
+    };
+    let rows = client
+        .query(
+            "SELECT v.id::text AS id, v.object_type, v.version::text AS version, v.date_added,
+                    v.content
+             FROM stix_object_versions v
+             JOIN stix_object_heads h
+               ON h.tenant_id = v.tenant_id AND h.collection_id = v.collection_id AND h.id = v.id
+             WHERE v.tenant_id = $1 AND v.collection_id = $2
+               AND ($3::bigint IS NULL OR v.date_added > $3)
+               AND ($4::bigint IS NULL OR (v.date_added, v.id, v.version) > ($4, $5::text COLLATE \"C\", $6::text COLLATE \"C\"))
+               AND ($7::text[] IS NULL OR v.id = ANY($7))
+               AND ($8::text[] IS NULL OR v.object_type = ANY($8))
+               AND ($9
+                    OR ($10 AND v.version = h.latest_version)
+                    OR ($11 AND v.version = (
+                         SELECT min(f.version) FROM stix_object_versions f
+                         WHERE f.tenant_id = v.tenant_id AND f.collection_id = v.collection_id
+                           AND f.id = v.id))
+                    OR v.version = ANY($12))
+             ORDER BY v.date_added, v.id, v.version
+             LIMIT $13",
+            &[
+                &tenant_id,
+                &collection,
+                &added_after,
+                &after_ms,
+                &after_id,
+                &after_version,
+                &ids,
+                &types,
+                &versions.all,
+                &versions.last,
+                &versions.first,
+                &versions.exact,
+                &limit,
+            ],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| StoredRow {
+            id: r.get("id"),
+            object_type: r.get("object_type"),
+            version: r.get("version"),
+            date_added: r.get("date_added"),
+            content: r.get("content"),
+        })
+        .collect())
+}
+
+/// Remove every version of objects whose newest evidence is older than
+/// `evidence_before`, unless an object that stays refers to them, and the
+/// materialiser's state for days before it. Returns the version rows
+/// removed.
+pub async fn stix_purge(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    evidence_before: i64,
+    fence_gen: i64,
+) -> Result<u64, Error> {
+    in_tx(client, async {
+        fence(client, tenant_id, collection, fence_gen).await?;
+        stix_purge_in_tx(client, tenant_id, collection, evidence_before).await
+    })
+    .await
+}
+
+async fn stix_purge_in_tx(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    evidence_before: i64,
+) -> Result<u64, Error> {
+    let n: i64 = client
+        .query_one(
+            "WITH stale AS (
+                 DELETE FROM stix_object_heads h
+                 WHERE h.tenant_id = $1 AND h.collection_id = $2 AND h.max_evidence_ms < $3
+                   AND NOT EXISTS (
+                       SELECT 1 FROM stix_object_heads k
+                       WHERE k.tenant_id = $1 AND k.collection_id = $2
+                         AND k.max_evidence_ms >= $3 AND k.refs @> ARRAY[h.id::text])
+                 RETURNING id
+             ), gone AS (
+                 DELETE FROM stix_object_versions v USING stale
+                 WHERE v.tenant_id = $1 AND v.collection_id = $2 AND v.id = stale.id
+                 RETURNING 1
+             ), old_days AS (
+                 DELETE FROM stix_materialised_days
+                 WHERE tenant_id = $1 AND collection_id = $2 AND day_ms < $3
+                 RETURNING 1
+             ), old_attempts AS (
+                 DELETE FROM stix_day_attempts
+                 WHERE tenant_id = $1 AND collection_id = $2 AND day_ms < $3
+                 RETURNING 1
+             ), old_contributions AS (
+                 DELETE FROM stix_ioc_contributions
+                 WHERE tenant_id = $1 AND collection_id = $2 AND day_ms < $3
+                 RETURNING 1
+             )
+             SELECT count(*) AS n FROM gone",
+            &[&tenant_id, &collection, &evidence_before],
+        )
+        .await?
+        .get("n");
+    Ok(n as u64)
+}
+
+pub async fn stix_days(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+) -> Result<Vec<DayRow>, Error> {
+    let rows = client
+        .query(
+            "SELECT day_ms, signature, object_ids, progress, served_ms FROM stix_materialised_days
+             WHERE tenant_id = $1 AND collection_id = $2",
+            &[&tenant_id, &collection],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            (
+                r.get("day_ms"),
+                r.get("signature"),
+                r.get("object_ids"),
+                r.get("progress"),
+                r.get("served_ms"),
+            )
+        })
+        .collect())
+}
+
+/// Save a day record. Fenced.
+pub async fn put_stix_day(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    day: &DayRow,
+    fence_gen: i64,
+) -> Result<(), Error> {
+    in_tx(client, async {
+        fence(client, tenant_id, collection, fence_gen).await?;
+        write_day(client, tenant_id, collection, day).await
+    })
+    .await
+}
+
+async fn write_day(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    day: &DayRow,
+) -> Result<(), Error> {
+    let (day_ms, signature, ids, progress, served) = day;
+    client
+        .execute(
+            "INSERT INTO stix_materialised_days
+                 (tenant_id, collection_id, day_ms, signature, object_ids, progress, served_ms)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (tenant_id, collection_id, day_ms)
+             DO UPDATE SET signature = EXCLUDED.signature, object_ids = EXCLUDED.object_ids,
+                           progress = EXCLUDED.progress, served_ms = EXCLUDED.served_ms",
+            &[
+                &tenant_id,
+                &collection,
+                day_ms,
+                signature,
+                ids,
+                progress,
+                served,
             ],
         )
         .await?;
@@ -1078,6 +1518,133 @@ pub async fn writeup_versions(
             "SELECT action, actor_id, at, body FROM writeup_versions
              WHERE tenant_id = $1 AND writeup_id = $2 ORDER BY version",
             &[&tenant_id, &writeup_id],
+/// Stage one build part in one transaction: drop staged contributions of
+/// this part and later ones (and, for part 0, the day's staged attempts),
+/// upsert the part's attempts, insert its contributions (`(ioc_id, JSON)`)
+/// and save the day. Fenced.
+#[allow(clippy::too_many_arguments)]
+pub async fn stix_stage_part(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    part: i32,
+    attempts: &[AttemptRow],
+    contributions: &[(String, String)],
+    day: &DayRow,
+    fence_gen: i64,
+) -> Result<(), Error> {
+    let day_ms = day.0;
+    in_tx(client, async {
+        fence(client, tenant_id, collection, fence_gen).await?;
+        client
+            .execute(
+                "DELETE FROM stix_ioc_contributions
+                 WHERE tenant_id = $1 AND collection_id = $2 AND NOT live AND day_ms = $3
+                   AND part >= $4",
+                &[&tenant_id, &collection, &day_ms, &part],
+            )
+            .await?;
+        if part == 0 {
+            client
+                .execute(
+                    "DELETE FROM stix_day_attempts
+                     WHERE tenant_id = $1 AND collection_id = $2 AND NOT live AND day_ms = $3",
+                    &[&tenant_id, &collection, &day_ms],
+                )
+                .await?;
+        }
+        let ids: Vec<&str> = attempts.iter().map(|a| a.0.as_str()).collect();
+        let bodies: Vec<&str> = attempts.iter().map(|a| a.1.as_str()).collect();
+        client
+            .execute(
+                "INSERT INTO stix_day_attempts
+                     (tenant_id, collection_id, live, day_ms, attempt_id, body)
+                 SELECT $1, $2, false, $3, u.id, u.body
+                 FROM unnest($4::text[], $5::text[]) AS u(id, body)
+                 ON CONFLICT (tenant_id, collection_id, live, day_ms, attempt_id) DO UPDATE
+                     SET body = EXCLUDED.body",
+                &[&tenant_id, &collection, &day_ms, &ids, &bodies],
+            )
+            .await?;
+        let iocs: Vec<&str> = contributions.iter().map(|c| c.0.as_str()).collect();
+        let bodies: Vec<&str> = contributions.iter().map(|c| c.1.as_str()).collect();
+        client
+            .execute(
+                "INSERT INTO stix_ioc_contributions
+                     (tenant_id, collection_id, live, day_ms, part, ioc_id, body)
+                 SELECT $1, $2, false, $3, $4, u.ioc, u.body
+                 FROM unnest($5::text[], $6::text[]) AS u(ioc, body)",
+                &[&tenant_id, &collection, &day_ms, &part, &iocs, &bodies],
+            )
+            .await?;
+        write_day(client, tenant_id, collection, day).await
+    })
+    .await
+}
+
+/// Make a day's staged attempts and contributions live in one
+/// transaction: queue every IOC with an old or new contribution for
+/// merging, replace the live rows, save the day. Fenced.
+pub async fn stix_promote_day(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    day: &DayRow,
+    fence_gen: i64,
+) -> Result<(), Error> {
+    let day_ms = day.0;
+    in_tx(client, async {
+        fence(client, tenant_id, collection, fence_gen).await?;
+        client
+            .execute(
+                "INSERT INTO stix_pending_iocs (tenant_id, collection_id, step, ioc_id)
+                 SELECT DISTINCT $1, $2, 'merge', ioc_id FROM stix_ioc_contributions
+                 WHERE tenant_id = $1 AND collection_id = $2 AND day_ms = $3
+                 ON CONFLICT DO NOTHING",
+                &[&tenant_id, &collection, &day_ms],
+            )
+            .await?;
+        for table in ["stix_ioc_contributions", "stix_day_attempts"] {
+            client
+                .execute(
+                    &format!(
+                        "DELETE FROM {table}
+                         WHERE tenant_id = $1 AND collection_id = $2 AND live AND day_ms = $3"
+                    ),
+                    &[&tenant_id, &collection, &day_ms],
+                )
+                .await?;
+            client
+                .execute(
+                    &format!(
+                        "UPDATE {table} SET live = true
+                         WHERE tenant_id = $1 AND collection_id = $2 AND NOT live AND day_ms = $3"
+                    ),
+                    &[&tenant_id, &collection, &day_ms],
+                )
+                .await?;
+        }
+        write_day(client, tenant_id, collection, day).await
+    })
+    .await
+}
+
+/// A day's live attempts with id after `after`, in id order.
+pub async fn stix_day_attempts(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    day_ms: i64,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<AttemptRow>, Error> {
+    let rows = client
+        .query(
+            "SELECT attempt_id::text AS attempt_id, body FROM stix_day_attempts
+             WHERE tenant_id = $1 AND collection_id = $2 AND live AND day_ms = $3
+               AND ($4::text IS NULL OR attempt_id > $4::text COLLATE \"C\")
+             ORDER BY attempt_id LIMIT $5",
+            &[&tenant_id, &collection, &day_ms, &after, &limit],
         )
         .await?;
     Ok(rows
@@ -1146,6 +1713,187 @@ pub async fn remove_public_page(
         .execute(
             "DELETE FROM public_pages WHERE tenant_id = $1 AND writeup_id = $2",
             &[&tenant_id, &writeup_id],
+        .map(|r| (r.get("attempt_id"), r.get("body")))
+        .collect())
+}
+
+/// Which of these IOCs the last merge published.
+pub async fn stix_published(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    ioc_ids: &[String],
+) -> Result<Vec<PublishedRow>, Error> {
+    let rows = client
+        .query(
+            "SELECT ioc_id::text AS ioc_id, ioc_type, value FROM stix_ioc_published
+             WHERE tenant_id = $1 AND collection_id = $2 AND ioc_id = ANY($3)",
+            &[&tenant_id, &collection, &ioc_ids],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| (r.get("ioc_id"), r.get("ioc_type"), r.get("value")))
+        .collect())
+}
+
+/// Record merge gate decisions in one transaction. Fenced.
+pub async fn stix_set_published(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    add: &[PublishedRow],
+    remove: &[String],
+    fence_gen: i64,
+) -> Result<(), Error> {
+    in_tx(client, async {
+        fence(client, tenant_id, collection, fence_gen).await?;
+        client
+            .execute(
+                "DELETE FROM stix_ioc_published
+                 WHERE tenant_id = $1 AND collection_id = $2 AND ioc_id = ANY($3)",
+                &[&tenant_id, &collection, &remove],
+            )
+            .await?;
+        let ids: Vec<&str> = add.iter().map(|a| a.0.as_str()).collect();
+        let types: Vec<&str> = add.iter().map(|a| a.1.as_str()).collect();
+        let values: Vec<&str> = add.iter().map(|a| a.2.as_str()).collect();
+        client
+            .execute(
+                "INSERT INTO stix_ioc_published (tenant_id, collection_id, ioc_id, ioc_type, value)
+                 SELECT $1, $2, u.id, u.ty, u.value
+                 FROM unnest($3::text[], $4::text[], $5::text[]) AS u(id, ty, value)
+                 ON CONFLICT (tenant_id, collection_id, ioc_id) DO NOTHING",
+                &[&tenant_id, &collection, &ids, &types, &values],
+            )
+            .await?;
+        Ok(())
+    })
+    .await
+}
+
+/// Every live contribution to these IOCs: `(ioc_id, day_ms, JSON)`.
+pub async fn stix_contributions(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    ioc_ids: &[String],
+) -> Result<Vec<(String, i64, String)>, Error> {
+    let rows = client
+        .query(
+            "SELECT ioc_id::text AS ioc_id, day_ms, body FROM stix_ioc_contributions
+             WHERE tenant_id = $1 AND collection_id = $2 AND live AND ioc_id = ANY($3)
+             ORDER BY ioc_id, day_ms, part",
+            &[&tenant_id, &collection, &ioc_ids],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| (r.get("ioc_id"), r.get("day_ms"), r.get("body")))
+        .collect())
+}
+
+/// The first `limit` IOC ids queued for `step`, in id order.
+pub async fn stix_pending(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    step: &str,
+    limit: i64,
+) -> Result<Vec<String>, Error> {
+    let rows = client
+        .query(
+            "SELECT ioc_id::text AS ioc_id FROM stix_pending_iocs
+             WHERE tenant_id = $1 AND collection_id = $2 AND step = $3
+             ORDER BY ioc_id LIMIT $4",
+            &[&tenant_id, &collection, &step, &limit],
+        )
+        .await?;
+    Ok(rows.iter().map(|r| r.get("ioc_id")).collect())
+}
+
+/// Take IOC ids off queue `from` and, when `to` is set, put them on it.
+/// Fenced.
+pub async fn stix_pending_move(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    ids: &[String],
+    from: &str,
+    to: Option<&str>,
+    fence_gen: i64,
+) -> Result<(), Error> {
+    in_tx(client, async {
+        fence(client, tenant_id, collection, fence_gen).await?;
+        client
+            .execute(
+                "DELETE FROM stix_pending_iocs
+                 WHERE tenant_id = $1 AND collection_id = $2 AND step = $3 AND ioc_id = ANY($4)",
+                &[&tenant_id, &collection, &from, &ids],
+            )
+            .await?;
+        if let Some(to) = to {
+            client
+                .execute(
+                    "INSERT INTO stix_pending_iocs (tenant_id, collection_id, step, ioc_id)
+                     SELECT $1, $2, $3, u FROM unnest($4::text[]) AS u
+                     ON CONFLICT DO NOTHING",
+                    &[&tenant_id, &collection, &to, &ids],
+                )
+                .await?;
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Take or renew the materialiser lease for `ttl_ms`, judged by the
+/// database clock. Returns the lease generation when `holder` holds it
+/// afterwards: it was free, expired or `holder`'s. A takeover increments
+/// the generation; a renewal keeps it.
+pub async fn stix_lease(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    holder: &str,
+    ttl_ms: i64,
+) -> Result<Option<i64>, Error> {
+    let row = client
+        .query_opt(
+            "WITH now AS (SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint AS ms)
+             INSERT INTO stix_materialiser_leases
+                 (tenant_id, collection_id, holder, expires_at, generation)
+             SELECT $1, $2, $3, now.ms + $4, 1 FROM now
+             ON CONFLICT (tenant_id, collection_id) DO UPDATE
+                 SET holder = EXCLUDED.holder,
+                     expires_at = EXCLUDED.expires_at,
+                     generation = CASE
+                         WHEN stix_materialiser_leases.holder = EXCLUDED.holder
+                         THEN stix_materialiser_leases.generation
+                         ELSE stix_materialiser_leases.generation + 1 END
+                 WHERE stix_materialiser_leases.holder = EXCLUDED.holder
+                    OR stix_materialiser_leases.expires_at
+                       < (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+             RETURNING generation",
+            &[&tenant_id, &collection, &holder, &ttl_ms],
+        )
+        .await?;
+    Ok(row.map(|r| r.get("generation")))
+}
+
+/// Give the lease up, if `holder` holds it: it expires now and keeps its
+/// generation, so the next holder's is higher.
+pub async fn stix_release(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    holder: &str,
+) -> Result<(), Error> {
+    client
+        .execute(
+            "UPDATE stix_materialiser_leases SET holder = '', expires_at = 0
+             WHERE tenant_id = $1 AND collection_id = $2 AND holder = $3",
+            &[&tenant_id, &collection, &holder],
         )
         .await?;
     Ok(())
@@ -1234,4 +1982,103 @@ pub async fn radar_points(
         )
         .await?;
     Ok(bodies(&rows, "body"))
+pub async fn stix_cron_cursor(client: &Client, collection: &str) -> Result<Option<String>, Error> {
+    let row = client
+        .query_opt(
+            "SELECT tenant_id FROM stix_cron_cursor WHERE collection_id = $1",
+            &[&collection],
+        )
+        .await?;
+    Ok(row.map(|r| r.get("tenant_id")))
+}
+
+pub async fn put_stix_cron_cursor(
+    client: &Client,
+    collection: &str,
+    tenant_id: &str,
+) -> Result<(), Error> {
+    client
+        .execute(
+            "INSERT INTO stix_cron_cursor (collection_id, tenant_id) VALUES ($1, $2)
+             ON CONFLICT (collection_id) DO UPDATE SET tenant_id = EXCLUDED.tenant_id",
+            &[&collection, &tenant_id],
+        )
+        .await?;
+    Ok(())
+}
+
+/// One day's inputs other than its events: a digest of the analyst link
+/// decisions on its live attempts, their campaign memberships, those
+/// campaigns' records and the actions on them; and the day's addresses
+/// (from its live contributions), for the caller to look up in the
+/// enrichment cache.
+pub async fn stix_day_inputs(
+    client: &Client,
+    tenant_id: &str,
+    collection: &str,
+    day_ms: i64,
+) -> Result<(String, Vec<String>), Error> {
+    let r = client
+        .query_one(
+            "WITH a AS (
+                 SELECT attempt_id::text AS attempt_id FROM stix_day_attempts
+                 WHERE tenant_id = $1 AND collection_id = $2 AND live AND day_ms = $3
+             ), m AS (
+                 SELECT cm.campaign_id, cm.recorded_at FROM campaign_members cm
+                 JOIN a ON a.attempt_id = cm.attempt_id WHERE cm.tenant_id = $1
+             )
+             SELECT concat_ws('|',
+                 (SELECT count(*) || ':' || coalesce(max(o.at), 0) FROM link_overrides o
+                  JOIN a ON a.attempt_id = o.attempt_id WHERE o.tenant_id = $1),
+                 (SELECT count(*) || ':' || coalesce(max(recorded_at), 0) FROM m),
+                 (SELECT count(*) || ':' || coalesce(max(c.updated_at), 0) FROM campaigns c
+                  WHERE c.tenant_id = $1 AND c.campaign_id IN (SELECT campaign_id FROM m)),
+                 (SELECT count(*) || ':' || coalesce(max(x.at), 0) FROM campaign_actions x
+                  WHERE x.tenant_id = $1 AND x.campaign_id IN (SELECT campaign_id FROM m))
+             ) AS sig",
+            &[&tenant_id, &collection, &day_ms],
+        )
+        .await?;
+    let rows = client
+        .query(
+            "SELECT DISTINCT body::jsonb ->> 'value' AS value FROM stix_ioc_contributions
+             WHERE tenant_id = $1 AND collection_id = $2 AND live AND day_ms = $3
+               AND body::jsonb ->> 'ioc_type' IN ('ip', 'ipv6')",
+            &[&tenant_id, &collection, &day_ms],
+        )
+        .await?;
+    Ok((
+        r.get("sig"),
+        rows.iter().filter_map(|r| r.get("value")).collect(),
+    ))
+}
+
+/// Count and newest arrival of a tenant's events in `[since, until)`, as
+/// `"<count>:<max received_at>"`.
+pub async fn event_signature(
+    client: &Client,
+    tenant_id: &str,
+    since: i64,
+    until: i64,
+) -> Result<String, Error> {
+    let r = client
+        .query_one(
+            "SELECT count(*)::text || ':' || coalesce(max(received_at), 0)::text AS sig
+             FROM capture_events WHERE tenant_id = $1 AND ts >= $2 AND ts < $3",
+            &[&tenant_id, &since, &until],
+        )
+        .await?;
+    Ok(r.get("sig"))
+}
+
+/// Tenants with an event received at or after `since`, in id order.
+pub async fn tenants_with_events(client: &Client, since: i64) -> Result<Vec<String>, Error> {
+    let rows = client
+        .query(
+            "SELECT DISTINCT tenant_id FROM capture_events WHERE received_at >= $1
+             ORDER BY tenant_id",
+            &[&since],
+        )
+        .await?;
+    Ok(rows.iter().map(|r| r.get("tenant_id")).collect())
 }

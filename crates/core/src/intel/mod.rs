@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::attack::{AttackSidecar, TechniqueInfo};
@@ -35,6 +35,8 @@ use crate::ioc::{Ioc, IocRole, IocType, export_refs};
 use crate::share::Tlp;
 use crate::timeline::printable;
 
+pub mod log;
+pub mod merge;
 pub mod misp;
 pub mod stix;
 pub mod table;
@@ -54,7 +56,7 @@ pub const STIX_SCO_NAMESPACE: &str = "00abedb4-aa42-466c-9c01-fed23315a9b7";
 pub const REFERENCE_EPOCH_MS: i64 = 1_767_225_600_000;
 
 /// One attempt with its scored links and IOC notes.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AttemptRecord {
     pub attempt: Attempt,
     /// Scored links (#27), with analyst overrides applied: CVE and technique
@@ -86,6 +88,10 @@ pub struct ExportOptions {
     pub state: Option<AttemptState>,
     pub campaign_id: Option<String>,
     pub decoy_kind: Option<DecoyKind>,
+    /// Only attempts whose first event is in `[start, end)`. The TAXII
+    /// materialiser uses it so each attempt belongs to the day it started
+    /// in, whichever window reads it.
+    pub first_seen: Option<(i64, i64)>,
     /// Include links and IOCs that are not publishable (below
     /// `publish_min`, or carried only by LLM, pre-disclosure or catalogue
     /// evidence). Only an authorised analyst may set this; the result is
@@ -107,6 +113,7 @@ impl Default for ExportOptions {
             state: None,
             campaign_id: None,
             decoy_kind: None,
+            first_seen: None,
             include_unreviewed: false,
             include_actors: false,
             include_payloads: false,
@@ -206,9 +213,14 @@ pub fn attempt_matches(a: &Attempt, opts: &ExportOptions) -> bool {
             .as_deref()
             .is_none_or(|c| a.campaign_id.as_deref() == Some(c))
         && opts.decoy_kind.is_none_or(|k| a.decoy_kind == k)
+        && opts
+            .first_seen
+            .is_none_or(|(s, e)| a.first_seen >= s && a.first_seen < e)
 }
 
-fn payload_string(i: &Ioc) -> bool {
+/// A request string stored from a body or request slice, left out unless
+/// `include_payloads` is set.
+pub fn payload_string(i: &Ioc) -> bool {
     i.ioc_type == IocType::RequestSubstring && i.roles.contains(&IocRole::Payload)
 }
 
@@ -472,7 +484,12 @@ pub fn link_wording(link: &ConfidenceLink) -> &'static str {
 
 /// The sentence for an IOC.
 pub fn ioc_sentence(i: &Ioc) -> String {
-    let attempts = i.attempt_ids.len();
+    ioc_sentence_counted(i, i.attempt_ids.len())
+}
+
+/// [`ioc_sentence`] with the attempt count given, for an IOC merged from
+/// several windows that does not list every attempt.
+pub fn ioc_sentence_counted(i: &Ioc, attempts: usize) -> String {
     let lead = if i.confidence.wording == "confirmed" {
         "An analyst confirmed this as malicious activity"
     } else {

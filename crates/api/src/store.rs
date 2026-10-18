@@ -10,6 +10,7 @@
 //! wraps them in `worker::send::SendFuture`, which is sound because a Worker
 //! isolate is single threaded.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -21,6 +22,82 @@ use foiled_core::enrich_pipeline::{EnrichPurgeCounts, EnrichPurgePlan, ProviderF
 use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, SeenFrom};
 use serde::{Deserialize, Serialize};
+
+pub use foiled_core::intel::log::{Evidence, History, LogQuery, NewVersion, StixVersion};
+
+/// What the TAXII materialiser holds for one UTC day (#13).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DayRecord {
+    /// The signature of the inputs the published objects were built from.
+    pub signature: String,
+    /// Ids (as built, before any reissue) of the day's own published
+    /// objects, so a later publish can revoke what the day no longer
+    /// supports. Indicators and what hangs off them are merged across days
+    /// and tracked by their contributions instead.
+    pub ids: Vec<String>,
+    /// A build or publish in progress, continued by the next run.
+    pub progress: Option<DayProgress>,
+    /// When the day was last given build time (Unix ms), for round-robin
+    /// and for spacing out rebuilds that only a config change asks for.
+    pub served_ms: i64,
+}
+
+/// A day's build in progress: persisted after every part, so the next run
+/// continues where a run stopped.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DayProgress {
+    /// The signature of the inputs when the build started.
+    pub signature: String,
+    /// Where the next part starts (an export event cursor).
+    pub cursor: Option<String>,
+    /// Parts staged so far.
+    pub parts: u32,
+    /// Ids of the day's own objects published so far in this publish.
+    pub ids: Vec<String>,
+    pub phase: DayPhase,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DayPhase {
+    /// Parts are being staged.
+    #[default]
+    Building,
+    /// The day's attempts and IOC contributions are live; its own objects
+    /// are being published, attempts after `after` (an attempt id) next.
+    /// Also entered again when the gate decision for one of its IOCs
+    /// changes, so its objects only ever name published IOCs.
+    Publishing { after: Option<String> },
+}
+
+/// One of a day's attempts as scored, before the gate (an `AttemptRecord`
+/// as JSON). The day's own objects are built from these when published.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayAttempt {
+    pub attempt_id: String,
+    pub body: String,
+}
+
+/// An IOC whose merged view passes the gate: `(ioc_id, type, value)`.
+pub type PublishedIoc = (String, String, String);
+
+/// The two publishing queues of IOCs whose contributions changed: their
+/// merged objects, then (after every staged day is published) their
+/// sightings, which refer to the days' `observed-data`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingStep {
+    Merge,
+    Sighting,
+}
+
+impl PendingStep {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PendingStep::Merge => "merge",
+            PendingStep::Sighting => "sighting",
+        }
+    }
+}
 
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>;
 
@@ -317,6 +394,215 @@ pub trait Store: Send + Sync {
             Ok(out)
         })
     }
+
+    /// A value that changes whenever the tenant's events with
+    /// `since <= ts < until` change (count and arrival), so the TAXII
+    /// materialiser can skip days it already holds (#13).
+    fn event_signature(&self, tenant_id: &str, since: i64, until: i64) -> StoreFuture<'_, String>;
+
+    /// Tenants with any event at or after `since`, in id order, for the
+    /// scheduled materialiser.
+    fn tenants_with_events(&self, since: i64) -> StoreFuture<'_, Vec<String>>;
+
+    // ----- Materialised STIX object log behind TAXII (#13) -----
+
+    /// What the log holds for these ids: first `created`, newest version
+    /// and every content hash.
+    fn stix_history(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ids: Vec<String>,
+    ) -> StoreFuture<'_, BTreeMap<String, History>>;
+
+    /// Append versions atomically under one `date_added`, later than every
+    /// row already in the collection and no earlier than `now`. A version
+    /// whose content equals the object's current head is skipped; one
+    /// whose `(id, version)` already exists is a conflict (two writers
+    /// planned from the same head) and fails the whole append. Also raises
+    /// each object's newest evidence time and records what it refers to.
+    /// Returns the rows written.
+    ///
+    /// Every materialiser write takes `fence`, the lease generation the
+    /// run holds ([`Store::stix_lease`]), and fails without writing when
+    /// the tenant's lease has a different generation: a run that stalled
+    /// past its lease can never overwrite its successor.
+    #[allow(clippy::too_many_arguments)]
+    fn stix_append(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        versions: Vec<NewVersion>,
+        evidence: Vec<Evidence>,
+        now: i64,
+        fence: i64,
+    ) -> StoreFuture<'_, u64>;
+
+    /// One page of the log, ordered by `(date_added, id, version)`, with
+    /// the semantics of `foiled_core::intel::log::query_rows`.
+    fn stix_query(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        q: LogQuery,
+    ) -> StoreFuture<'_, Vec<StixVersion>>;
+
+    /// Retention (#16): remove every version of objects whose newest
+    /// evidence is older than `evidence_before`, unless an object that
+    /// stays refers to them, and the materialiser's day records, attempts
+    /// and contributions for days before it. Returns the version rows
+    /// removed. Fenced.
+    fn stix_purge(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        evidence_before: i64,
+        fence: i64,
+    ) -> StoreFuture<'_, u64>;
+
+    /// The materialiser's record of each UTC day.
+    fn stix_days(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+    ) -> StoreFuture<'_, BTreeMap<i64, DayRecord>>;
+
+    /// Save a day record. Fenced.
+    fn put_stix_day(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        record: DayRecord,
+        fence: i64,
+    ) -> StoreFuture<'_, ()>;
+
+    /// Stage part `part` of a day's build atomically: drop staged
+    /// contributions of this part and later ones (a part redone after a
+    /// crash replaces itself), upsert the part's attempts (by id) and IOC
+    /// contributions (`(ioc_id, JSON)`), and save `record`. Fenced.
+    #[allow(clippy::too_many_arguments)]
+    fn stix_stage_part(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        part: u32,
+        attempts: Vec<DayAttempt>,
+        contributions: Vec<(String, String)>,
+        record: DayRecord,
+        fence: i64,
+    ) -> StoreFuture<'_, ()>;
+
+    /// Finish staging a day atomically: its staged attempts and
+    /// contributions replace its live ones, every IOC in either joins the
+    /// merge queue, and `record` is saved. Fenced.
+    fn stix_promote_day(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        record: DayRecord,
+        fence: i64,
+    ) -> StoreFuture<'_, ()>;
+
+    /// A day's live attempts with id after `after`, in id order.
+    fn stix_day_attempts(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        after: Option<String>,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<DayAttempt>>;
+
+    /// Every live contribution to these IOCs, one per day and part, as
+    /// `(ioc_id, day_ms, JSON)`.
+    fn stix_contributions(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ioc_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<(String, i64, String)>>;
+
+    /// Which of these IOCs the last merge published.
+    fn stix_published(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ioc_ids: Vec<String>,
+    ) -> StoreFuture<'_, Vec<PublishedIoc>>;
+
+    /// Record merge gate decisions: `add` passes, `remove` does not.
+    /// Fenced.
+    fn stix_set_published(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        add: Vec<PublishedIoc>,
+        remove: Vec<String>,
+        fence: i64,
+    ) -> StoreFuture<'_, ()>;
+
+    /// The first `limit` IOC ids in a publishing queue, in id order.
+    fn stix_pending(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        step: PendingStep,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<String>>;
+
+    /// Take IOC ids off `from` and, when `to` is set, put them on it.
+    /// Fenced.
+    fn stix_pending_move(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        ids: Vec<String>,
+        from: PendingStep,
+        to: Option<PendingStep>,
+        fence: i64,
+    ) -> StoreFuture<'_, ()>;
+
+    /// Take or renew the tenant's materialiser lease for `ttl_ms`. Returns
+    /// the lease generation (the fencing token every write checks) when
+    /// `holder` holds it afterwards: it was free, expired, or already
+    /// `holder`'s (a renewal keeps the generation, a takeover increments
+    /// it). Expiry is judged by the store's own clock where it has one
+    /// (Postgres `clock_timestamp()`), else by `now`. A crashed run's
+    /// lease lapses at its expiry.
+    fn stix_lease(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        holder: &str,
+        now: i64,
+        ttl_ms: i64,
+    ) -> StoreFuture<'_, Option<i64>>;
+
+    /// Give the lease up, if `holder` holds it. The generation is kept, so
+    /// the next holder's is higher.
+    fn stix_release(&self, tenant_id: &str, collection: &str, holder: &str) -> StoreFuture<'_, ()>;
+
+    /// The last tenant the scheduled materialiser served, so the next tick
+    /// starts after it.
+    fn stix_cron_cursor(&self, collection: &str) -> StoreFuture<'_, Option<String>>;
+
+    fn put_stix_cron_cursor(&self, collection: &str, tenant_id: &str) -> StoreFuture<'_, ()>;
+
+    /// A value that changes whenever one day's inputs other than its
+    /// events change: analyst link decisions on its attempts (#27), the
+    /// campaign memberships and records of its attempts and the actions on
+    /// those campaigns (#33), and the enrichment cache rows for its
+    /// addresses (#11). Days not built yet give a constant.
+    fn stix_day_inputs(
+        &self,
+        tenant_id: &str,
+        collection: &str,
+        day_ms: i64,
+        now: i64,
+    ) -> StoreFuture<'_, String>;
 
     /// Analyst decisions on an attempt's links (#27).
     fn link_overrides(
