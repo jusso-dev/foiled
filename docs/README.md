@@ -15,6 +15,8 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [research/landscape.md](research/landscape.md) | Honeypot, deception and threat intel references that Foiled builds on. |
 | [research/lessons.md](research/lessons.md) | Lessons from commercial honeypot platforms. |
 | [design/design-direction.md](design/design-direction.md) | Design direction for the operator console. |
+| [ui/design-system.md](ui/design-system.md) | The v3 design system as built: tokens, components, contrast results and review against mockup-v3. UI source of truth for #14 and #35. |
+| [ui/voice.md](ui/voice.md) | UI copy rules: Australian English, flat tone, "we assess as" confidence wording, example data labels. |
 | [threat-model.md](threat-model.md) | Containment, egress, breakout and Australian legal and ethical limits. |
 | [adr/README.md](adr/README.md) | Architecture Decision Records index, including [ADR 0002](adr/0002-sandbox-runtime.md) on the sandbox and emulation runtime and [ADR 0009](adr/0009-axum-workers-and-front-end.md) on Axum and Workers. |
 | [api/control-plane.md](api/control-plane.md) | Control plane API: clients, auth, rules, stores, the OpenAPI contract and the local mock server. |

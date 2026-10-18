@@ -4,5 +4,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["app/**/*.test.{ts,tsx}"],
+    // Let design-system tests read stylesheets with `?raw` (Vitest blanks CSS by default).
+    css: { include: [/\.css(\?raw)?$/] },
   },
 });

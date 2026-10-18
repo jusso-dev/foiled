@@ -96,10 +96,11 @@ Rust crates: versions from `Cargo.lock` at the time of writing. JS packages: ver
 | Vite | 8.3.4 | MIT | build tool | yes | no | Not shipped at runtime. | #40 |
 | Biome | 2.5.15 | MIT OR Apache-2.0 (npm metadata) | dev tool | yes | no | Not shipped. | #19 |
 | Astro | 7.x (not yet in the repo) | MIT (npm metadata, **verify** at adoption) | embed (`site/`) | yes | no | Public exploit pages. | #35 |
-| Inter font | n/a | OFL-1.1 | embed (UI asset) | yes | no | Ship the OFL text with the font files. Do not sell the font on its own. Check Reserved Font Name rules before modifying (**verify**). | #39 |
-| JetBrains Mono font | n/a | OFL-1.1 | embed (UI asset) | yes | no | As for Inter. | #39 |
-| Rajdhani font | n/a | OFL-1.1 (Indian Type Foundry) | embed (wordmark) | yes | no | As for Inter. | #39 |
-| Natural Earth | n/a | Public domain | embed (map land shapes) | yes | no | No permission or credit needed; credit anyway. | #39 |
+| Inter font (`@fontsource/inter`) | 5.3.0 | OFL-1.1 (npm metadata and package `LICENSE`, copyright The Inter Project Authors) | embed (UI asset, self-hosted woff2, Latin subset, weights 400 to 700) | yes | no | Installed from npm, not committed. Ship the OFL text with distributed builds (it is in the package `LICENSE`; how the release bundles it is **verify**). Do not sell the font on its own. Unmodified, so Reserved Font Name rules are not triggered. | #39 |
+| JetBrains Mono font (`@fontsource/jetbrains-mono`) | 5.3.0 | OFL-1.1 (npm metadata and package `LICENSE`, copyright The JetBrains Mono Project Authors) | embed (UI asset, Latin subset, weights 400 to 600) | yes | no | As for Inter. | #39 |
+| Rajdhani font (`@fontsource/rajdhani`) | 5.3.0 | OFL-1.1 (npm metadata and package `LICENSE`, copyright Indian Type Foundry) | embed (wordmark only, Latin subset, weight 700) | yes | no | As for Inter. | #39 |
+| Natural Earth | n/a | Public domain | embed (map land shapes) | yes | no | Land polygons sampled to a 1.5 degree run-length mask (about 4 KB) in `web/app/components/map/world-land.ts`; no Natural Earth files are committed. No permission or credit needed; credited on the map anyway. | #39 |
+| Foiled UI components and icons | n/a | MIT (our own) | embed | yes | no | All components in `web/app/components/` and the icon paths are written for Foiled. No third-party UI kit, icon set or component source is in the tree (#39, [design system](../ui/design-system.md)). | #39 |
 
 Other direct dependencies seen in manifests, for completeness: `http` (MIT OR Apache-2.0), `tower` (MIT), `tower-service` (MIT), `anyhow` (MIT OR Apache-2.0), `serde_yaml_ng` (MIT), `walkdir` (Unlicense OR MIT), dev-only `tokio` (MIT), `http-body-util` (MIT), `tempfile` (MIT OR Apache-2.0); JS: `isbot` (Unlicense), `wrangler` (MIT OR Apache-2.0), `@cloudflare/vite-plugin` (MIT), `typescript` (Apache-2.0), `vitest` (MIT).
 
