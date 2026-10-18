@@ -2093,7 +2093,6 @@ pub async fn event_signature(
     Ok(r.get("sig"))
 }
 
-/// Tenants with an event received at or after `since`, in id order.
 /// Tenants with object heads, day records or queued IOCs in the collection.
 pub async fn stix_tenants(client: &Client, collection: &str) -> Result<Vec<String>, Error> {
     let rows = client
@@ -2108,6 +2107,7 @@ pub async fn stix_tenants(client: &Client, collection: &str) -> Result<Vec<Strin
     Ok(rows.iter().map(|r| r.get("tenant_id")).collect())
 }
 
+/// Tenants with an event received at or after `since`, in id order.
 pub async fn tenants_with_events(client: &Client, since: i64) -> Result<Vec<String>, Error> {
     let rows = client
         .query(

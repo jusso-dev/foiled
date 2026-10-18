@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS stix_object_heads (
 CREATE INDEX IF NOT EXISTS stix_object_heads_evidence
     ON stix_object_heads (tenant_id, collection_id, max_evidence_ms);
 
+-- The scheduled run's tenant list (every tenant with a log) without a
+-- scan of every head.
+CREATE INDEX IF NOT EXISTS stix_object_heads_collection
+    ON stix_object_heads (collection_id, tenant_id);
+
 CREATE INDEX IF NOT EXISTS stix_object_heads_refs
     ON stix_object_heads USING gin (refs);
 
