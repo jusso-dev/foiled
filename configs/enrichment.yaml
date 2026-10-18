@@ -24,10 +24,17 @@ cache:
   error_backoff_secs: 300
 
 # When false, Facts from third-party providers are left out of API
-# responses. Shown regardless: local_asn, yara, ThreatSieve answers whose
-# every source allows redistribution and commercial use, and a tenant's own
-# restricted ThreatSieve answers (to that tenant only).
+# responses. Shown regardless: local_asn, yara, and ThreatSieve answers whose
+# every source allows redistribution and commercial use.
 show_to_tenants: false
+
+# Restricted ThreatSieve answers (any source with commercial_use or
+# redistributable false or unknown, for example GreyNoise, CrowdSec or
+# abuse.ch feeds) are cached per tenant and never exported. When true, a
+# tenant sees the restricted answers its own lookups fetched. Off by
+# default: whether those sources' terms allow showing their data to your
+# tenants is a licence decision for your counsel, not a technical one.
+show_restricted_to_requester: false
 
 providers:
   # Local IP-range-to-ASN and country table. No network calls. Does nothing

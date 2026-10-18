@@ -76,6 +76,12 @@ pub struct EnrichConfig {
     pub queue: String,
     pub cache: CacheSettings,
     pub show_to_tenants: bool,
+    /// Show a tenant the restricted answers its own lookups fetched
+    /// (`threatsieve_restricted`: a source with `commercial_use` or
+    /// `redistributable` false or unknown). Off by default: whether those
+    /// terms allow it is a licence decision for the operator's counsel.
+    #[serde(default)]
+    pub show_restricted_to_requester: bool,
     pub providers: Providers,
 }
 
@@ -292,18 +298,21 @@ pub struct ProviderFailureRecord {
     pub retry_at: Option<i64>,
 }
 
-/// When a provider may be asked again after `failures` failures in a row:
-/// `error_backoff_secs` doubled for each repeat, at most
-/// [`MAX_BACKOFF_SECS`], and never before a `Retry-After` time.
+/// When a provider may be asked again after `failures` failures in a row.
+/// After a rate limit that is exactly the `Retry-After` time: the queue
+/// retries the message then, and the generic backoff must not turn that
+/// retry into a skip. Otherwise `error_backoff_secs` doubled for each
+/// repeat, at most [`MAX_BACKOFF_SECS`].
 pub fn backoff_until(f: &ProviderFailureRecord, error_backoff_secs: u64) -> i64 {
+    if let Some(at) = f.retry_at {
+        return at;
+    }
     let doublings = f.failures.saturating_sub(1).min(20);
     let secs = error_backoff_secs
         .saturating_mul(1u64 << doublings)
         .min(MAX_BACKOFF_SECS);
-    let backoff = f
-        .last_failed_at
-        .saturating_add(i64::try_from(secs).unwrap_or(i64::MAX).saturating_mul(1000));
-    backoff.max(f.retry_at.unwrap_or(i64::MIN))
+    f.last_failed_at
+        .saturating_add(i64::try_from(secs).unwrap_or(i64::MAX).saturating_mul(1000))
 }
 
 /// What to do with one provider for one message.
@@ -644,6 +653,9 @@ pub struct Mapped {
     /// ThreatSieve's `ttl_seconds` (the negative TTL when there are no
     /// Facts).
     pub ttl_secs: u64,
+    /// [`fold_key`]s of ThreatSieve's `value` and `input`: the spellings
+    /// this answer stands for ([`answer_for`]).
+    pub folded: Vec<String>,
 }
 
 impl Mapped {
@@ -752,6 +764,13 @@ fn map_result(r: &LookupResult, now_ms: i64, config: &EnrichConfig) -> Option<Ma
         .as_deref()
         .and_then(|i| observable_of(&r.kind, i))
         .or_else(|| observable_of(&r.kind, &r.value))?;
+    // Every spelling this answer stands for, as ThreatSieve folds them.
+    let mut folded = vec![fold_key(&r.kind, &r.value)];
+    if let Some(i) = r.input.as_deref() {
+        folded.push(fold_key(&r.kind, i));
+    }
+    folded.sort();
+    folded.dedup();
     if let Some(e) = &r.error {
         let code = e.code.as_deref().map(clip).unwrap_or_default();
         return Some(Mapped {
@@ -766,6 +785,7 @@ fn map_result(r: &LookupResult, now_ms: i64, config: &EnrichConfig) -> Option<Ma
             }),
             facts: Vec::new(),
             ttl_secs: 0,
+            folded,
         });
     }
     let sources = r.sources.as_deref().unwrap_or(&[]);
@@ -987,7 +1007,64 @@ fn map_result(r: &LookupResult, now_ms: i64, config: &EnrichConfig) -> Option<Ma
         error: None,
         facts,
         ttl_secs: ttl_for(has_facts),
+        folded,
     })
+}
+
+/// A value as ThreatSieve folds it before deduplicating: canonical IPs,
+/// lower-case domains without a trailing dot, lower-case hashes, upper-case
+/// CVE ids, and URLs with a lower-case scheme and host. Prefixed with the
+/// family, so `ipv4` and `ipv6` share one. Used only to match spellings
+/// Foiled keeps apart but ThreatSieve answers once.
+pub fn fold_key(kind: &str, value: &str) -> String {
+    let v = value.trim();
+    match kind {
+        "ipv4" | "ipv6" => {
+            let ip = v
+                .parse::<std::net::IpAddr>()
+                .map(|ip| match ip {
+                    std::net::IpAddr::V6(v6) => v6
+                        .to_ipv4_mapped()
+                        .map_or_else(|| v6.to_string(), |v4| v4.to_string()),
+                    v4 => v4.to_string(),
+                })
+                .unwrap_or_else(|_| v.to_ascii_lowercase());
+            format!("ip:{ip}")
+        }
+        "domain" => format!("domain:{}", v.trim_end_matches('.').to_ascii_lowercase()),
+        "md5" | "sha1" | "sha256" => format!("{kind}:{}", v.to_ascii_lowercase()),
+        "cve" => format!("cve:{}", v.to_ascii_uppercase()),
+        "url" => {
+            // Scheme and authority are case-insensitive; the rest is not.
+            let (scheme, rest) = v.split_once("://").unwrap_or(("", v));
+            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            let (host, tail) = rest.split_at(end);
+            format!(
+                "url:{}://{}{}",
+                scheme.to_ascii_lowercase(),
+                host.trim_end_matches('.').to_ascii_lowercase(),
+                tail
+            )
+        }
+        other => format!("{other}:{v}"),
+    }
+}
+
+/// ThreatSieve's answer for `o`: the one mapped to it, else one whose
+/// folded spellings include `o` (ThreatSieve answers duplicates once, under
+/// the first spelling sent). `None` when the answer left it out.
+pub fn answer_for(o: &Observable, mapped: &[Mapped]) -> Option<Mapped> {
+    if let Some(m) = mapped.iter().find(|m| &m.observable == o) {
+        return Some(m.clone());
+    }
+    let key = fold_key(lookup_type(o), &o.value);
+    mapped
+        .iter()
+        .find(|m| m.observable.kind == o.kind && m.folded.contains(&key))
+        .map(|m| Mapped {
+            observable: o.clone(),
+            ..m.clone()
+        })
 }
 
 /// Turn a lookup's HTTP answer into cache-ready answers. Answers for types
@@ -1051,6 +1128,74 @@ pub fn valid_facts(provider: &str, facts: Vec<Fact>) -> (Vec<Fact>, usize) {
         .collect();
     let dropped = before - kept.len();
     (kept, dropped)
+}
+
+// ---------------------------------------------------------------------------
+// Purge (#16)
+// ---------------------------------------------------------------------------
+
+/// Most rows one purge statement deletes, so a run stays small whatever the
+/// backlog; the next run carries on.
+pub const PURGE_BATCH: u32 = 500;
+
+/// What one purge run of the enrichment tables deletes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnrichPurgePlan {
+    /// Cache rows past their own TTL (`fetched_at + ttl_secs <= now`) are
+    /// deleted: no reader may use them, so this is cache hygiene and runs
+    /// whatever the retention purge settings say.
+    pub now_ms: i64,
+    /// Failure rows last seen at or before this, with no `Retry-After` still
+    /// ahead, no longer affect any backoff and are deleted.
+    pub failures_before: i64,
+    /// Retention caps (`enrichment_cache` in `configs/retention.yaml`), only
+    /// when the retention purge is enabled and not a dry run.
+    pub retention: Option<RetentionCutoffs>,
+    /// Most rows per statement.
+    pub batch: u32,
+}
+
+/// Rows fetched at or before these times are past the retention cap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetentionCutoffs {
+    /// Providers with their own entry.
+    pub providers: Vec<(String, i64)>,
+    /// Every other provider.
+    pub default_before: i64,
+}
+
+/// What a purge run deleted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct EnrichPurgeCounts {
+    pub expired: u64,
+    pub past_retention: u64,
+    pub failures: u64,
+}
+
+/// The purge plan at `now_ms`. Retention cutoffs mirror the read path
+/// (`usable_facts`): a row is past the cap once `now - fetched_at` reaches
+/// the provider's `enrichment_cache` TTL.
+pub fn enrich_purge_plan(
+    retention: &crate::retention::RetentionConfig,
+    now_ms: i64,
+) -> EnrichPurgePlan {
+    let cutoff = |days: u32| now_ms.saturating_sub(i64::from(days).saturating_mul(86_400_000));
+    let caps = &retention.enrichment_cache;
+    let live = retention.purge.enabled && !retention.purge.dry_run;
+    EnrichPurgePlan {
+        now_ms,
+        failures_before: now_ms
+            .saturating_sub(i64::try_from(MAX_BACKOFF_SECS).unwrap_or(i64::MAX) * 1000),
+        retention: live.then(|| RetentionCutoffs {
+            providers: caps
+                .providers
+                .iter()
+                .map(|(p, days)| (p.clone(), cutoff(*days)))
+                .collect(),
+            default_before: cutoff(caps.default_ttl_days),
+        }),
+        batch: PURGE_BATCH,
+    }
 }
 
 #[cfg(test)]
@@ -1199,12 +1344,24 @@ mod tests {
             plan(&c, &o, &[], std::slice::from_ref(&failure), NOW + 1_300_000)[1].1,
             Step::Lookup
         );
-        // Retry-After wins when it is later.
+        // Retry-After decides on its own, later or earlier than the
+        // generic backoff: the queue retries the message at that time.
         let ra = ProviderFailureRecord {
             retry_at: Some(NOW + 5_000_000),
-            ..failure
+            ..failure.clone()
         };
         assert_eq!(backoff_until(&ra, 300), NOW + 5_000_000);
+        let soon = ProviderFailureRecord {
+            failures: 1,
+            last_failed_at: NOW,
+            retry_at: Some(NOW + 120_000),
+            ..failure
+        };
+        assert_eq!(backoff_until(&soon, 300), NOW + 120_000);
+        assert_eq!(
+            plan(&c, &o, &[], std::slice::from_ref(&soon), NOW + 120_000)[1].1,
+            Step::Lookup
+        );
         // CVEs only go to ThreatSieve.
         let cve = Observable::cve("cve-2099-0001").unwrap();
         assert_eq!(cve.value, "CVE-2099-0001");
@@ -1212,6 +1369,68 @@ mod tests {
             plan(&c, &cve, &[], &[], NOW),
             vec![(THREATSIEVE, Step::Lookup)]
         );
+    }
+
+    #[test]
+    fn folded_spellings_share_an_answer() {
+        assert_eq!(
+            fold_key("domain", "Example.INVALID."),
+            "domain:example.invalid"
+        );
+        assert_eq!(fold_key("ipv6", "::ffff:203.0.113.7"), "ip:203.0.113.7");
+        assert_eq!(fold_key("ipv6", "2001:DB8:0::1"), "ip:2001:db8::1");
+        assert_eq!(fold_key("cve", "cve-2099-0001"), "cve:CVE-2099-0001");
+        assert_eq!(fold_key("sha256", "AB"), "sha256:ab");
+        assert_eq!(
+            fold_key("url", "HTTPS://Stage2.Example.INVALID/X.sh?A=B"),
+            "url:https://stage2.example.invalid/X.sh?A=B"
+        );
+        let c = config();
+        let body = json!({ "results": [{
+            "type": "url",
+            "value": "https://stage2.example.invalid/x.sh",
+            "input": "https://Stage2.Example.INVALID/x.sh",
+            "found": false,
+            "ttl_seconds": 3600,
+            "sources": []
+        }]})
+        .to_string();
+        let mapped = lookup_outcome(200, None, &body, NOW, &c).unwrap();
+        let url = |v: &str| Observable::new(ObservableKind::Url, v).unwrap();
+        let first = answer_for(&url("https://Stage2.Example.INVALID/x.sh"), &mapped).unwrap();
+        let second = answer_for(&url("https://stage2.example.invalid/x.sh"), &mapped).unwrap();
+        assert_eq!(
+            second.observable,
+            url("https://stage2.example.invalid/x.sh")
+        );
+        assert_eq!(first.ttl_secs, second.ttl_secs);
+        assert!(answer_for(&url("https://stage2.example.invalid/X.SH"), &mapped).is_none());
+    }
+
+    #[test]
+    fn purge_plans_follow_ttls_and_the_retention_switches() {
+        let mut r = crate::retention::RetentionConfig::default();
+        let day = 86_400_000;
+        // Shipped: enabled, dry run. Expired rows and stale failures only.
+        let p = enrich_purge_plan(&r, NOW);
+        assert_eq!(p.now_ms, NOW);
+        assert_eq!(p.failures_before, NOW - day);
+        assert_eq!(p.retention, None);
+        assert_eq!(p.batch, PURGE_BATCH);
+        r.purge.dry_run = false;
+        r.enrichment_cache
+            .providers
+            .insert("threatsieve_restricted".into(), 1);
+        let p = enrich_purge_plan(&r, NOW);
+        assert_eq!(
+            p.retention,
+            Some(RetentionCutoffs {
+                providers: vec![("threatsieve_restricted".into(), NOW - day)],
+                default_before: NOW - 7 * day,
+            })
+        );
+        r.purge.enabled = false;
+        assert_eq!(enrich_purge_plan(&r, NOW).retention, None);
     }
 
     #[test]

@@ -34,7 +34,8 @@ Every binding the Workers use, with the issue that owns the code that reads or w
 | `foiled-api` | (consumer, no binding name) | Queue consumer | `foiled-ingest`, dead letters to `foiled-ingest-dlq` | #9 | Validates and writes envelopes to Postgres, fans out to `LIVE_STREAM` and `RADAR`, and sends observables to `ENRICH`. |
 | `foiled-api` | `ENRICH` | Queue producer | `foiled-enrich` | #11 | Observables to enrich, one message per tenant and observable ([enrichment.md](../enrichment.md#pipeline)). |
 | `foiled-api` | (consumer, no binding name) | Queue consumer | `foiled-enrich`, dead letters to `foiled-enrich-dlq` | #11 | Answers `local_asn` and asks ThreatSieve in batched lookups within D1 rate-limit budgets, and writes `enrich_cache`. The same Worker serves both queues and dispatches on the queue name. |
-| `foiled-api` | `THREATSIEVE` | Service Binding to ThreatSieve | `threatsieve-api-production` | #11 | `POST /v1/lookup`, the only external intel call ([enrichment.md](../enrichment.md#threatsieve)). Optional: without it, enrichment runs on `local_asn` alone. |
+| `foiled-api` | `THREATSIEVE` (opt-in, not in the committed config) | Service Binding to ThreatSieve | `threatsieve-api-production` | #11 | `POST /v1/lookup`, the only external intel call ([enrichment.md](../enrichment.md#threatsieve)). Add it only in your private config, after ThreatSieve is deployed (see [Optional: ThreatSieve](#optional-threatsieve)). Without it, enrichment runs on `local_asn` alone. |
+| `foiled-api` | (cron trigger, no binding name) | Cron Trigger | `17 * * * *` | #16, #11 | Hourly purge of expired `enrich_cache` rows, rows past their retention cap, and stale `enrich_failures` rows, at most 500 per statement per run. |
 | `foiled-api` | `EVIDENCE` | R2 bucket | `foiled-evidence` | #9 (retention #16) | Pcaps, file diffs, quarantined payloads and export bundles by `payload_ref`. Private: no public bucket URL, no custom domain. |
 | `foiled-api` | `LIVE_STREAM` | Durable Object namespace (class `LiveStream`) | migration tag `v1` | #14 | Live attempt stream to console clients over hibernating WebSockets. |
 | `foiled-api` | `AI` | Workers AI, called through AI Gateway (`AI_GATEWAY_ID` var) | gateway created in the dashboard | #28 | LLM correlation, with the logging policy from #16 and #28. |
@@ -126,6 +127,22 @@ export CLOUDFLARE_API_TOKEN=...       # scoped deploy token; never committed
    ```
    The console is built by the Cloudflare Vite plugin, which writes the deploy config into the build output, so deploy it from `web/` after `pnpm build`.
 6. **Check** that the console hostname redirects to Access, the API hostname rejects a request without an Access token, the ingest hostname returns 403 without a client certificate, and the `workers.dev` URLs do not resolve.
+
+## Optional: ThreatSieve
+
+The committed `crates/api/wrangler.jsonc` does not bind ThreatSieve, so a default deploy works without it. Cloudflare rejects a deploy whose Service Binding names a Worker that does not exist, so the binding has to be opt-in. To turn ThreatSieve on:
+
+1. Deploy ThreatSieve (`threatsieve-api-production`) in the same account first.
+2. Add the binding to your private copy, `crates/api/wrangler.private.jsonc`:
+   ```jsonc
+   "services": [{ "binding": "THREATSIEVE", "service": "threatsieve-api-production" }],
+   ```
+3. Create a ThreatSieve API key with scope `intel:read` only and run `wrangler secret put THREATSIEVE_API_KEY` in `crates/api`.
+4. Set `providers.threatsieve.enabled: true` in `configs/enrichment.yaml`, then redeploy the API Worker. Leave `show_restricted_to_requester` off unless your counsel has confirmed that the restricted sources' terms allow you to show their data to your tenants.
+
+To turn it off again, remove the binding (or the secret); the consumer logs ThreatSieve as not configured and spends nothing.
+
+The `foiled-enrich` consumer's batch size of 100 needs up to about 500 D1 queries per invocation, so it needs the Workers Paid plan (1,000 queries per invocation). On the Free plan (50), set `max_batch_size` to 8 or less in your private config.
 
 ## Related
 

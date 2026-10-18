@@ -631,6 +631,7 @@ dependencies = [
  "axum",
  "foiled-core",
  "foiled-pg",
+ "futures-util",
  "getrandom 0.4.3",
  "hex",
  "http",

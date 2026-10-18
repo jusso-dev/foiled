@@ -7,7 +7,7 @@ use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, agent_scopes};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
-use foiled_core::enrich_pipeline::ProviderFailureRecord;
+use foiled_core::enrich_pipeline::{EnrichPurgeCounts, EnrichPurgePlan, ProviderFailureRecord};
 use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
 
@@ -586,6 +586,44 @@ impl Store for MemoryStore {
             .failures
             .retain(|f| !(f.provider == provider && f.observable == observable));
         ready(Ok(()))
+    }
+
+    fn purge_enrichment(&self, plan: EnrichPurgePlan) -> StoreFuture<'_, EnrichPurgeCounts> {
+        let mut g = self.lock();
+        let batch = plan.batch as usize;
+        // Remove at most `batch` items matching `doomed`, like the SQL.
+        fn take<T>(items: &mut Vec<T>, batch: usize, doomed: impl Fn(&T) -> bool) -> u64 {
+            let mut n = 0;
+            items.retain(|i| {
+                if n < batch && doomed(i) {
+                    n += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+            n as u64
+        }
+        let mut counts = EnrichPurgeCounts {
+            expired: take(&mut g.cache, batch, |e| !e.is_fresh(plan.now_ms)),
+            ..EnrichPurgeCounts::default()
+        };
+        if let Some(r) = &plan.retention {
+            for (provider, before) in &r.providers {
+                counts.past_retention += take(&mut g.cache, batch, |e| {
+                    &e.provider == provider && e.fetched_at <= *before
+                });
+            }
+            counts.past_retention += take(&mut g.cache, batch, |e| {
+                !r.providers.iter().any(|(p, _)| p == &e.provider)
+                    && e.fetched_at <= r.default_before
+            });
+        }
+        counts.failures = take(&mut g.failures, batch, |f| {
+            f.last_failed_at <= plan.failures_before
+                && f.retry_at.is_none_or(|at| at <= plan.now_ms)
+        });
+        ready(Ok(counts))
     }
 
     fn events_between(

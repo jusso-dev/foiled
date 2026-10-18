@@ -88,6 +88,32 @@ fn upload_config(env: &Env) -> Option<UploadConfig> {
     })
 }
 
+/// Hourly cron (`triggers` in `wrangler.jsonc`): purge the enrichment
+/// tables (#16), a bounded batch per run (`enrichment::purge`).
+#[event(scheduled)]
+async fn purge(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
+    let store = match (env.d1("DB"), env.hyperdrive("HYPERDRIVE")) {
+        (Ok(db), Ok(hyperdrive)) => CfStore {
+            db,
+            hyperdrive,
+            ingest: None,
+        },
+        _ => {
+            worker::console_error!("purge: D1 or Hyperdrive binding missing");
+            return;
+        }
+    };
+    match crate::enrichment::purge(&store, now_ms()).await {
+        Ok(c) => worker::console_log!(
+            "purge: enrichment expired {}, past retention {}, failures {}",
+            c.expired,
+            c.past_retention,
+            c.failures
+        ),
+        Err(_) => worker::console_error!("purge: enrichment purge failed; next run retries"),
+    }
+}
+
 /// Queue consumer for both queues this Worker reads. workers-rs allows one
 /// queue handler per Worker, so the batch's queue name decides: the
 /// `foiled-enrich` queue (named in `configs/enrichment.yaml`) goes to the
@@ -321,10 +347,36 @@ async fn asn_table(env: &Env, key: &str) -> Option<std::rc::Rc<AsnTable>> {
 }
 
 /// ThreatSieve over its service binding: the request never leaves
-/// Cloudflare. A timeout through an abort signal, `redirect: manual` (a
-/// redirect is an error) and the body capped.
+/// Cloudflare. `redirect: manual` (a redirect is an error), a timeout that
+/// aborts the subrequest through an `AbortSignal` on the request, and the
+/// body capped while it is read.
 struct ThreatSieveHttp {
     fetcher: worker::Fetcher,
+}
+
+/// Read a response body, failing as soon as it passes `cap` bytes.
+async fn read_capped(res: &mut worker::Response, cap: usize) -> Result<Vec<u8>, String> {
+    use futures_util::StreamExt;
+    if let Some(len) = res
+        .headers()
+        .get("content-length")
+        .ok()
+        .flatten()
+        .and_then(|l| l.trim().parse::<usize>().ok())
+        && len > cap
+    {
+        return Err("response too large".into());
+    }
+    let mut stream = res.stream().map_err(|e| format!("read failed: {e}"))?;
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("read failed: {e}"))?;
+        if body.len() + chunk.len() > cap {
+            return Err("response too large".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 impl crate::enrich_consumer::ProviderHttp for ThreatSieveHttp {
@@ -332,10 +384,12 @@ impl crate::enrich_consumer::ProviderHttp for ThreatSieveHttp {
         &self,
         req: crate::enrich_consumer::ProviderRequest,
     ) -> crate::enrich_consumer::HttpFuture<'_> {
+        use crate::enrich_consumer::SendError;
         Box::pin(async move {
+            let fail = |e: String| SendError::Failed(e);
             let headers = worker::Headers::new();
             for (k, v) in &req.headers {
-                headers.set(k, v).map_err(|e| e.to_string())?;
+                headers.set(k, v).map_err(|e| fail(e.to_string()))?;
             }
             let mut init = worker::RequestInit::new();
             init.with_method(match req.method {
@@ -346,9 +400,18 @@ impl crate::enrich_consumer::ProviderHttp for ThreatSieveHttp {
             .with_redirect(worker::RequestRedirect::Manual)
             .with_body(req.body.as_deref().map(JsValue::from_str));
             let request =
-                worker::Request::new_with_init(&req.url, &init).map_err(|e| e.to_string())?;
-            // A service-binding fetch takes no abort signal, so the call
-            // (answer and body) races a timer instead.
+                worker::Request::new_with_init(&req.url, &init).map_err(|e| fail(e.to_string()))?;
+            // workers-rs has no signal on RequestInit, so the signal is
+            // added by re-wrapping the request in a web_sys one.
+            let controller = worker::AbortController::default();
+            let signal = controller.signal();
+            let with_signal = worker::web_sys::RequestInit::new();
+            with_signal.set_signal(Some(&signal));
+            let request =
+                worker::web_sys::Request::new_with_request_and_init(request.inner(), &with_signal)
+                    .map(worker::Request::from)
+                    .map_err(|e| fail(format!("{e:?}")))?;
+            let cap = foiled_core::enrich_pipeline::MAX_RESPONSE_BYTES;
             let mut call = Box::pin(async {
                 let res = self
                     .fetcher
@@ -359,26 +422,30 @@ impl crate::enrich_consumer::ProviderHttp for ThreatSieveHttp {
                     worker::Response::try_from(res).map_err(|e| format!("bad answer: {e}"))?;
                 let status = res.status_code();
                 let retry_after = res.headers().get("retry-after").ok().flatten();
-                let bytes = res.bytes().await.map_err(|e| format!("read failed: {e}"))?;
+                let bytes = read_capped(&mut res, cap).await?;
                 Ok::<_, String>((status, retry_after, bytes))
             });
             let mut timer = Box::pin(worker::Delay::from(std::time::Duration::from_millis(
                 u64::from(foiled_core::enrich_pipeline::FETCH_TIMEOUT_MS),
             )));
-            let (status, retry_after, bytes) = std::future::poll_fn(|cx| {
+            let raced = std::future::poll_fn(|cx| {
                 use std::future::Future;
                 if let std::task::Poll::Ready(r) = call.as_mut().poll(cx) {
-                    return std::task::Poll::Ready(r);
+                    return std::task::Poll::Ready(Some(r));
                 }
                 if timer.as_mut().poll(cx).is_ready() {
-                    return std::task::Poll::Ready(Err("timed out".to_string()));
+                    return std::task::Poll::Ready(None);
                 }
                 std::task::Poll::Pending
             })
-            .await?;
-            if bytes.len() > foiled_core::enrich_pipeline::MAX_RESPONSE_BYTES {
-                return Err("response too large".to_string());
-            }
+            .await;
+            let Some(result) = raced else {
+                // Cancel the subrequest rather than leave it running.
+                drop(call);
+                controller.abort();
+                return Err(SendError::TimedOut);
+            };
+            let (status, retry_after, bytes) = result.map_err(fail)?;
             Ok(crate::enrich_consumer::HttpReply {
                 status,
                 body: String::from_utf8_lossy(&bytes).into_owned(),
@@ -1437,6 +1504,64 @@ impl Store for CfStore {
                 .await
                 .map_err(err)?;
             Ok(())
+        })
+    }
+
+    fn purge_enrichment(
+        &self,
+        plan: foiled_core::enrich_pipeline::EnrichPurgePlan,
+    ) -> StoreFuture<'_, foiled_core::enrich_pipeline::EnrichPurgeCounts> {
+        wrap(async move {
+            // Rows deleted by one statement, from D1's result metadata.
+            let run = |stmt: &str, args: Vec<JsValue>| {
+                let stmt = stmt.to_string();
+                async move {
+                    let result = self
+                        .db
+                        .prepare(&stmt)
+                        .bind(&args)
+                        .map_err(err)?
+                        .run()
+                        .await
+                        .map_err(err)?;
+                    Ok::<u64, StoreError>(
+                        result
+                            .meta()
+                            .ok()
+                            .flatten()
+                            .and_then(|m| m.changes)
+                            .unwrap_or(0) as u64,
+                    )
+                }
+            };
+            let batch = n(i64::from(plan.batch));
+            let mut counts = foiled_core::enrich_pipeline::EnrichPurgeCounts {
+                expired: run(
+                    sql::ENRICH_PURGE_EXPIRED,
+                    vec![n(plan.now_ms), batch.clone()],
+                )
+                .await?,
+                ..Default::default()
+            };
+            if let Some(r) = &plan.retention {
+                for (provider, before) in &r.providers {
+                    counts.past_retention += run(
+                        sql::ENRICH_PURGE_PROVIDER,
+                        vec![s(provider), n(*before), batch.clone()],
+                    )
+                    .await?;
+                }
+                let mut args = vec![n(r.default_before), batch.clone()];
+                args.extend(r.providers.iter().map(|(p, _)| s(p)));
+                counts.past_retention +=
+                    run(&sql::enrich_purge_default(r.providers.len()), args).await?;
+            }
+            counts.failures = run(
+                sql::ENRICH_PURGE_FAILURES,
+                vec![n(plan.failures_before), n(plan.now_ms), batch],
+            )
+            .await?;
+            Ok(counts)
         })
     }
 

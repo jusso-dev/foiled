@@ -23,9 +23,9 @@
   // Enrichment (#11): the ingest consumer produces observables to
   // foiled-enrich (the name must match `queue` in configs/enrichment.yaml),
   // and the same Worker consumes them in batches: one ThreatSieve lookup
-  // carries up to a whole batch. A full batch is about five D1 queries per
-  // message, inside the Paid plan's 1,000 per invocation; on the Free plan
-  // (50) set max_batch_size to 8 or less.
+  // carries up to a whole batch. A full batch of 100 is about 500 D1 queries
+  // (five per message at most), which needs the Workers Paid plan's 1,000
+  // per invocation; on the Free plan (50) set max_batch_size to 8 or less.
   "queues": {
     "producers": [
       { "binding": "INGEST", "queue": "foiled-ingest" },
@@ -58,10 +58,13 @@
     "JOB_SIGNING_KEY_ID": "k1",
     "R2_S3_HOST": "<account-id>.r2.cloudflarestorage.com"
   },
-  // ThreatSieve, the external intel hub (#11): a service binding, so lookups
-  // never leave Cloudflare. The key is the Worker secret THREATSIEVE_API_KEY
-  // (scope intel:read). Without either, enrichment runs local_asn only.
-  "services": [{ "binding": "THREATSIEVE", "service": "threatsieve-api-production" }],
+  // ThreatSieve (#11) is opt-in and NOT bound here: a deploy with a service
+  // binding to a Worker that does not exist fails. Operators who run
+  // ThreatSieve add the THREATSIEVE binding to their private copy of this
+  // file (docs/deploy/workers.md, "Optional: ThreatSieve"). Without it,
+  // enrichment runs local_asn only.
+  // Hourly purge of expired enrichment cache and failure rows (#16).
+  "triggers": { "crons": ["17 * * * *"] },
   // Radar counters (#35).
   "analytics_engine_datasets": [{ "binding": "RADAR", "dataset": "foiled_radar" }]
 }

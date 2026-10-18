@@ -1104,6 +1104,10 @@ pub struct ReadPolicy<'a> {
     /// shipped default) third-party Facts are left out of anything a tenant
     /// user can read.
     pub show_third_party: bool,
+    /// `show_restricted_to_requester` in `configs/enrichment.yaml`. When
+    /// false (the shipped default) a tenant's own restricted rows are not
+    /// shown to it either.
+    pub show_restricted_to_requester: bool,
 }
 
 /// The Facts that may be used from cache rows, grouped by observable:
@@ -1137,10 +1141,16 @@ pub fn usable_facts(
         if policy.now_ms.saturating_sub(e.fetched_at) >= cap_ms {
             continue;
         }
-        // A row kept for one tenant is that tenant's own lookup: shown to it
-        // whatever `show_to_tenants` says, and to nobody else.
+        // A row kept for one tenant is that tenant's own lookup: never shown
+        // to anybody else, and to that tenant only when the operator has
+        // opted in (`show_restricted_to_requester`), whatever
+        // `show_to_tenants` says.
         let own = match &e.tenant_id {
-            Some(t) if policy.tenant_id == Some(t.as_str()) => true,
+            Some(t)
+                if policy.tenant_id == Some(t.as_str()) && policy.show_restricted_to_requester =>
+            {
+                true
+            }
             Some(_) => continue,
             None => false,
         };
@@ -1996,6 +2006,7 @@ mod tests {
             now_ms: now,
             tenant_id: None,
             show_third_party: false,
+            show_restricted_to_requester: false,
         };
         let entries = vec![
             // Fresh row, one fresh and one expired Fact, one Fact that
@@ -2099,11 +2110,73 @@ mod tests {
                 now_ms: now,
                 tenant_id: None,
                 show_third_party: true,
+                show_restricted_to_requester: false,
             },
             &ret,
         );
         assert_eq!(shown[0].facts.len(), 6);
         assert!(shown[0].facts.iter().any(|f| f.provider == GREYNOISE));
+    }
+
+    #[test]
+    fn restricted_rows_need_the_requester_opt_in_and_never_cross_tenants() {
+        let ret = crate::retention::RetentionConfig::default();
+        let now = NOW + 1000;
+        let mut restricted = row(
+            THREATSIEVE_RESTRICTED,
+            "203.0.113.7",
+            NOW,
+            DAY,
+            vec![fact_at(
+                THREATSIEVE_RESTRICTED,
+                "threatsieve.classification",
+                Value::from("malicious"),
+                NOW,
+                DAY,
+            )],
+        );
+        restricted.tenant_id = Some("t1".into());
+        let shared = row(
+            THREATSIEVE,
+            "203.0.113.7",
+            NOW,
+            DAY,
+            vec![fact_at(
+                THREATSIEVE,
+                "asn.number",
+                Value::from(64500),
+                NOW,
+                DAY,
+            )],
+        );
+        let rows = vec![restricted, shared];
+        let keys = |tenant: &str, opt_in: bool, show_third_party: bool| -> Vec<String> {
+            let policy = ReadPolicy {
+                now_ms: now,
+                tenant_id: Some(tenant),
+                show_third_party,
+                show_restricted_to_requester: opt_in,
+            };
+            usable_facts(&rows, policy, &ret)
+                .into_iter()
+                .flat_map(|o| o.facts)
+                .map(|f| f.key)
+                .collect()
+        };
+        // Shipped default: only the shared, unrestricted answer.
+        assert_eq!(keys("t1", false, false), ["asn.number"]);
+        assert_eq!(
+            keys("t1", false, true),
+            ["asn.number"],
+            "show_to_tenants is not the opt-in"
+        );
+        // Opted in: the requester sees its own restricted answer.
+        assert_eq!(
+            keys("t1", true, false),
+            ["threatsieve.classification", "asn.number"]
+        );
+        // Never another tenant, whatever the flags.
+        assert_eq!(keys("t2", true, true), ["asn.number"]);
     }
 
     #[test]

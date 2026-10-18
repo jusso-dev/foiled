@@ -296,6 +296,38 @@ pub const ENRICH_FAILURE_RECORD: &str = "INSERT INTO enrich_failures (cache_key,
 /// Forget failures once the provider answers. `?1` key.
 pub const ENRICH_FAILURE_CLEAR: &str = "DELETE FROM enrich_failures WHERE cache_key = ?1";
 
+/// Delete cache rows past their own TTL, at most `?2` of them. `?1` now.
+/// (D1 has no `DELETE ... LIMIT`, hence the subquery.)
+pub const ENRICH_PURGE_EXPIRED: &str = "DELETE FROM enrich_cache WHERE cache_key IN \
+     (SELECT cache_key FROM enrich_cache WHERE fetched_at + ttl_secs * 1000 <= ?1 LIMIT ?2)";
+
+/// Delete one provider's rows fetched at or before `?2` (its retention
+/// cap), at most `?3`. `?1` provider.
+pub const ENRICH_PURGE_PROVIDER: &str = "DELETE FROM enrich_cache WHERE cache_key IN \
+     (SELECT cache_key FROM enrich_cache WHERE provider = ?1 AND fetched_at <= ?2 LIMIT ?3)";
+
+/// Delete rows of every provider not among the `listed` ones (`?3`
+/// onwards) fetched at or before `?1` (the default retention cap), at most
+/// `?2`.
+pub fn enrich_purge_default(listed: usize) -> String {
+    let not_in = if listed == 0 {
+        String::new()
+    } else {
+        let list: Vec<String> = (0..listed).map(|i| format!("?{}", i + 3)).collect();
+        format!(" AND provider NOT IN ({})", list.join(", "))
+    };
+    format!(
+        "DELETE FROM enrich_cache WHERE cache_key IN \
+         (SELECT cache_key FROM enrich_cache WHERE fetched_at <= ?1{not_in} LIMIT ?2)"
+    )
+}
+
+/// Delete failure rows last seen at or before `?1` with no `Retry-After`
+/// after `?2` (now), at most `?3`.
+pub const ENRICH_PURGE_FAILURES: &str = "DELETE FROM enrich_failures WHERE cache_key IN \
+     (SELECT cache_key FROM enrich_failures WHERE last_failed_at <= ?1 \
+     AND (retry_at IS NULL OR retry_at <= ?2) LIMIT ?3)";
+
 /// Start of the minute and the UTC day holding `now_ms`.
 pub fn budget_windows(now_ms: i64) -> (i64, i64) {
     (
@@ -1256,5 +1288,90 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn enrich_purge_deletes_expired_and_capped_rows_in_bounded_batches() {
+        let c = db();
+        let now: i64 = 1_792_285_400_000;
+        let day: i64 = 86_400_000;
+        let put = |key: &str, provider: &str, fetched: i64, ttl: i64| {
+            c.execute(
+                ENRICH_CACHE_UPSERT,
+                params![
+                    key,
+                    provider,
+                    "ip",
+                    "203.0.113.7",
+                    fetched,
+                    ttl,
+                    "[]",
+                    None::<String>
+                ],
+            )
+            .unwrap();
+        };
+        put("a", "threatsieve", now - 2 * day, 3600); // expired
+        put("b", "threatsieve", now - 2 * day, 86_400 * 30); // fresh, past a 1 day cap
+        put("c", "local_asn", now - 2 * day, 86_400 * 30); // fresh, inside the 7 day default
+        put("d", "local_asn", now - 8 * day, 86_400 * 30); // past the default cap
+        put("e", "threatsieve", now, 60); // fresh
+        let keys = || -> Vec<String> {
+            let mut s = c
+                .prepare("SELECT cache_key FROM enrich_cache ORDER BY cache_key")
+                .unwrap();
+            s.query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        // Bounded: one row per statement here.
+        assert_eq!(c.execute(ENRICH_PURGE_EXPIRED, params![now, 1]).unwrap(), 1);
+        assert_eq!(keys(), ["b", "c", "d", "e"]);
+        assert_eq!(
+            c.execute(ENRICH_PURGE_EXPIRED, params![now, 10]).unwrap(),
+            0
+        );
+        assert_eq!(
+            c.execute(ENRICH_PURGE_PROVIDER, params!["threatsieve", now - day, 10])
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.execute(
+                &enrich_purge_default(1),
+                params![now - 7 * day, 10, "threatsieve"]
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(keys(), ["c", "e"]);
+        assert_eq!(
+            c.execute(&enrich_purge_default(0), params![now - 7 * day, 10])
+                .unwrap(),
+            0
+        );
+
+        // Failures: stale ones go, a pending Retry-After keeps its row.
+        for (key, last, retry) in [
+            ("f1", now - 2 * day, None),
+            ("f2", now - 2 * day, Some(now + 60_000)),
+            ("f3", now, None),
+        ] {
+            c.execute(
+                ENRICH_FAILURE_RECORD,
+                params![key, "threatsieve", "ip", "203.0.113.7", last, "503", retry],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            c.execute(ENRICH_PURGE_FAILURES, params![now - day, now, 10])
+                .unwrap(),
+            1
+        );
+        let left: i64 = c
+            .query_row("SELECT count(*) FROM enrich_failures", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 2);
     }
 }

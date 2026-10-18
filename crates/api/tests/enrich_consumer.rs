@@ -8,7 +8,7 @@ use std::cell::RefCell;
 
 use foiled_api::enrich_consumer::{
     Deps, HttpFuture, HttpReply, MessageReport, Outcome, ProviderHttp, ProviderRequest,
-    ProviderResult, process_batch,
+    ProviderResult, SendError, process_batch,
 };
 use foiled_api::memory::MemoryStore;
 use foiled_api::store::Store;
@@ -31,6 +31,10 @@ enum Mode {
     Status(u16, Option<&'static str>),
     /// The binding call itself fails.
     Refuse,
+    /// The timeout wins.
+    TimeOut,
+    /// 200 with this exact body.
+    Body(String),
 }
 
 /// A fake ThreatSieve behind the service binding.
@@ -101,7 +105,13 @@ impl ProviderHttp for FakeThreatSieve {
                 });
             }
             match mode {
-                Mode::Refuse => Err("connection refused".to_string()),
+                Mode::Refuse => Err(SendError::Failed("connection refused".to_string())),
+                Mode::TimeOut => Err(SendError::TimedOut),
+                Mode::Body(body) => Ok(HttpReply {
+                    status: 200,
+                    body,
+                    retry_after: None,
+                }),
                 Mode::Status(status, retry_after) => Ok(HttpReply {
                     status,
                     body: r#"{"error":"try later"}"#.into(),
@@ -115,7 +125,7 @@ impl ProviderHttp for FakeThreatSieve {
                         .map(|o| o["value"].as_str().unwrap().to_ascii_lowercase())
                         .collect();
                     let mut answer = fixture();
-                    let results: Vec<Value> = answer["results"]
+                    let mut results: Vec<Value> = answer["results"]
                         .as_array()
                         .unwrap()
                         .iter()
@@ -124,6 +134,25 @@ impl ProviderHttp for FakeThreatSieve {
                         })
                         .cloned()
                         .collect();
+                    // Like ThreatSieve, answer every other value as unknown.
+                    for o in body["observables"].as_array().unwrap() {
+                        let v = o["value"].as_str().unwrap();
+                        if !results
+                            .iter()
+                            .any(|r| r["value"].as_str().unwrap().eq_ignore_ascii_case(v))
+                        {
+                            results.push(serde_json::json!({
+                                "type": o["type"],
+                                "value": v,
+                                "input": v,
+                                "found": false,
+                                "entity_id": null,
+                                "ttl_seconds": 3600,
+                                "pending_sources": [],
+                                "sources": []
+                            }));
+                        }
+                    }
                     answer["results"] = Value::Array(results);
                     Ok(HttpReply {
                         status: 200,
@@ -438,14 +467,17 @@ async fn rate_limits_honour_retry_after_and_failures_back_off() {
         .unwrap();
     assert_eq!(failures[0].retry_at, Some(NOW + 120_000));
 
-    // Not asked again before Retry-After, even after the error backoff.
+    // Not asked again before Retry-After.
     ts.set(Mode::Answer);
     let r = process_batch(&batch, &at(NOW + 60_000)).await;
     assert_eq!(*result(&r[0], THREATSIEVE), ProviderResult::BackingOff);
     assert_eq!(ts.calls(), 1);
 
-    // Afterwards it answers, and the failure is forgotten.
-    let r = process_batch(&batch, &at(NOW + 600_000)).await;
+    // The queue's retry at Retry-After is a real lookup: the generic error
+    // backoff (300 s) does not turn it into a skip. The failure is then
+    // forgotten.
+    let r = process_batch(&batch, &at(NOW + 120_000)).await;
+    assert_eq!(ts.calls(), 2);
     assert!(matches!(
         result(&r[0], THREATSIEVE),
         ProviderResult::Written { .. }
@@ -556,4 +588,166 @@ async fn bad_messages_are_dropped_and_store_failures_retry() {
     let r = process_batch(&[ip("203.0.113.7", "t1")], &d).await;
     assert_eq!(r[0].0, Outcome::Retry { delay_secs: 30 });
     assert_eq!(ts.calls(), 0);
+}
+
+#[tokio::test]
+async fn a_timed_out_lookup_is_retried_not_recorded() {
+    let store = MemoryStore::new();
+    let ts = FakeThreatSieve::new();
+    ts.set(Mode::TimeOut);
+    let c = config();
+    let d = Deps {
+        store: &store,
+        threatsieve: Some(&ts),
+        secret: &secrets,
+        asn: None,
+        config: &c,
+        now_ms: NOW,
+    };
+    let r = process_batch(&[ip("203.0.113.7", "t1")], &d).await;
+    assert_eq!(r[0].0, Outcome::Retry { delay_secs: 120 });
+    assert!(
+        matches!(result(&r[0], THREATSIEVE), ProviderResult::Failed(e) if e.contains("timed out"))
+    );
+    // No failure on record, so the retry asks again rather than backing off.
+    assert!(
+        store
+            .enrich_failures(Observable::ip("203.0.113.7").unwrap())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    ts.set(Mode::Answer);
+    let later = Deps {
+        now_ms: NOW + 120_000,
+        ..d
+    };
+    let r = process_batch(&[ip("203.0.113.7", "t1")], &later).await;
+    assert_eq!(r[0].0, Outcome::Ack);
+    assert!(matches!(
+        result(&r[0], THREATSIEVE),
+        ProviderResult::Written { .. }
+    ));
+    assert_eq!(ts.calls(), 2);
+}
+
+#[tokio::test]
+async fn spellings_threatsieve_folds_together_share_one_answer() {
+    let store = MemoryStore::new();
+    let ts = FakeThreatSieve::new();
+    // Foiled keeps URL hosts as written; ThreatSieve folds them and answers
+    // once, under the first spelling sent.
+    ts.set(Mode::Body(
+        serde_json::json!({
+            "as_of": "2026-10-18T01:03:03.000Z",
+            "results": [{
+                "type": "url",
+                "value": "https://stage2.example.invalid/x.sh",
+                "input": "https://Stage2.Example.INVALID/x.sh",
+                "found": true,
+                "entity_id": "obs_demo_url",
+                "ttl_seconds": 3600,
+                "pending_sources": [],
+                "reputation": { "classification": "malicious", "score": 70, "confidence": 60, "scanner": null, "tags": [] },
+                "network": null,
+                "cve": null,
+                "relationships": [],
+                "sources": [{ "source_id": "mitre", "redistributable": true, "commercial_use": true }]
+            }]
+        })
+        .to_string(),
+    ));
+    let c = config();
+    let d = Deps {
+        store: &store,
+        threatsieve: Some(&ts),
+        secret: &secrets,
+        asn: None,
+        config: &c,
+        now_ms: NOW,
+    };
+    let url = |v: &str| {
+        msg(
+            Observable::new(foiled_core::enrichment::ObservableKind::Url, v).unwrap(),
+            "t1",
+            Priority::High,
+        )
+    };
+    let batch = [
+        url("https://Stage2.Example.INVALID/x.sh"),
+        url("https://stage2.example.invalid/x.sh"),
+        // Path case matters: a different URL, left out of the answer.
+        url("https://stage2.example.invalid/X.SH"),
+    ];
+    let r = process_batch(&batch, &d).await;
+    assert_eq!(ts.calls(), 1);
+    for report in &r[..2] {
+        assert!(
+            matches!(result(report, THREATSIEVE), ProviderResult::Written { facts, .. } if *facts > 0),
+            "{report:?}"
+        );
+    }
+    let rows = store.cache_entries();
+    let written: Vec<_> = rows
+        .iter()
+        .filter(|e| e.provider == THREATSIEVE && !e.facts.is_empty())
+        .collect();
+    assert_eq!(written.len(), 2, "one row per Foiled spelling, same answer");
+    // A value the answer left out is not cached as "not found".
+    assert!(
+        matches!(result(&r[2], THREATSIEVE), ProviderResult::Failed(e) if e.contains("no answer"))
+    );
+    assert!(!rows.iter().any(|e| e.observable.value.ends_with("X.SH")));
+}
+
+#[tokio::test]
+async fn the_purge_drops_expired_rows_and_stale_failures_only() {
+    use foiled_core::enrichment::CacheEntry;
+    let store = MemoryStore::new();
+    let row = |ip: &str, fetched_at: i64, ttl_secs: u64| CacheEntry {
+        provider: THREATSIEVE.into(),
+        observable: Observable::ip(ip).unwrap(),
+        fetched_at,
+        ttl_secs,
+        facts: Vec::new(),
+        tenant_id: None,
+    };
+    store.add_cache_entry(row("203.0.113.1", NOW - 7_200_000, 3600)); // expired
+    store.add_cache_entry(row("203.0.113.2", NOW - 7_200_000, 86_400)); // fresh
+    let day = 86_400_000;
+    for (ip, at, retry_at) in [
+        ("203.0.113.3", NOW - 2 * day, None),
+        ("203.0.113.4", NOW, None),
+    ] {
+        store
+            .record_enrich_failure(
+                THREATSIEVE,
+                Observable::ip(ip).unwrap(),
+                at,
+                "503".into(),
+                retry_at,
+            )
+            .await
+            .unwrap();
+    }
+    let counts = foiled_api::enrichment::purge(&store, NOW).await.unwrap();
+    assert_eq!(
+        (counts.expired, counts.past_retention, counts.failures),
+        (1, 0, 1),
+        "the shipped retention config is a dry run, so no cap-based deletes"
+    );
+    let left: Vec<_> = store
+        .cache_entries()
+        .into_iter()
+        .map(|e| e.observable.value)
+        .collect();
+    assert_eq!(left, ["203.0.113.2"]);
+    assert_eq!(
+        store
+            .enrich_failures(Observable::ip("203.0.113.4").unwrap())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }

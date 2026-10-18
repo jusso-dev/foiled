@@ -17,7 +17,7 @@ use foiled_core::audit::AuditRecord;
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::{Decoy, DecoyState, Reason};
-use foiled_core::enrich_pipeline::ProviderFailureRecord;
+use foiled_core::enrich_pipeline::{EnrichPurgeCounts, EnrichPurgePlan, ProviderFailureRecord};
 use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, SeenFrom};
 use serde::{Deserialize, Serialize};
@@ -451,6 +451,12 @@ pub trait Store: Send + Sync {
 
     /// Forget a provider's failures for an observable after it answers.
     fn clear_enrich_failure(&self, provider: &str, observable: Observable) -> StoreFuture<'_, ()>;
+
+    /// Purge the enrichment tables (#16): cache rows past their own TTL,
+    /// rows past their provider's retention cap when `plan.retention` is
+    /// set, and failure rows that no longer affect any backoff. Each
+    /// statement deletes at most `plan.batch` rows.
+    fn purge_enrichment(&self, plan: EnrichPurgePlan) -> StoreFuture<'_, EnrichPurgeCounts>;
 
     fn record_heartbeat(
         &self,

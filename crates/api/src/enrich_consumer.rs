@@ -1,7 +1,7 @@
 //! The `foiled-enrich` Queue consumer (#11).
 //!
-//! A queue batch holds up to ten messages, each one observable seen by one
-//! tenant. For every message the consumer skips providers with a fresh
+//! A queue batch holds up to 100 messages (`max_batch_size` in
+//! `wrangler.jsonc`), each one observable seen by one tenant. For every message the consumer skips providers with a fresh
 //! cache row the tenant may read, or a failure still backing off, and
 //! answers `local_asn` from the operator's ASN table. Everything that needs
 //! ThreatSieve is gathered across the batch and sent as one `POST
@@ -11,17 +11,25 @@
 //! otherwise rows kept for each tenant that asked (`threatsieve_restricted`,
 //! never exported).
 //!
+//! D1 cost, worst case: per message one cache read, one failure read, one
+//! `local_asn` write, one ThreatSieve write per scope (one, or one per
+//! asking tenant for a restricted answer) and one failure clear (only when a
+//! failure was on record); per lookup two or three budget statements and a
+//! prune. A full batch of 100 is about 500 queries, inside the Workers Paid
+//! plan's 1,000 per invocation; the Free plan's 50 needs `max_batch_size` 8
+//! or less (`docs/enrichment.md`).
+//!
 //! The I/O sits behind [`Store`], [`ProviderHttp`] and a secret lookup, so
 //! the whole flow is tested on the host with a fake ThreatSieve and no
 //! network. The Worker wiring is in `worker_glue`. Design:
 //! `docs/enrichment.md`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 
 use foiled_core::enrich_pipeline::{
-    EnrichConfig, EnrichMessage, LookupError, MAX_LOOKUP_BATCH, Mapped, Step, day_limit_for,
+    EnrichConfig, EnrichMessage, LookupError, MAX_LOOKUP_BATCH, Step, answer_for, day_limit_for,
     lookup_outcome, lookup_request, plan, valid_facts,
 };
 use foiled_core::enrichment::{
@@ -41,7 +49,27 @@ pub struct HttpReply {
     pub retry_after: Option<String>,
 }
 
-pub type HttpFuture<'a> = Pin<Box<dyn Future<Output = Result<HttpReply, String>> + 'a>>;
+/// Why a call produced no answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendError {
+    /// The timeout won. ThreatSieve may still have done the work (and spent
+    /// its source budgets), so the messages are retried later, not recorded
+    /// as a failure.
+    TimedOut,
+    /// The call failed, or the answer was unreadable or too large.
+    Failed(String),
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimedOut => write!(f, "timed out"),
+            Self::Failed(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+pub type HttpFuture<'a> = Pin<Box<dyn Future<Output = Result<HttpReply, SendError>> + 'a>>;
 
 /// Sends a request. The Worker implementation calls ThreatSieve over its
 /// service binding; tests use a fake.
@@ -99,6 +127,8 @@ pub enum Outcome {
 pub const STORE_RETRY_SECS: u32 = 30;
 /// Delay before retrying after a spent minute budget.
 pub const MINUTE_RETRY_SECS: u32 = 60;
+/// Delay before retrying after a lookup timed out.
+pub const TIMEOUT_RETRY_SECS: u32 = 120;
 
 pub type MessageReport = (Outcome, Vec<(String, ProviderResult)>);
 
@@ -116,6 +146,9 @@ fn retry(out: &mut MessageReport, delay_secs: u32) {
 pub async fn process_batch(msgs: &[EnrichMessage], d: &Deps<'_>) -> Vec<MessageReport> {
     let mut out: Vec<MessageReport> = msgs.iter().map(|_| (Outcome::Ack, Vec::new())).collect();
     let mut lookups: Vec<usize> = Vec::new();
+    // Observables with a ThreatSieve failure on record, so a success only
+    // spends a D1 query clearing the ones that have something to clear.
+    let mut had_failure: BTreeSet<Observable> = BTreeSet::new();
     for (i, msg) in msgs.iter().enumerate() {
         if !msg.problems().is_empty() {
             out[i].0 = Outcome::Drop;
@@ -134,7 +167,12 @@ pub async fn process_batch(msgs: &[EnrichMessage], d: &Deps<'_>) -> Vec<MessageR
             }
         };
         let failures = match d.store.enrich_failures(o.clone()).await {
-            Ok(f) => f,
+            Ok(f) => {
+                if f.iter().any(|f| f.provider == THREATSIEVE) {
+                    had_failure.insert(o.clone());
+                }
+                f
+            }
             Err(_) => {
                 retry(&mut out[i], STORE_RETRY_SECS);
                 continue;
@@ -160,7 +198,7 @@ pub async fn process_batch(msgs: &[EnrichMessage], d: &Deps<'_>) -> Vec<MessageR
         }
     }
     if !lookups.is_empty() {
-        threatsieve(msgs, &lookups, d, &mut out).await;
+        threatsieve(msgs, &lookups, &had_failure, d, &mut out).await;
     }
     out
 }
@@ -224,6 +262,7 @@ fn clip(s: &str) -> String {
 async fn threatsieve(
     msgs: &[EnrichMessage],
     lookups: &[usize],
+    had_failure: &BTreeSet<Observable>,
     d: &Deps<'_>,
     out: &mut [MessageReport],
 ) {
@@ -310,7 +349,15 @@ async fn threatsieve(
         };
         let reply = match reply {
             Ok(r) => r,
-            Err(e) => {
+            Err(SendError::TimedOut) => {
+                // Not a failure on record: retry these messages later.
+                mark(out, ProviderResult::Failed("threatsieve: timed out".into()));
+                for &i in &asked {
+                    retry(&mut out[i], TIMEOUT_RETRY_SECS);
+                }
+                continue;
+            }
+            Err(SendError::Failed(e)) => {
                 let r = failed(format!("threatsieve: {e}"), None).await;
                 mark(out, r);
                 continue;
@@ -324,26 +371,36 @@ async fn threatsieve(
             d.config,
         ) {
             Ok(mapped) => {
-                let by: BTreeMap<Observable, Mapped> = mapped
-                    .into_iter()
-                    .map(|m| (m.observable.clone(), m))
-                    .collect();
                 for o in chunk {
-                    // An observable left out of the answer is "not found".
-                    let m = by.get(o).cloned().unwrap_or_else(|| Mapped {
-                        observable: o.clone(),
-                        restricted: false,
-                        found: false,
-                        pending: false,
-                        error: None,
-                        facts: Vec::new(),
-                        ttl_secs: d.config.cache.negative_ttl_secs,
-                    });
                     let askers: Vec<usize> = asked
                         .iter()
                         .copied()
                         .filter(|&i| &msgs[i].observable == o)
                         .collect();
+                    // ThreatSieve answers every value it accepts, folding
+                    // spellings it treats as one (`answer_for`). A value
+                    // still left out is not cached as "not found": it backs
+                    // off like a failure.
+                    let Some(m) = answer_for(o, &mapped) else {
+                        let error = "threatsieve: no answer for this value".to_string();
+                        let _ = d
+                            .store
+                            .record_enrich_failure(
+                                THREATSIEVE,
+                                o.clone(),
+                                d.now_ms,
+                                error.clone(),
+                                None,
+                            )
+                            .await;
+                        for &i in &askers {
+                            out[i].1.push((
+                                THREATSIEVE.to_string(),
+                                ProviderResult::Failed(error.clone()),
+                            ));
+                        }
+                        continue;
+                    };
                     // A value ThreatSieve rejected is not cached; it backs
                     // off like any failure.
                     if let Some(code) = &m.error {
@@ -394,7 +451,9 @@ async fn threatsieve(
                             }
                         }
                     }
-                    let _ = d.store.clear_enrich_failure(THREATSIEVE, o.clone()).await;
+                    if result.is_some() && had_failure.contains(o) {
+                        let _ = d.store.clear_enrich_failure(THREATSIEVE, o.clone()).await;
+                    }
                     for &i in &askers {
                         match &result {
                             Some(r) => out[i].1.push((THREATSIEVE.to_string(), r.clone())),

@@ -48,6 +48,22 @@ pub fn bundled_enrich_config() -> Option<&'static foiled_core::enrich_pipeline::
         .as_ref()
 }
 
+/// `show_restricted_to_requester` from the bundled
+/// `configs/enrichment.yaml`. Anything but an explicit `true` keeps a
+/// tenant's own restricted ThreatSieve answers hidden from it too.
+pub fn show_restricted_to_requester() -> bool {
+    static PARSED: OnceLock<bool> = OnceLock::new();
+    *PARSED.get_or_init(|| {
+        serde_json::from_str::<serde_json::Value>(ENRICHMENT)
+            .ok()
+            .and_then(|v| {
+                v.get("show_restricted_to_requester")
+                    .and_then(serde_json::Value::as_bool)
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// `show_to_tenants` from the bundled `configs/enrichment.yaml`. Anything
 /// but an explicit `true` keeps third-party Facts hidden.
 pub fn show_third_party_to_tenants() -> bool {
@@ -98,13 +114,15 @@ pub async fn cached_facts(
         return CachedFacts::default();
     }
     let now_ms = (state.clock)();
+    let show_restricted = show_restricted_to_requester();
     let rows = match state
         .store
         .enrichment_cache(
             observables,
             now_ms,
             state.limits.enrichment_lookup_statements,
-            Some(tenant_id.to_string()),
+            // Not opted in: do not even read the tenant's restricted rows.
+            show_restricted.then(|| tenant_id.to_string()),
         )
         .await
     {
@@ -120,6 +138,7 @@ pub async fn cached_facts(
         now_ms,
         tenant_id: Some(tenant_id),
         show_third_party: show_third_party_to_tenants(),
+        show_restricted_to_requester: show_restricted,
     };
     CachedFacts {
         facts: usable_facts(&rows, policy, bundled_retention())
@@ -128,6 +147,19 @@ pub async fn cached_facts(
             .collect(),
         unavailable: false,
     }
+}
+
+/// Purge the enrichment tables (#16), called by the Worker's cron. Cache
+/// rows past their own TTL and stale failure rows always go (no reader
+/// can use them); rows past their provider's retention cap go only when
+/// the retention purge is enabled and not a dry run. Each statement is
+/// bounded, so a backlog drains over several runs.
+pub async fn purge(
+    store: &dyn crate::store::Store,
+    now_ms: i64,
+) -> Result<foiled_core::enrich_pipeline::EnrichPurgeCounts, crate::store::StoreError> {
+    let plan = foiled_core::enrich_pipeline::enrich_purge_plan(bundled_retention(), now_ms);
+    store.purge_enrichment(plan).await
 }
 
 #[cfg(test)]
@@ -141,6 +173,7 @@ mod tests {
             *bundled_retention()
         );
         assert!(!show_third_party_to_tenants(), "shipped value");
+        assert!(!show_restricted_to_requester(), "shipped value");
         let c = bundled_enrich_config().expect("shipped config parses");
         assert_eq!(c.queue, "foiled-enrich");
     }

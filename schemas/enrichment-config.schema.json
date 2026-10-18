@@ -48,7 +48,12 @@
     },
     "show_to_tenants": {
       "type": "boolean",
-      "description": "When false, Facts from third-party providers are left out of API responses. Provenance-checked ThreatSieve answers and a tenant's own restricted answers are still shown (docs/enrichment.md)."
+      "description": "When false, Facts from third-party providers are left out of API responses. ThreatSieve answers whose every source allows redistribution and commercial use are still shown (docs/enrichment.md)."
+    },
+    "show_restricted_to_requester": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, a tenant sees the restricted ThreatSieve answers (a source with commercial_use or redistributable false or unknown) its own lookups fetched. Off by default; a licence decision for the operator's counsel. Never exported either way."
     },
     "providers": {
       "type": "object",
