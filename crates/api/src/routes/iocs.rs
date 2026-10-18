@@ -110,7 +110,9 @@ async fn search(
     // Clustering only when filtering by campaign; otherwise `campaign_ids`
     // come from the registry.
     let campaigns = if q.campaign_id.is_some() {
-        Campaigns::Full
+        Campaigns::Full {
+            record: crate::routes::attempts::canonical_window(q.since, q.until),
+        }
     } else {
         Campaigns::Registry
     };

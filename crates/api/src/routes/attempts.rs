@@ -112,12 +112,15 @@ pub(crate) enum Iocs {
 /// How a window gets its campaigns (#33).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Campaigns {
-    /// Cluster (needs `Iocs::Attach`), replay analyst actions, update the
-    /// registry, and fill `campaign_id` and `campaign_ids`.
-    Full,
+    /// Cluster (needs `Iocs::Attach`), replay analyst actions, and fill
+    /// `campaign_id` and `campaign_ids`. `record` writes what changed to
+    /// the registry; only reads of the canonical window (see
+    /// [`canonical_window`]) set it, so ids never depend on which window a
+    /// caller happened to read first.
+    Full { record: bool },
     /// Fill `campaign_id` and `campaign_ids` from the registry only: one
     /// store read, no clustering and no actions. Ids are as of the last
-    /// full read, which every list and campaign read makes.
+    /// recording read of the canonical window.
     Registry,
     /// Nothing: `campaign_id` stays null.
     Skip,
@@ -177,9 +180,9 @@ pub(crate) async fn window_model(
         Iocs::Skip => foiled_core::ioc::Extraction::default(),
     };
     let (clustering, inputs) = match campaigns {
-        Campaigns::Full => {
+        Campaigns::Full { record } => {
             let inputs = cluster_inputs(state, tenant_id, &attempts, &events).await?;
-            let c = run_clustering(state, tenant_id, &inputs, &attempts, &x, true).await;
+            let c = run_clustering(state, tenant_id, &inputs, &attempts, &x, record).await;
             foiled_core::campaign::attach(&mut attempts, &mut x, &c);
             (c, Some(inputs))
         }
@@ -207,6 +210,13 @@ pub(crate) async fn window_model(
         inputs,
         truncated,
     })
+}
+
+/// True for the canonical window: the default 7 days up to now, with no
+/// `since` or `until` from the caller. Only reads of it write the campaign
+/// registry.
+pub(crate) fn canonical_window(since: Option<i64>, until: Option<i64>) -> bool {
+    since.is_none() && until.is_none()
 }
 
 /// What campaign clustering reads besides the attempts and IOCs.
@@ -417,7 +427,9 @@ async fn list(
         since,
         until,
         Iocs::Attach,
-        Campaigns::Full,
+        Campaigns::Full {
+            record: canonical_window(q.since, q.until),
+        },
     )
     .await?;
     let (attempts, events, truncated) = (m.attempts, m.events, m.truncated);

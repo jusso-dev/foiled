@@ -25,7 +25,7 @@ use crate::AppState;
 use crate::auth::Auth;
 use crate::error::ApiError;
 use crate::routes::attempts::{
-    Campaigns, Iocs, WindowModel, run_clustering, window_bounds, window_model,
+    Campaigns, Iocs, WindowModel, canonical_window, run_clustering, window_bounds, window_model,
 };
 use crate::routes::page_limit;
 
@@ -169,14 +169,16 @@ async fn model(
     since: Option<i64>,
     until: Option<i64>,
 ) -> Result<WindowModel, ApiError> {
-    let (since, until) = window_bounds(state, since, until);
+    let (from, to) = window_bounds(state, since, until);
     window_model(
         state,
         tenant_id,
-        since,
-        until,
+        from,
+        to,
         Iocs::Attach,
-        Campaigns::Full,
+        Campaigns::Full {
+            record: canonical_window(since, until),
+        },
     )
     .await
 }
@@ -264,9 +266,21 @@ async fn get_one(
     }
     // Recorded, but not listed in this window: a stub, so ids on attempts
     // always resolve.
+    // An analyst merge is replayed, not recorded, so say where it went.
+    let merged_by_analyst = m
+        .campaigns
+        .campaigns
+        .iter()
+        .find(|c| c.analyst.merged_from.contains(&campaign_id))
+        .map(|c| c.campaign_id.clone());
     stored(&state, &who.tenant_id, &campaign_id)
         .await?
-        .map(|c| Json(CampaignView::Stub(CampaignStub::new(&who.tenant_id, c))))
+        .map(|mut c| {
+            if c.merged_into.is_none() {
+                c.merged_into = merged_by_analyst;
+            }
+            Json(CampaignView::Stub(CampaignStub::new(&who.tenant_id, c)))
+        })
         .ok_or_else(|| ApiError::not_found("campaign"))
 }
 
@@ -486,7 +500,16 @@ async fn act(
 
     let mut inputs = m.inputs.take().expect("full model has inputs");
     inputs.actions.push(action.clone());
-    let after = run_clustering(&state, &who.tenant_id, &inputs, &m.attempts, &m.iocs, true).await;
+    let record = canonical_window(q.since, q.until);
+    let after = run_clustering(
+        &state,
+        &who.tenant_id,
+        &inputs,
+        &m.attempts,
+        &m.iocs,
+        record,
+    )
+    .await;
     let campaign = after.get(&campaign_id).cloned();
     Ok(Json(ActionResult { action, campaign }))
 }

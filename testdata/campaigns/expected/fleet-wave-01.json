@@ -80,16 +80,16 @@
           "ioc_id": "ioc_8a63c09854314685b5ec5f02"
         },
         {
-          "signal_id": "campaign:behaviour_fingerprint:7a168682108e",
+          "signal_id": "campaign:behaviour_fingerprint:41bb54274bbc",
           "feature": "behaviour_fingerprint",
           "families": [
             "ttp"
           ],
           "strength": "medium",
           "weight": 70,
-          "display": "bf1:121466c817833a1300d6dbfce7b558ac",
+          "display": "bf2:c9c122c2aacfcce3cb84e34b54a301f1",
           "with_attempt_id": "att_6b578aee5d058370fb9c6e44",
-          "ioc_id": "ioc_7a168682108eaf31158071a8"
+          "ioc_id": "ioc_41bb54274bbc8b45b9484528"
         },
         {
           "signal_id": "campaign:cmdline:e1b6ef4d11ff",
@@ -188,16 +188,16 @@
           "ioc_id": "ioc_8a63c09854314685b5ec5f02"
         },
         {
-          "signal_id": "campaign:behaviour_fingerprint:7a168682108e",
+          "signal_id": "campaign:behaviour_fingerprint:41bb54274bbc",
           "feature": "behaviour_fingerprint",
           "families": [
             "ttp"
           ],
           "strength": "medium",
           "weight": 70,
-          "display": "bf1:121466c817833a1300d6dbfce7b558ac",
+          "display": "bf2:c9c122c2aacfcce3cb84e34b54a301f1",
           "with_attempt_id": "att_0e2effa1697050a0be41765f",
-          "ioc_id": "ioc_7a168682108eaf31158071a8"
+          "ioc_id": "ioc_41bb54274bbc8b45b9484528"
         },
         {
           "signal_id": "campaign:cmdline:e1b6ef4d11ff",
@@ -289,7 +289,7 @@
       "behaviour_fingerprints": {
         "count": 1,
         "values": [
-          "bf1:121466c817833a1300d6dbfce7b558ac"
+          "bf2:c9c122c2aacfcce3cb84e34b54a301f1"
         ]
       },
       "cmdlines": {
@@ -358,7 +358,7 @@
   },
   "shared_ioc_ids": [
     "ioc_2a326d8ccdd822cfbc1adc2c",
-    "ioc_7a168682108eaf31158071a8",
+    "ioc_41bb54274bbc8b45b9484528",
     "ioc_8a63c09854314685b5ec5f02",
     "ioc_8c5e85c488ba555c4cd816bc",
     "ioc_daf259e5ed85436b18bb7a11",
@@ -395,11 +395,11 @@
         "ref": "ioc_8a63c09854314685b5ec5f02"
       },
       {
-        "signal_id": "campaign:behaviour_fingerprint:7a168682108e",
+        "signal_id": "campaign:behaviour_fingerprint:41bb54274bbc",
         "source": "campaign_cluster",
         "weight": 70,
-        "summary": "2 attempts share behaviour fingerprint bf1:121466c817833a1300d6dbfce7b558ac",
-        "ref": "ioc_7a168682108eaf31158071a8"
+        "summary": "2 attempts share behaviour fingerprint bf2:c9c122c2aacfcce3cb84e34b54a301f1",
+        "ref": "ioc_41bb54274bbc8b45b9484528"
       },
       {
         "signal_id": "campaign:cmdline:e1b6ef4d11ff",

@@ -485,3 +485,28 @@ async fn campaign_writes_are_rate_limited_per_token() {
     let (st, _) = send(&s, "lead", "POST", &path, body).await;
     assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[tokio::test]
+async fn only_the_canonical_window_writes_the_registry() {
+    let (s, store) = harness().await;
+    let since = T0;
+    let (st, b) = get(&s, "analyst", &format!("/v0/campaigns?since={since}")).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(items(&b).len(), 2);
+    let (_, _) = get(&s, "analyst", &format!("/v0/attempts?since={since}")).await;
+    assert!(
+        store.campaign_registry("t1").members.is_empty(),
+        "caller-chosen windows never write"
+    );
+    let (_, b) = get(&s, "analyst", "/v0/campaigns").await;
+    let reg = store.campaign_registry("t1");
+    assert_eq!(reg.campaigns.len(), 2);
+    for c in items(&b) {
+        let id = c["campaign_id"].as_str().unwrap();
+        assert!(reg.campaigns.contains_key(id));
+    }
+    // Replaying the same read writes nothing new.
+    let before = store.campaign_registry("t1");
+    let (_, _) = get(&s, "analyst", "/v0/campaigns").await;
+    assert_eq!(store.campaign_registry("t1"), before);
+}

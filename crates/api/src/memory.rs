@@ -110,6 +110,15 @@ impl MemoryStore {
         self.lock().facts.push((tenant_id.to_string(), facts));
     }
 
+    /// The campaign registry recorded for a tenant (tests).
+    pub fn campaign_registry(&self, tenant_id: &str) -> foiled_core::campaign::Registry {
+        self.lock()
+            .campaign_registry
+            .get(tenant_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         // A poisoned lock only happens after a panic in a test; keep going.
         self.inner.lock().unwrap_or_else(|e| e.into_inner())

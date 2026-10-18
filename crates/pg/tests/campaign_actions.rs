@@ -110,14 +110,110 @@ async fn registry_keeps_created_at_widens_times_and_counts_members() {
             ..rec(10, 40, 100)
         }]
     );
+    // A stale writer cannot clear merged_into, point it at itself, make the
+    // campaign younger, or move a member to a newer campaign.
+    let newer = StoredCampaign {
+        campaign_id: "cmp_bbbbbbbbbbbbbbbbbbbbbbbb".into(),
+        merged_into: Some("cmp_0123456789abcdef01234567".into()),
+        ..rec(10, 20, 500)
+    };
+    update_campaign_registry(
+        &c,
+        &tenant,
+        &RegistryUpdate {
+            campaigns: vec![newer.clone()],
+            members: vec![],
+        },
+        300,
+    )
+    .await
+    .unwrap();
+    let stale = RegistryUpdate {
+        campaigns: vec![
+            StoredCampaign {
+                merged_into: None,
+                ..newer.clone()
+            },
+            rec(10, 20, 999),
+        ],
+        members: vec![MemberRecord {
+            campaign_id: newer.campaign_id.clone(),
+            ..member("att_a")
+        }],
+    };
+    update_campaign_registry(&c, &tenant, &stale, 400)
+        .await
+        .unwrap();
+    let got = campaign_records(&c, &tenant, std::slice::from_ref(&newer.campaign_id))
+        .await
+        .unwrap();
+    assert_eq!(got[0].merged_into, newer.merged_into);
+    let old = campaign_records(&c, &tenant, &["cmp_0123456789abcdef01234567".into()])
+        .await
+        .unwrap();
+    assert_eq!(old[0].created_at, 100);
+    let selfish = RegistryUpdate {
+        campaigns: vec![StoredCampaign {
+            merged_into: Some("cmp_0123456789abcdef01234567".into()),
+            ..rec(10, 20, 100)
+        }],
+        members: vec![],
+    };
+    update_campaign_registry(&c, &tenant, &selfish, 500)
+        .await
+        .unwrap();
+    let old = campaign_records(&c, &tenant, &["cmp_0123456789abcdef01234567".into()])
+        .await
+        .unwrap();
+    assert_eq!(old[0].merged_into, None, "never merged into itself");
+
     let m = campaign_memberships(&c, &tenant, &["att_a".into(), "att_x".into()])
         .await
         .unwrap();
-    assert_eq!(m.len(), 1);
+    assert_eq!(
+        m,
+        vec![(
+            "att_a".to_string(),
+            "cmp_0123456789abcdef01234567".to_string()
+        )],
+        "members only move to older campaigns"
+    );
     assert!(
         campaign_memberships(&c, "other", &["att_a".into()])
             .await
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn a_first_read_writes_thousands_of_rows_in_two_statements() {
+    let c = connect().await;
+    let tenant = format!("bulk-{}", std::process::id());
+    let campaigns: Vec<StoredCampaign> = (0..300)
+        .map(|i| StoredCampaign {
+            campaign_id: format!("cmp_{i:024x}"),
+            created_at: 1,
+            first_seen: 10,
+            last_seen: 20,
+            merged_into: None,
+            attempts: 0,
+        })
+        .collect();
+    let members: Vec<MemberRecord> = (0..6000)
+        .map(|i| MemberRecord {
+            attempt_id: format!("att_{i:024x}"),
+            campaign_id: format!("cmp_{:024x}", i % 300),
+            attempt_first_seen: 10,
+        })
+        .collect();
+    let up = RegistryUpdate { campaigns, members };
+    update_campaign_registry(&c, &tenant, &up, 1).await.unwrap();
+    // Replaying the same update is a no-op.
+    update_campaign_registry(&c, &tenant, &up, 2).await.unwrap();
+    let got = campaign_records(&c, &tenant, &["cmp_000000000000000000000007".into()])
+        .await
+        .unwrap();
+    assert_eq!(got[0].attempts, 20);
 }

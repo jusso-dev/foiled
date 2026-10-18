@@ -509,38 +509,88 @@ pub async fn campaign_records(
         .collect())
 }
 
-/// Apply a registry update in one transaction: `created_at` is kept, first
-/// and last seen only widen, memberships are replaced.
+/// Apply a registry update in one transaction, as two multi-row upserts.
+/// Writes converge whatever order concurrent or stale readers commit in:
+/// `created_at` keeps the oldest value, first and last seen only widen,
+/// `merged_into` is write-once (and a CHECK keeps it off the campaign
+/// itself), and a membership only moves to an older campaign (smaller
+/// `created_at`, then id).
 pub async fn update_campaign_registry(
     client: &Client,
     tenant_id: &str,
     update: &foiled_core::campaign::RegistryUpdate,
     now: i64,
 ) -> Result<(), Error> {
+    if update.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<&str> = update
+        .campaigns
+        .iter()
+        .map(|c| c.campaign_id.as_str())
+        .collect();
+    let created: Vec<i64> = update.campaigns.iter().map(|c| c.created_at).collect();
+    let first: Vec<i64> = update.campaigns.iter().map(|c| c.first_seen).collect();
+    let last: Vec<i64> = update.campaigns.iter().map(|c| c.last_seen).collect();
+    let merged: Vec<Option<&str>> = update
+        .campaigns
+        .iter()
+        .map(|c| c.merged_into.as_deref().filter(|m| *m != c.campaign_id))
+        .collect();
+    let attempts: Vec<&str> = update
+        .members
+        .iter()
+        .map(|m| m.attempt_id.as_str())
+        .collect();
+    let member_of: Vec<&str> = update
+        .members
+        .iter()
+        .map(|m| m.campaign_id.as_str())
+        .collect();
+    let seen: Vec<i64> = update
+        .members
+        .iter()
+        .map(|m| m.attempt_first_seen)
+        .collect();
     client.batch_execute("BEGIN").await?;
     let step = async {
-        for c in &update.campaigns {
+        if !ids.is_empty() {
             client
                 .execute(
                     "INSERT INTO campaigns (tenant_id, campaign_id, created_at, first_seen, last_seen, merged_into, updated_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     SELECT $1, t.c, t.cr, t.f, t.l, t.m, $7
+                     FROM UNNEST($2::text[], $3::bigint[], $4::bigint[], $5::bigint[], $6::text[]) AS t(c, cr, f, l, m)
                      ON CONFLICT (tenant_id, campaign_id) DO UPDATE SET
+                       created_at = LEAST(campaigns.created_at, EXCLUDED.created_at),
                        first_seen = LEAST(campaigns.first_seen, EXCLUDED.first_seen),
                        last_seen = GREATEST(campaigns.last_seen, EXCLUDED.last_seen),
-                       merged_into = EXCLUDED.merged_into,
+                       merged_into = COALESCE(campaigns.merged_into, EXCLUDED.merged_into),
                        updated_at = EXCLUDED.updated_at",
-                    &[&tenant_id, &c.campaign_id, &c.created_at, &c.first_seen, &c.last_seen, &c.merged_into, &now],
+                    &[&tenant_id, &ids, &created, &first, &last, &merged, &now],
                 )
                 .await?;
         }
-        for m in &update.members {
+        if !attempts.is_empty() {
             client
                 .execute(
                     "INSERT INTO campaign_members (tenant_id, attempt_id, campaign_id, attempt_first_seen, recorded_at)
-                     VALUES ($1, $2, $3, $4, $5)
+                     SELECT $1, t.a, t.c, t.f, $5
+                     FROM UNNEST($2::text[], $3::text[], $4::bigint[]) AS t(a, c, f)
                      ON CONFLICT (tenant_id, attempt_id) DO UPDATE SET
-                       campaign_id = EXCLUDED.campaign_id, recorded_at = EXCLUDED.recorded_at",
-                    &[&tenant_id, &m.attempt_id, &m.campaign_id, &m.attempt_first_seen, &now],
+                       campaign_id = EXCLUDED.campaign_id,
+                       recorded_at = EXCLUDED.recorded_at
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM campaigns o
+                         WHERE o.tenant_id = campaign_members.tenant_id
+                           AND o.campaign_id = campaign_members.campaign_id)
+                       OR EXISTS (
+                         SELECT 1 FROM campaigns n, campaigns o
+                         WHERE n.tenant_id = campaign_members.tenant_id
+                           AND n.campaign_id = EXCLUDED.campaign_id
+                           AND o.tenant_id = campaign_members.tenant_id
+                           AND o.campaign_id = campaign_members.campaign_id
+                           AND (n.created_at, n.campaign_id) < (o.created_at, o.campaign_id))",
+                    &[&tenant_id, &attempts, &member_of, &seen, &now],
                 )
                 .await?;
         }
