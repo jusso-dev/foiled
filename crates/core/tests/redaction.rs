@@ -799,8 +799,10 @@ fn command_table_and_nothing_main_hid() {
 
 #[test]
 fn redaction_stays_linear_on_hostile_command_lines() {
-    let started = std::time::Instant::now();
-    for chunk in [
+    // Compare the time for n and 4n bytes rather than an absolute limit, so a
+    // loaded machine slows both sides alike. Linear work gives a ratio near 4;
+    // quadratic work gives about 16.
+    const CHUNKS: [&str; 11] = [
         "--password ",
         "sh -c '",
         "\"",
@@ -812,11 +814,27 @@ fn redaction_stays_linear_on_hostile_command_lines() {
         "@",
         "%40",
         "-u",
-    ] {
-        let s = chunk.repeat(200_000 / chunk.len());
-        for kind in [TextKind::Text, TextKind::CommandLine] {
-            let _ = redact_as(&s, kind);
-        }
+    ];
+    fn best_of_three(len: usize) -> std::time::Duration {
+        let inputs: Vec<String> = CHUNKS.iter().map(|c| c.repeat(len / c.len())).collect();
+        (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                for s in &inputs {
+                    for kind in [TextKind::Text, TextKind::CommandLine] {
+                        let _ = redact_as(s, kind);
+                    }
+                }
+                started.elapsed()
+            })
+            .min()
+            .unwrap()
     }
-    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+    let small = best_of_three(20_000);
+    let large = best_of_three(80_000);
+    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
+    assert!(
+        ratio < 10.0,
+        "4x input took {ratio:.1}x as long ({small:?} -> {large:?})"
+    );
 }
