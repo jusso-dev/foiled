@@ -136,8 +136,10 @@ pub fn parse_timestamp(s: &str) -> Option<i64> {
 /// other than zeros can match no stored version and are kept as given.
 fn millisecond_form(t: &str) -> String {
     let frac = t.get(20..t.len() - 1).unwrap_or("");
+    // A leap second has no millisecond form of its own: keep it as given.
+    let leap = t.get(17..19) == Some("60");
     match parse_timestamp(t) {
-        Some(ms) if frac.bytes().skip(3).all(|b| b == b'0') => timestamp(ms),
+        Some(ms) if !leap && frac.bytes().skip(3).all(|b| b == b'0') => timestamp(ms),
         _ => t.to_string(),
     }
 }
@@ -628,6 +630,10 @@ mod tests {
                 "{t}"
             );
         }
+        assert_eq!(
+            VersionFilter::parse("2026-12-31T23:59:60Z").unwrap().exact,
+            vec!["2026-12-31T23:59:60Z".to_string()]
+        );
         for bad in ["yesterday", "", ",", "last,soon"] {
             assert_eq!(VersionFilter::parse(bad), None, "{bad}");
         }

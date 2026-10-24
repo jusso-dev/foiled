@@ -44,7 +44,7 @@ function api(extra?: (c: ApiCall) => unknown) {
 }
 
 const CONFIRM_SSL =
-  "/launch?entry=emulator/ssl-vpn/portal-generic&step=confirm&lifetime=3600&placement=sensor&sensor=sen-0001&label=edge+vpn";
+  "/launch?entry=emulator/ssl-vpn/portal-generic&step=confirm&lifetime=3600&placement=sensor&sensor=sen-0001&label=edge+vpn&key=sssssssssssssssssssssssssssssssssssssssssss";
 
 describe("launch wizard", () => {
   it("lists sandbox and emulation entries and hides drafts until asked", async () => {
@@ -113,11 +113,15 @@ describe("launch wizard", () => {
 
   it("keeps the idempotency key from step 1 across confirm reloads", async () => {
     const { cookie } = await signIn();
-    const key = "s".repeat(43);
     for (let i = 0; i < 2; i++) {
-      const r = expectPage(await page(envWith(api()), `${CONFIRM_SSL}&key=${key}`, { cookie }));
-      expect(r.html).toContain(`name="idempotency_key" value="${key}"`);
+      const r = expectPage(await page(envWith(api()), CONFIRM_SSL, { cookie }));
+      expect(r.html).toContain(`name="idempotency_key" value="${"s".repeat(43)}"`);
     }
+    // A confirm URL without a key gets one before the form renders.
+    const to = expectRedirect(
+      await page(envWith(api()), CONFIRM_SSL.replace(/&key=s+/, ""), { cookie }),
+    );
+    expect(to).toMatch(/&key=[A-Za-z0-9_-]{43}$/);
   });
 
   const launchForm = (csrf: string, extra: Record<string, string> = {}) => ({

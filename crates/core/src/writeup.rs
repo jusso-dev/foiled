@@ -644,10 +644,12 @@ pub fn lint(w: &WriteUp, ctx: &LintContext) -> Vec<Finding> {
                 .count();
             l.prose(&location, &markdown::inline_text(inlines));
             // The page renders link targets too: hold them to the same
-            // privacy rules, decoded so %40 or %2E hide nothing.
+            // privacy rules, decoded so %40 or %2E hide nothing, and split at
+            // URL delimiters so `a@b.example&ref=1` still reads as an email.
             for i in inlines {
                 if let Inline::Link { href, .. } = i {
-                    l.privacy(&location, &percent_decode(href));
+                    let parts = percent_decode(href).replace(['/', '?', '&', '=', '#'], " ");
+                    l.privacy(&location, &parts);
                 }
             }
         }
@@ -1031,7 +1033,7 @@ mod tests {
         // Link targets are checked as well as labels, decoded.
         let mut link = sample();
         link.body_md
-            .push_str("\n[log](https://10.1.2.3/log?contact=alice%40corp.example)\n");
+            .push_str("\n[log](https://10.1.2.3/log?contact=alice%40corp.example&ref=1)\n");
         let r = rules(&link, &ctx());
         for want in ["ip-address", "personal-information"] {
             assert!(r.contains(&want.to_string()), "{want}: {r:?}");

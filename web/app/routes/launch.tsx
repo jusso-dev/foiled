@@ -63,6 +63,12 @@ export async function loader(args: Route.LoaderArgs) {
   const confirm = params.get("step") === "confirm";
   const check = checkLaunch(params, entry, sensors, canElevate);
   const showConfirm = confirm && Object.keys(check.errors).length === 0;
+  const asked = params.get("key") ?? "";
+  if (showConfirm && !/^[A-Za-z0-9_-]{16,128}$/.test(asked)) {
+    // Put a key in the URL first, so every reload of this step reuses it.
+    params.set("key", randomToken());
+    throw redirect(`/launch?${params}`);
+  }
   const recent = showConfirm
     ? await load(request, op.api.listAudit({ action: "decoy.create", limit: 5 }))
     : null;
@@ -76,10 +82,7 @@ export async function loader(args: Route.LoaderArgs) {
     errors: confirm ? check.errors : {},
     // Minted on step 1 and carried in the confirm URL, so a failed launch
     // that re-runs this loader retries with the same key, not a new decoy.
-    idempotencyKey:
-      showConfirm && /^[A-Za-z0-9_-]{16,128}$/.test(params.get("key") ?? "")
-        ? (params.get("key") as string)
-        : randomToken(),
+    idempotencyKey: showConfirm ? asked : randomToken(),
     recent: recent?.ok ? recent.data.items : null,
     canLaunch,
     canElevate,
