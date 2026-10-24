@@ -72,4 +72,12 @@ FOILED_TEST_PG_URL=postgres://user:pass@localhost:5432/foiled_test \
   cargo test -p foiled-pg -- --include-ignored
 ```
 
-Apply schemas with `wrangler d1 migrations apply` (D1, from `crates/api/`) and `psql -f migrations/postgres/*.sql` (Postgres). This repository's automation never deploys.
+Apply schemas with `wrangler d1 migrations apply` (D1, from `crates/api/`) and, for Postgres, each file in order, stopping at the first error:
+
+```sh
+for f in migrations/postgres/*.sql; do
+  psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$f" || break
+done
+```
+
+`foiled_pg::migrate` applies the same files and records each in `schema_migrations`; the tests use it. This repository's automation never deploys.

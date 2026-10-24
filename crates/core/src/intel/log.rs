@@ -131,6 +131,17 @@ pub fn parse_timestamp(s: &str) -> Option<i64> {
     Some(((days * 86_400 + h * 3600 + mi * 60 + sec) * 1000) + ms)
 }
 
+/// A timestamp in the `.fffZ` form versions are stored in, so
+/// `01:02:03Z` names the version `01:02:03.000Z`. Sub-millisecond digits
+/// other than zeros can match no stored version and are kept as given.
+fn millisecond_form(t: &str) -> String {
+    let frac = t.get(20..t.len() - 1).unwrap_or("");
+    match parse_timestamp(t) {
+        Some(ms) if frac.bytes().skip(3).all(|b| b == b'0') => timestamp(ms),
+        _ => t.to_string(),
+    }
+}
+
 /// A version strictly after `latest`, and no earlier than `wanted`.
 fn after(latest: Option<&str>, wanted: i64) -> i64 {
     match latest.and_then(parse_timestamp) {
@@ -351,8 +362,9 @@ impl VersionFilter {
                 "last" => f.last = true,
                 "all" => f.all = true,
                 t if valid_timestamp(t) => {
-                    if !f.exact.iter().any(|e| e == t) {
-                        f.exact.push(t.to_string());
+                    let t = millisecond_form(t);
+                    if !f.exact.contains(&t) {
+                        f.exact.push(t);
                     }
                 }
                 _ => return None,
@@ -604,6 +616,18 @@ mod tests {
                 ..VersionFilter::NONE
             })
         );
+        // Any precision names the stored millisecond form.
+        for t in [
+            "2026-10-18T01:02:03Z",
+            "2026-10-18T01:02:03.0Z",
+            "2026-10-18T01:02:03.000000Z",
+        ] {
+            assert_eq!(
+                VersionFilter::parse(t).unwrap().exact,
+                vec!["2026-10-18T01:02:03.000Z".to_string()],
+                "{t}"
+            );
+        }
         for bad in ["yesterday", "", ",", "last,soon"] {
             assert_eq!(VersionFilter::parse(bad), None, "{bad}");
         }

@@ -233,7 +233,9 @@ export function windowFrom(params: URLSearchParams, now = Date.now()) {
   const key = oneOf(params, "window", Object.keys(WINDOWS) as WindowKey[]);
   return {
     key: key ?? ("7d" as WindowKey),
+    // Both ends from the same clock: the API's default `until` is its own
+    // now, read later, which would stretch a 31-day window past its limit.
     since: key ? now - WINDOWS[key] : undefined,
-    until: undefined,
+    until: key ? now : undefined,
   };
 }

@@ -33,7 +33,7 @@ export async function loader(args: Route.LoaderArgs) {
       ? {
           message:
             p.get("not_served") === "1"
-              ? "That export format is not served by this API yet. STIX, MISP and the IOC formats arrive with #13."
+              ? "This API does not serve that export format."
               : (FAILED[failed] ??
                 `The API returned an error (${failed.replace(/\D/g, "").slice(0, 3)}).`),
           format: format && format in EXPORT_FORMATS ? (format as ExportFormat) : null,
@@ -80,7 +80,7 @@ export default function Exports({ loaderData: d }: Route.ComponentProps) {
                 <input type="radio" name="format" value={f} defaultChecked={i === 0} required />{" "}
                 {EXPORT_FORMATS[f].label}
                 {EXPORT_FORMATS[f].gated ? (
-                  <span className="muted"> (confidence-gated, #13)</span>
+                  <span className="muted"> (confidence-gated)</span>
                 ) : null}
               </label>
             ))}

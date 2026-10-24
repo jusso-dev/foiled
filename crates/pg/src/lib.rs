@@ -56,6 +56,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         "0011_stix_log",
         include_str!("../../../migrations/postgres/0011_stix_log.sql"),
     ),
+    (
+        "0012_review_states_checks",
+        include_str!("../../../migrations/postgres/0012_review_states_checks.sql"),
+    ),
 ];
 
 /// Arbitrary constant key for the migration advisory lock.

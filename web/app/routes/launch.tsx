@@ -74,7 +74,12 @@ export async function loader(args: Route.LoaderArgs) {
     config: check.config,
     // Only show errors once the operator has asked to review.
     errors: confirm ? check.errors : {},
-    idempotencyKey: randomToken(),
+    // Minted on step 1 and carried in the confirm URL, so a failed launch
+    // that re-runs this loader retries with the same key, not a new decoy.
+    idempotencyKey:
+      showConfirm && /^[A-Za-z0-9_-]{16,128}$/.test(params.get("key") ?? "")
+        ? (params.get("key") as string)
+        : randomToken(),
     recent: recent?.ok ? recent.data.items : null,
     canLaunch,
     canElevate,
@@ -366,6 +371,7 @@ function Configure({ data }: { data: StepN }) {
           <Form method="get" className="form-grid">
             <input type="hidden" name="entry" value={entry.id} />
             <input type="hidden" name="step" value="confirm" />
+            <input type="hidden" name="key" value={data.idempotencyKey} />
             <div className="field">
               <label htmlFor={`${id}-label`}>Label (optional)</label>
               <input

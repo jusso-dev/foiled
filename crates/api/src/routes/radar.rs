@@ -64,6 +64,14 @@ pub(crate) fn product_labels(state: &AppState) -> BTreeMap<(Dimension, String), 
         .collect()
 }
 
+/// The latest time a JavaScript `Date` holds. Bounding caller times keeps the
+/// day arithmetic below from overflowing.
+const MAX_TIME_MS: i64 = 8_640_000_000_000_000;
+
+fn out_of_range(ts: i64) -> bool {
+    !(0..=MAX_TIME_MS).contains(&ts)
+}
+
 /// Read rollups and aggregate them. The tenant audience reads the caller's
 /// tenant only; the fleet audience reads every tenant.
 pub(crate) async fn build_feed(
@@ -78,6 +86,11 @@ pub(crate) async fn build_feed(
                 "key and product must be 1 to 200 characters",
             ));
         }
+    }
+    if [q.since, q.until].into_iter().flatten().any(out_of_range) {
+        return Err(ApiError::bad_request(
+            "since and until must be unix milliseconds between 0 and 8640000000000000",
+        ));
     }
     let now = (state.clock)();
     let until = q.until.unwrap_or(now);
@@ -170,6 +183,11 @@ async fn rollup(
     )
     .await?;
     let now = (state.clock)();
+    if out_of_range(body.day) {
+        return Err(ApiError::bad_request(
+            "day must have closed and be within the last 31 days",
+        ));
+    }
     let day = day_floor(body.day);
     if day + DAY_MS > now || day < day_floor(now) - 31 * DAY_MS {
         return Err(ApiError::bad_request(

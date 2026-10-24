@@ -172,6 +172,27 @@ async fn audiences_keep_tenants_apart() {
 }
 
 #[tokio::test]
+async fn out_of_range_times_are_refused_not_overflowed() {
+    let h = harness(NEXT_DAY).await;
+    for q in [
+        format!("until={}", i64::MAX),
+        format!("since={}&until={}", i64::MIN, FIXTURE_DAY),
+        "since=-1".to_string(),
+    ] {
+        let (st, b) = get(&h.state, "reader", &format!("/v0/radar?{q}")).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{q}: {b}");
+    }
+    let (st, b) = post(
+        &h.state,
+        "analyst",
+        "/v0/radar/rollups",
+        json!({"day": i64::MAX}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{b}");
+}
+
+#[tokio::test]
 async fn tenant_decoys_are_not_research_and_need_an_opt_in() {
     let mut h = harness(NEXT_DAY).await;
     // t1 is not a research tenant here: its decoys count as edge sensors

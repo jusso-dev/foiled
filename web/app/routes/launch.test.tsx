@@ -111,6 +111,15 @@ describe("launch wizard", () => {
     expect(r.html).toMatch(/name="idempotency_key" value="[A-Za-z0-9_-]{43}"/);
   });
 
+  it("keeps the idempotency key from step 1 across confirm reloads", async () => {
+    const { cookie } = await signIn();
+    const key = "s".repeat(43);
+    for (let i = 0; i < 2; i++) {
+      const r = expectPage(await page(envWith(api()), `${CONFIRM_SSL}&key=${key}`, { cookie }));
+      expect(r.html).toContain(`name="idempotency_key" value="${key}"`);
+    }
+  });
+
   const launchForm = (csrf: string, extra: Record<string, string> = {}) => ({
     csrf,
     entry: "emulator/ssl-vpn/portal-generic",

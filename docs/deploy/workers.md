@@ -72,7 +72,7 @@ Proposed names. The owning issue finalises each one.
 | `foiled-api` | `JOB_SIGNING_KEY` | #41 | Private key that signs host jobs. Hosts hold only the public key. |
 | `foiled-api` | `CF_CLIENT_CERT_API_TOKEN` | #31 | Cloudflare API token with only *Zone, SSL and Certificates, Edit* on the ingest zone. Signs enrolment and renewal CSRs with the Cloudflare-managed CA and revokes certificates. Without it enrolment is disabled; ingest still works. |
 | `foiled-api` | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | #9 | R2 API token, scoped to the `foiled-evidence` bucket with object read and write only, used to mint short-lived single-object upload URLs. The R2 binding cannot presign. |
-| `foiled-api` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #21, #14 | Validate Cloudflare Access JWTs in the Worker. Not strictly secret, but they identify your account, so they stay out of the tree. |
+| `foiled-api` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #21, #14 | Reserved for Access JWT validation in the API Worker, which is not built yet (see [Entry points and auth](#entry-points-and-auth)). Not strictly secret, but they identify your account, so they stay out of the tree. |
 | `foiled-api` | `TOKEN_PEPPER` | #21 | Pepper for hashing API tokens at rest in D1. |
 | `foiled-api` | `THREATSIEVE_API_KEY` | #11 | A ThreatSieve API key with scope `intel:read` only. Read by the `foiled-enrich` consumer and sent only over the `THREATSIEVE` Service Binding as a bearer token. Source keys (GreyNoise, CrowdSec and so on) live in ThreatSieve, not here ([enrichment.md](../enrichment.md#deploying-the-consumer)). |
 | `foiled-api` | `LLM_PROVIDER_API_KEY` (if an external model is used) | #28 | Key for an external model behind AI Gateway. |
@@ -84,14 +84,14 @@ Postgres credentials are not a Worker secret: they live in the Hyperdrive config
 
 ## Entry points and auth
 
-The control plane is never publicly reachable without auth.
+The control plane is never publicly reachable without auth. Two controls below are not built yet: Access JWT validation in the API Worker, and an ingest hostname that serves only ingest and job routes. Until they are, the edge (Access, the mTLS WAF rule) and the Worker's bearer-token and certificate checks are the boundary.
 
 | Entry point | Who uses it | Auth |
 | --- | --- | --- |
-| Console hostname on `foiled-web` | Operators in a browser | **Cloudflare Access** application with your identity provider and MFA. Both Workers validate the `Cf-Access-Jwt-Assertion` JWT (issuer and audience) as well, so a missing or misconfigured Access policy fails closed. |
-| Service Binding `API` | `foiled-web` only | Not reachable from the internet. `foiled-web` forwards the operator's Access JWT and the API Worker validates it itself; it does not trust the console to have done so. |
-| API hostname on `foiled-api` | MCP server (#24), scripts | Cloudflare Access (service tokens for automation) plus scoped bearer tokens checked in the Worker (#21). |
-| Ingest hostname on `foiled-api` | Sandbox hosts (#41), edge sensors (#31) | **mTLS required.** Two separate layers (#31): a WAF custom rule blocks any request without a verified, unrevoked client certificate, then the Worker checks `tlsClientAuth` on the request's `cf` object and maps the certificate fingerprint to a host or sensor identity in D1. Only ingest and job-lease routes answer on this hostname. Admin and token routes return 404 there. |
+| Console hostname on `foiled-web` | Operators in a browser | **Cloudflare Access** application with your identity provider and MFA. `foiled-web` validates the `Cf-Access-Jwt-Assertion` JWT (signature, issuer, audience and time) on every request, so a missing or misconfigured Access policy fails closed. |
+| Service Binding `API` | `foiled-web` only | Not reachable from the internet. `foiled-web` sends the operator's scoped bearer token from the session; the API Worker checks that token and its scopes. It does not see or validate the Access JWT. |
+| API hostname on `foiled-api` | MCP server (#24), scripts | Cloudflare Access (service tokens for automation) in front, plus scoped bearer tokens checked in the Worker (#21). The Worker does not validate the Access JWT yet: Access at the edge is the only Access layer, so keep the application and its policy in place. |
+| Ingest hostname on `foiled-api` | Sandbox hosts (#41), edge sensors (#31) | **mTLS required.** Two separate layers (#31): a WAF custom rule blocks any request without a verified, unrevoked client certificate, then the Worker checks `tlsClientAuth` on the request's `cf` object and maps the certificate fingerprint to a host or sensor identity in D1. The Worker does not yet restrict routes by hostname: every route answers here, and a request with a valid operator bearer token is authorised by that token. Keep human tokens off machines that hold sensor certificates. |
 | `*.workers.dev` and preview URLs | Nobody | **Turned off** for every Foiled Worker (`"workers_dev": false`, `"preview_urls": false`). A `workers.dev` URL bypasses the Access application and the mTLS WAF rule on your zone. |
 
 WAF custom rule for the ingest hostname (Security, WAF, custom rules), action **Block**:

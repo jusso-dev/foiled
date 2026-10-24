@@ -643,6 +643,13 @@ pub fn lint(w: &WriteUp, ctx: &LintContext) -> Vec<Finding> {
                 .filter(|i| matches!(i, Inline::Link { .. }))
                 .count();
             l.prose(&location, &markdown::inline_text(inlines));
+            // The page renders link targets too: hold them to the same
+            // privacy rules, decoded so %40 or %2E hide nothing.
+            for i in inlines {
+                if let Inline::Link { href, .. } = i {
+                    l.privacy(&location, &percent_decode(href));
+                }
+            }
         }
     }
     // Links the parser dropped as unsafe.
@@ -684,6 +691,36 @@ pub fn lint(w: &WriteUp, ctx: &LintContext) -> Vec<Finding> {
         );
     }
     l.findings
+}
+
+/// `%XX` escapes decoded, `+` read as a space. Invalid escapes stay as
+/// they are; bytes that are not UTF-8 become U+FFFD.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match (
+            b[i],
+            b.get(i + 1).copied().and_then(hex),
+            b.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(h), Some(l)) => {
+                out.push(h << 4 | l);
+                i += 3;
+            }
+            (b'+', ..) => {
+                out.push(b' ');
+                i += 1;
+            }
+            (c, ..) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 pub fn has_errors(findings: &[Finding]) -> bool {
@@ -991,6 +1028,15 @@ mod tests {
         ok.body_md
             .push_str("\nSources included 203.0.113.7 and 198[.]51[.]100[.]9.\n");
         assert!(!rules(&ok, &ctx()).contains(&"ip-address".to_string()));
+        // Link targets are checked as well as labels, decoded.
+        let mut link = sample();
+        link.body_md
+            .push_str("\n[log](https://10.1.2.3/log?contact=alice%40corp.example)\n");
+        let r = rules(&link, &ctx());
+        for want in ["ip-address", "personal-information"] {
+            assert!(r.contains(&want.to_string()), "{want}: {r:?}");
+        }
+        assert_eq!(percent_decode("a%40b+c%2"), "a@b c%2");
         let mut ids = sample();
         ids.summary = "We assess as FOILED-DEMO-0001, see att_0123456789abcdef01234567.".into();
         assert!(rules(&ids, &ctx()).contains(&"tenant-data".to_string()));

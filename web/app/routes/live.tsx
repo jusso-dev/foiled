@@ -32,9 +32,11 @@ async function feed(args: Route.LoaderArgs): Promise<Response> {
   const raw = new URL(args.request.url).searchParams.get("since");
   const asked = raw && /^\d{1,16}$/.test(raw) ? Number(raw) : now - WINDOWS["24h"];
   // The API reads at most 31 days. A client away longer gets what fits and is told.
-  const floor = now - WINDOWS["31d"];
+  // Both ends from this clock: the API's default `until` is read later.
+  const until = now + 1;
+  const floor = until - WINDOWS["31d"];
   const since = Math.min(Math.max(asked, floor), now);
-  const res = await load(args.request, op.api.listAttempts({ since, limit: 50 }));
+  const res = await load(args.request, op.api.listAttempts({ since, until, limit: 50 }));
   if (!res.ok) return Response.json({ ok: false, error: res.error.message }, { status: 502 });
   const items = res.data.items.map(feedItem);
   const cursor = items.reduce((m, a) => Math.max(m, a.last_seen), asked);

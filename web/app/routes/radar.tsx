@@ -33,8 +33,14 @@ export async function loader(args: Route.LoaderArgs) {
   const audience = oneOf(p, "audience", ["tenant", "fleet"] as const) ?? "tenant";
   const dimension = oneOf(p, "dimension", DIMENSIONS) ?? "";
   const days = intField(p, "days", 1, 92) ?? 30;
-  const since = Date.now() - days * 24 * 3600_000;
-  const res = await load(args.request, op.api.getRadar({ audience, dimension, since, limit: 20 }));
+  // The API counts whole UTC days, today included, so `days` days back
+  // from now spans days + 1 of them: start one day later.
+  const until = Date.now();
+  const since = until - (days - 1) * 24 * 3600_000;
+  const res = await load(
+    args.request,
+    op.api.getRadar({ audience, dimension, since, until, limit: 20 }),
+  );
   return {
     filters: { audience, dimension, days },
     feed: res.ok ? res.data : null,
