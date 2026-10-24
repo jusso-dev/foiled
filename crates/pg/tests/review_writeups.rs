@@ -82,6 +82,30 @@ async fn review_state_compare_and_set() {
     );
 }
 
+/// The CHECKs on review_states accept every kind and status the queue
+/// writes, including the needs_attention marker a decision writes first.
+#[tokio::test]
+#[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
+async fn review_states_accept_every_kind_and_status() {
+    let c = connect().await;
+    let t = tenant("rq-all");
+    let mut n = 0u32;
+    for kind in ReviewKind::ALL {
+        for status in ReviewStatus::ALL {
+            n += 1;
+            let mut s = ReviewState::new(&format!("rq_{n:024x}"), kind);
+            s.version = 1;
+            s.status = status;
+            assert!(
+                put_review_state(&c, &t, &s, 0).await.unwrap(),
+                "{} {}",
+                kind.as_str(),
+                status.as_str()
+            );
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "needs FOILED_TEST_PG_URL; CI runs it with --include-ignored"]
 async fn writeups_are_versioned_and_pages_are_slug_guarded() {

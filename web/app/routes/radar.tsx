@@ -33,8 +33,15 @@ export async function loader(args: Route.LoaderArgs) {
   const audience = oneOf(p, "audience", ["tenant", "fleet"] as const) ?? "tenant";
   const dimension = oneOf(p, "dimension", DIMENSIONS) ?? "";
   const days = intField(p, "days", 1, 92) ?? 30;
-  const since = Date.now() - days * 24 * 3600_000;
-  const res = await load(args.request, op.api.getRadar({ audience, dimension, since, limit: 20 }));
+  // The API shows closed UTC days only: end at the start of today, so the
+  // window holds exactly `days` of them.
+  const DAY = 24 * 3600_000;
+  const until = Math.floor(Date.now() / DAY) * DAY;
+  const since = until - days * DAY;
+  const res = await load(
+    args.request,
+    op.api.getRadar({ audience, dimension, since, until, limit: 20 }),
+  );
   return {
     filters: { audience, dimension, days },
     feed: res.ok ? res.data : null,

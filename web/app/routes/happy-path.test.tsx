@@ -98,7 +98,7 @@ describe("mock happy path", () => {
 
     // 1. Launch an emulation entry on an edge sensor.
     const confirm =
-      "/launch?entry=emulator/ssl-vpn/portal-generic&step=confirm&lifetime=86400&placement=sensor&sensor=sen-0001";
+      "/launch?entry=emulator/ssl-vpn/portal-generic&step=confirm&lifetime=86400&placement=sensor&sensor=sen-0001&key=sssssssssssssssssssssssssssssssssssssssssss";
     expect(text(expectPage(await page(env, confirm, { cookie })).html)).toContain("Confirm launch");
     const launched = await page(env, confirm, {
       cookie,

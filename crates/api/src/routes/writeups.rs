@@ -592,8 +592,11 @@ pub(crate) async fn transition(
         (WriteUpStatus::Published, WriteUpStatus::Withdrawn) => {
             // The page comes down before the status changes: if removing it
             // fails, the write-up stays published and the withdrawal can be
-            // retried.
-            take_down(state, &w).await?;
+            // retried. After the status change it is removed again and purged.
+            state
+                .store
+                .remove_public_page(&w.tenant_id, &w.writeup_id)
+                .await?;
             w.withdrawn_at = Some(now);
         }
         _ => unreachable!("checked by transition_allowed"),
@@ -654,6 +657,20 @@ pub(crate) async fn transition(
                 "another published write-up already uses this slug",
             ));
         }
+        // A withdrawal can land between the status change above and the
+        // page write. It takes the page down again after its own status
+        // change; this catches a page written after that.
+        if load(state, &w.tenant_id, &w.writeup_id).await?.status != WriteUpStatus::Published {
+            take_down(state, &w).await?;
+            return Err(ApiError::conflict(
+                "the write-up was withdrawn while it was being published",
+            ));
+        }
+    }
+    if to == WriteUpStatus::Withdrawn {
+        // Again after the status change, in case a publish racing this one
+        // wrote its page after the first removal.
+        purge_failed = take_down(state, &w).await?;
     }
     if to == WriteUpStatus::Published {
         purge_failed = state

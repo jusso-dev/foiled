@@ -1709,7 +1709,7 @@ paths:
         - { name: since, in: query, schema: { type: integer }, description: "Unix ms, inclusive." }
         - { name: until, in: query, schema: { type: integer }, description: "Unix ms, exclusive." }
         - { name: kind, in: query, schema: { type: string, enum: [cve_link, predisclosure_candidate, technique_link, ioc_publication, campaign_label, campaign_merge, false_positive_feedback, actor_association, write_up] } }
-        - { name: status, in: query, schema: { type: string, enum: [pending, open, claimed, snoozed, approved, rejected, all], default: pending }, description: "pending is open, claimed and snoozed." }
+        - { name: status, in: query, schema: { type: string, enum: [pending, open, claimed, snoozed, approved, rejected, needs_attention, all], default: pending }, description: "pending is every undecided item: open, claimed, snoozed and needs_attention." }
         - { name: assignee, in: query, schema: { type: string, maxLength: 128 }, description: "A token id, or me." }
         - { name: sla_breached, in: query, schema: { type: boolean } }
         - { $ref: "#/components/parameters/Limit" }

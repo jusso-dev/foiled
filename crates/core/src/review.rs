@@ -136,11 +136,17 @@ impl ReviewStatus {
         }
     }
 
+    pub const ALL: [ReviewStatus; 6] = [
+        ReviewStatus::Open,
+        ReviewStatus::Claimed,
+        ReviewStatus::Snoozed,
+        ReviewStatus::Approved,
+        ReviewStatus::Rejected,
+        ReviewStatus::NeedsAttention,
+    ];
+
     pub fn parse(s: &str) -> Option<Self> {
-        use ReviewStatus::*;
-        [Open, Claimed, Snoozed, Approved, Rejected, NeedsAttention]
-            .into_iter()
-            .find(|x| x.as_str() == s)
+        Self::ALL.into_iter().find(|x| x.as_str() == s)
     }
 
     pub fn decided(self) -> bool {

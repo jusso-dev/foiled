@@ -228,6 +228,14 @@ async fn discovery_root_collections_and_errors() {
         .await;
         assert_eq!(st, StatusCode::BAD_REQUEST, "{q}");
     }
+    // A query axum cannot parse still gets a TAXII error, and auth first.
+    let url = format!("{}objects/?limit=abc", base());
+    let (st, hd, body) = call(s, "GET", Some("lead"), &url, None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_eq!(hd["content-type"], TAXII);
+    assert_eq!(json(&body)["http_status"], "400");
+    let (st, _, _) = call(s, "GET", None, &url, Some(TAXII)).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

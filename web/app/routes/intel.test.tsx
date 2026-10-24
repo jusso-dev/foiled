@@ -256,9 +256,7 @@ describe("exports", () => {
         { cookie },
       ),
     );
-    expect(text(r.html)).toContain(
-      "STIX 2.1 bundle: That export format is not served by this API yet.",
-    );
+    expect(text(r.html)).toContain("STIX 2.1 bundle: This API does not serve that export format.");
   });
 
   it("refuses a download without the CSRF token", async () => {

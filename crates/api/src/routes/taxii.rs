@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -1222,6 +1223,17 @@ fn guard(auth: Result<Auth, ApiError>, headers: &HeaderMap) -> Result<Auth, Taxi
     Ok(auth)
 }
 
+/// The query, parsed after [`guard`] so an unauthenticated caller gets 401
+/// and a bad value gets a TAXII error body, not axum's plain text.
+fn query(q: Result<Query<ObjectsQuery>, QueryRejection>) -> Result<ObjectsQuery, TaxiiError> {
+    q.map(|Query(q)| q).map_err(|e| {
+        TaxiiError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Invalid query: {}", e.body_text()),
+        )
+    })
+}
+
 fn taxii_text(body: String) -> Response {
     (
         [
@@ -1487,9 +1499,10 @@ async fn objects(
     auth: Result<Auth, ApiError>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Query(q): Query<ObjectsQuery>,
+    q: Result<Query<ObjectsQuery>, QueryRejection>,
 ) -> TaxiiResult {
     let auth = guard(auth, &headers)?;
+    let q = query(q)?;
     check_collection(&id)?;
     let p = page(&state, &auth, &q, None, VersionFilter::last()).await?;
     Ok(object_page(p))
@@ -1500,9 +1513,10 @@ async fn object(
     auth: Result<Auth, ApiError>,
     headers: HeaderMap,
     Path((id, object_id)): Path<(String, String)>,
-    Query(q): Query<ObjectsQuery>,
+    q: Result<Query<ObjectsQuery>, QueryRejection>,
 ) -> TaxiiResult {
     let auth = guard(auth, &headers)?;
+    let q = query(q)?;
     check_collection(&id)?;
     let p = page(&state, &auth, &q, Some(&object_id), VersionFilter::last()).await?;
     if p.rows.is_empty() && q.next.is_none() {
@@ -1516,9 +1530,10 @@ async fn versions(
     auth: Result<Auth, ApiError>,
     headers: HeaderMap,
     Path((id, object_id)): Path<(String, String)>,
-    Query(mut q): Query<ObjectsQuery>,
+    q: Result<Query<ObjectsQuery>, QueryRejection>,
 ) -> TaxiiResult {
     let auth = guard(auth, &headers)?;
+    let mut q = query(q)?;
     check_collection(&id)?;
     // Every version, oldest first; match[version] does not apply here.
     q.match_version = None;
@@ -1542,9 +1557,10 @@ async fn manifest(
     auth: Result<Auth, ApiError>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Query(q): Query<ObjectsQuery>,
+    q: Result<Query<ObjectsQuery>, QueryRejection>,
 ) -> TaxiiResult {
     let auth = guard(auth, &headers)?;
+    let q = query(q)?;
     check_collection(&id)?;
     let p = page(&state, &auth, &q, None, VersionFilter::last()).await?;
     let extra = page_headers(&p.rows);
