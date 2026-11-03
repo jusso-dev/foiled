@@ -30,6 +30,9 @@
       "name": "foiled-public",
       "workers_dev": false,
       "preview_urls": false,
+      // Public API reads send the visitor address with the secret
+      // PUBLIC_BINDING_SECRET (`wrangler secret put PUBLIC_BINDING_SECRET --env public`,
+      // same value as on foiled-api) so the API limits per visitor (#92).
       "services": [{ "binding": "API", "service": "foiled-api" }],
       "vars": { "FOILED_SURFACE": "public" },
       // Per-client limit (app/lib/rate-limit.ts): 120 requests a minute per

@@ -61,21 +61,42 @@ export function publicApiUrl(path: string): URL {
 
 /** Header the API reads for its own per-client rate limit on public routes. */
 export const CLIENT_IP_HEADER = "X-Foiled-Client-Ip";
+/**
+ * Proves to the API that the forwarded address came from this Worker (#92).
+ * The API ignores CLIENT_IP_HEADER without it, because anyone on the
+ * internet can send that header to the API hostname.
+ */
+export const BINDING_SECRET_HEADER = "X-Foiled-Binding-Secret";
 
 export interface PublicRequestOptions {
   /** Visitor address from CF-Connecting-IP, forwarded so the API can limit per client. */
   clientIp?: string | null;
+  /** The PUBLIC_BINDING_SECRET Worker secret. Without it the API limits all visitors as one. */
+  bindingSecret?: string | null;
+}
+
+/** Options for a public loader: the visitor's address and the binding secret. */
+export function publicRequestOptions(
+  request: Request,
+  env: { PUBLIC_BINDING_SECRET?: string },
+): PublicRequestOptions {
+  return { clientIp: clientIpFrom(request), bindingSecret: env.PUBLIC_BINDING_SECRET };
 }
 
 /** GET a public API path. Returns null on 404 and throws ApiError on any other failure. */
 async function publicJson(
   api: ApiFetcher,
   path: string,
-  { clientIp }: PublicRequestOptions = {},
+  { clientIp, bindingSecret }: PublicRequestOptions = {},
 ): Promise<unknown | null> {
   const url = publicApiUrl(path);
   const headers: Record<string, string> = { accept: "application/json" };
-  if (clientIp && isIpLike(clientIp)) headers[CLIENT_IP_HEADER] = clientIp;
+  // `api` is the Service Binding, so the secret never leaves Cloudflare. The
+  // API ignores the address without the secret, so send both or neither.
+  if (clientIp && isIpLike(clientIp) && bindingSecret) {
+    headers[CLIENT_IP_HEADER] = clientIp;
+    headers[BINDING_SECRET_HEADER] = bindingSecret;
+  }
   const res = await api.fetch(url.href, { headers });
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(path, res.status);
