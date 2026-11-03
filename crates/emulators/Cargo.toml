@@ -10,10 +10,10 @@ publish = false
 
 [dependencies]
 foiled-core = { path = "../core" }
+foiled-yaml = { path = "../yaml" }
 hex = "0.4"
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml_ng = "0.10"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt", "net", "io-util", "time", "sync"] }
 

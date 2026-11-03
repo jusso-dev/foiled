@@ -1208,7 +1208,7 @@ mod tests {
     const LOOKUP: &str = include_str!("../../../testdata/enrichment/threatsieve/lookup.json");
 
     fn config() -> EnrichConfig {
-        serde_yaml_ng::from_str(CONFIG).unwrap()
+        foiled_yaml::from_str(CONFIG).unwrap()
     }
 
     fn ev(id: &str, ts: i64, severity: &str, src: &str, tenant: Option<&str>) -> CaptureEvent {

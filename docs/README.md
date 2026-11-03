@@ -1,6 +1,6 @@
 # Foiled docs
 
-Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.md) and [SECURITY.md](../SECURITY.md). The roadmap is tracked in [#23](https://github.com/jusso-dev/foiled/issues/23) and the first milestone is the MVP slice, [#22](https://github.com/jusso-dev/foiled/issues/22).
+Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.md) and [SECURITY.md](../SECURITY.md). The roadmap is tracked in [#23](https://github.com/jusso-dev/foiled/issues/23). To see the whole loop run, start with the [MVP walkthrough](mvp-walkthrough.md) (#22).
 
 ## Available now
 
@@ -48,12 +48,5 @@ Start here. New contributors should also read [CONTRIBUTING.md](../CONTRIBUTING.
 | [review-queue.md](review-queue.md) | The analyst review queue (#35): item types, SLAs, priority, claim and decide actions, where decisions are recorded, the #29 extension point and the API. |
 | [research-writeups.md](research-writeups.md) | Research write-ups and public exploit pages (#35): workflow, lint rules, the second reviewer checklist, the safe Markdown subset, the page template, delayed IOCs, caching, purge on withdrawal, rate limits and the public site. Decision record: [ADR 0011](adr/0011-public-pages-on-the-web-worker.md). |
 | [llm-correlation.md](llm-correlation.md) | Optional LLM correlation: provider interface, AI Gateway settings, retrieval, redaction, prompt-injection defences, cost caps, the eval set and why LLM-only links never auto-publish. Decision record: [ADR 0010](adr/0010-llm-provider-and-ai-gateway.md). |
+| [compliance/licence-register.md](compliance/licence-register.md) | Licence and data-terms register: honeypot, intel source, data and dependency licences, and what may go into a paid feed (#38). |
 | [deploy/workers.md](deploy/workers.md), [deploy/cloudflare.md](deploy/cloudflare.md), [deploy/cloud-sketch.md](deploy/cloud-sketch.md) | The control plane on Workers, Cloudflare-in-front trade-offs, multi-region sketch. |
-
-## Planned
-
-These docs do not exist yet. Each is owned by the issue listed.
-
-| Path | What it will cover | Issue |
-| --- | --- | --- |
-| `docs/compliance/licence-register.md` | Licence and data-terms compliance register. | #38 |

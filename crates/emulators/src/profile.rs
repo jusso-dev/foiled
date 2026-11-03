@@ -262,7 +262,7 @@ fn map_strings(v: &mut Value, f: &mut impl FnMut(&str) -> String) {
 
 impl Profile {
     pub fn from_yaml(text: &str) -> Result<Self, ProfileError> {
-        serde_yaml_ng::from_str(text).map_err(|e| ProfileError::Parse(e.to_string()))
+        foiled_yaml::from_str(text).map_err(|e| ProfileError::Parse(e.to_string()))
     }
 
     pub fn load(path: &Path) -> Result<Self, ProfileError> {

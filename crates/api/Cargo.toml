@@ -32,13 +32,13 @@ uuid = { version = "1", features = ["v4", "js"] }
 worker = { workspace = true, features = ["d1", "queue", "tokio-postgres"] }
 
 [build-dependencies]
+foiled-yaml = { path = "../yaml" }
 serde_json.workspace = true
-serde_yaml_ng = "0.10"
 walkdir = "2"
 
 [dev-dependencies]
+foiled-yaml = { path = "../yaml" }
 http-body-util = "0.1"
-serde_yaml_ng = "0.10"
 rusqlite = { version = "0.37", features = ["bundled"] }
 peak_alloc = "0.3"
 tokio.workspace = true

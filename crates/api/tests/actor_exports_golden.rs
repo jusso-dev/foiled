@@ -48,7 +48,7 @@ fn catalogue() -> ActorCatalogue {
     paths.sort();
     let reports: Vec<ActorReport> = paths
         .iter()
-        .map(|p| serde_yaml_ng::from_str(&std::fs::read_to_string(p).unwrap()).unwrap())
+        .map(|p| foiled_yaml::from_str(&std::fs::read_to_string(p).unwrap()).unwrap())
         .collect();
     let c = ActorCatalogue::build(Some(&groups), attack_sidecar(), reports);
     assert!(c.problems.is_empty(), "{:?}", c.problems);

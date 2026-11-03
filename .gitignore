@@ -8,3 +8,7 @@ node_modules/
 /.claude/worktrees/
 /build/output/
 .venv-stix/
+
+# Worker build output (worker-build) and wrangler local state
+/crates/api/build/
+.wrangler/

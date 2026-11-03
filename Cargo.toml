@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/jusso-dev/foiled"
-rust-version = "1.88"
+rust-version = "1.91"
 
 [workspace.dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["json", "query", "matched-path"] }

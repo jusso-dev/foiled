@@ -1,0 +1,19 @@
+[package]
+name = "foiled-yaml"
+description = "The one YAML reader every Foiled crate uses: serde-saphyr (pure Rust) with options pinned to keep YAML 1.2 core-schema behaviour"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde-saphyr = { version = "2", default-features = false, features = ["deserialize"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

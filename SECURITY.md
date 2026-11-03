@@ -29,7 +29,7 @@ Out of scope:
 
 ## Supported versions
 
-Foiled is in early development and has no stable release yet. Only the `main` branch is supported. Once we tag releases, this section will list which ones receive security fixes.
+Foiled has no tagged release yet. Only the `main` branch is supported. Once we tag releases, this section will list which ones receive security fixes.
 
 | Version | Supported |
 | --- | --- |

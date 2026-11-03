@@ -259,7 +259,7 @@ pub fn load(path: &Path) -> Result<Value> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     match path.extension().and_then(|e| e.to_str()) {
-        Some("yaml" | "yml") => serde_yaml_ng::from_str(&text).context("parsing YAML"),
+        Some("yaml" | "yml") => foiled_yaml::from_str(&text).context("parsing YAML"),
         _ => serde_json::from_str(&text).context("parsing JSON"),
     }
 }

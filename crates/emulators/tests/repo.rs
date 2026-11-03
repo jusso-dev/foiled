@@ -16,7 +16,7 @@ use serde_json::json;
 fn catalogue_entry(id: &str) -> CatalogueEntry {
     let path = common::repo_root().join(format!("catalogue/entries/{id}.yaml"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    serde_yaml_ng::from_str(&text).unwrap()
+    foiled_yaml::from_str(&text).unwrap()
 }
 
 fn yaml_files(dir: &Path) -> Vec<std::path::PathBuf> {

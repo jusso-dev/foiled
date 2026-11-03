@@ -1,0 +1,44 @@
+# Weekly dependency updates. Minor and patch bumps are grouped into one pull
+# request per ecosystem; major bumps arrive one per pull request so each can
+# be reviewed on its own. Security updates are not limited by these settings.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+
+  # pnpm workspace: the root package.json, pnpm-lock.yaml and web/.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Australia/Sydney
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
