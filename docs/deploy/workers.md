@@ -87,11 +87,7 @@ The public site Worker forwards each visitor's address (from `CF-Connecting-IP`)
 
 We use a shared secret because Cloudflare does not mark Service Binding requests in a documented, dependable way. Such requests arrive today without `CF-Connecting-IP` or a full `cf` object, but that is not a contract, and the same shape can come from local development or a misrouted request. The secret is sent only over the `API` Service Binding, so it never crosses the internet.
 
-```sh
-openssl rand -hex 32                                  # copy the value it prints
-(cd crates/api && wrangler secret put PUBLIC_BINDING_SECRET)
-(cd web && wrangler secret put PUBLIC_BINDING_SECRET --env public)
-```
+Generate the value in your secret manager and pass it directly to `wrangler secret put PUBLIC_BINDING_SECRET` through standard input for `foiled-api`. Use the same value with `wrangler secret put PUBLIC_BINDING_SECRET --env public` for `foiled-public`. Keep the value out of terminal output and shell history.
 
 To rotate it, put the new value on `foiled-public` and then on `foiled-api`; requests in between share one bucket for a moment rather than fail. If operators browse the public pages through the console, they can also set the same secret on `foiled-web` (`wrangler secret put PUBLIC_BINDING_SECRET` in `web/`); otherwise console reads of public pages share one API bucket, which is fine for a handful of operators.
 
