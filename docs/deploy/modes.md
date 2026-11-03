@@ -97,4 +97,4 @@ For more research sensors in more regions, see [cloud-sketch.md](cloud-sketch.md
 
 ## Rotation
 
-Decoy rotation and reset (compromised or aged sandboxes) are owned by #8 ([rotation](../rotation.md), planned). Certificate renewal and revocation for hosts and sensors are owned by #31 ([edge-sensor.md](edge-sensor.md#renewal-re-enrolment-and-revocation)).
+Decoy rotation and reset (compromised or aged sandboxes) are owned by #8 ([rotation](../rotation.md)). Certificate renewal and revocation for hosts and sensors are owned by #31 ([edge-sensor.md](edge-sensor.md#renewal-re-enrolment-and-revocation)).

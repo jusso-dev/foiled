@@ -20,7 +20,7 @@ const METHODS: &[&str] = &["get", "post", "put", "patch", "delete"];
 
 fn spec() -> Value {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../api/openapi.yaml");
-    serde_yaml_ng::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    foiled_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
 fn resolve<'a>(spec: &'a Value, item: &'a Value) -> &'a Value {

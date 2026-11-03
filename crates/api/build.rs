@@ -33,7 +33,7 @@ fn bundle(rel: &str, out_name: &str) {
             let value: serde_json::Value = if ext == Some("json") {
                 serde_json::from_str(&text).expect("parse JSON")
             } else {
-                serde_yaml_ng::from_str(&text).expect("parse YAML")
+                foiled_yaml::from_str(&text).expect("parse YAML")
             };
             items.push(value);
         }
@@ -50,7 +50,7 @@ fn bundle_file(rel: &str, out_name: &str) {
         .join(rel);
     println!("cargo:rerun-if-changed={}", path.display());
     let text = std::fs::read_to_string(&path).expect("read");
-    let value: serde_json::Value = serde_yaml_ng::from_str(&text).expect("parse YAML");
+    let value: serde_json::Value = foiled_yaml::from_str(&text).expect("parse YAML");
     let out = Path::new(&std::env::var("OUT_DIR").unwrap()).join(out_name);
     std::fs::write(out, serde_json::to_vec(&value).unwrap()).unwrap();
 }

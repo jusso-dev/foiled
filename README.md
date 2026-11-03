@@ -19,7 +19,18 @@ The idea: if you expose "Product X at version Y, which is affected by CVE Z", th
 
 ## Status
 
-Early build. The Rust workspace, the front-end Worker and CI are in place; features land issue by issue. Design and roadmap live in issues and docs:
+Pre-release. Every item on the [roadmap](https://github.com/jusso-dev/foiled/issues/23) has landed, but there is no tagged release or hosted service yet and `main` is the only supported branch. What is on `main`:
+
+- **Control plane**: a Rust (Axum) API on Cloudflare Workers with an [OpenAPI contract](api/openapi.yaml), D1 and Postgres stores, and a local mock server.
+- **Console and public pages**: the operator console (launch wizard, attempt triage, review queue, campaigns, exports) and public exploit pages, on a Workers front end.
+- **Hosts and sensors**: `foiled-hostd` runs signed jobs on research hosts and enrolled edge sensors (mTLS, offline buffer), with deny-by-default egress, capture, quarantine and rotation.
+- **Decoys**: a catalogue with KEV, OSV and NVD sync, a reproducible image builder for digest-pinned vulnerable versions, Redis and SSL VPN portal emulators, a Cowrie module, instrumentation hooks and canaries.
+- **Analysis**: attempts with a noise score, timelines, IOC extraction, ATT&CK and CVE mapping, the confidence layer, campaign clustering, cautious actor association, enrichment and optional LLM correlation.
+- **Outputs**: STIX 2.1, MISP, IOC files and read-only TAXII 2.1, alert webhooks, an MCP server for agents, the radar and opt-in contribute-back to DShield, CrowdSec and SentryPeer.
+
+Runtime: hostd runs sandbox decoys in Firecracker micro-VMs under the jailer, emulations as supervised processes and modules as hardened rootless containers. The Docker runtime is for local labs only, and `sandbox_runtime = "fake"` is an explicit dry-run mode. The [lab track](docs/mvp-walkthrough.md#lab-track) runs end to end on one Linux machine with Docker.
+
+Review findings and hardening work are tracked as open [issues](https://github.com/jusso-dev/foiled/issues). Design and roadmap:
 
 - Roadmap and tracking: https://github.com/jusso-dev/foiled/issues/23
 - MVP scope: https://github.com/jusso-dev/foiled/milestone/1

@@ -1147,7 +1147,7 @@ mod tests {
     #[test]
     fn one_bad_detail_is_skipped_not_fatal() {
         let cfg: CatalogueConfig =
-            serde_yaml_ng::from_str(include_str!("../../../configs/actor-catalogue.yaml")).unwrap();
+            foiled_yaml::from_str(include_str!("../../../configs/actor-catalogue.yaml")).unwrap();
         let mut s = SyncState::new(0);
         s.phase = Phase::Details;
         s.queue = vec![

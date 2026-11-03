@@ -157,7 +157,7 @@ pub fn actor_catalogue() -> foiled_core::actor::ActorCatalogue {
     paths.sort();
     let reports = paths
         .iter()
-        .map(|p| serde_yaml_ng::from_str(&std::fs::read_to_string(p).unwrap()).unwrap())
+        .map(|p| foiled_yaml::from_str(&std::fs::read_to_string(p).unwrap()).unwrap())
         .collect();
     let c = foiled_core::actor::ActorCatalogue::build(Some(&groups), &techniques, reports);
     assert!(c.problems.is_empty(), "{:?}", c.problems);

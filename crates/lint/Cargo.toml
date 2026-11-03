@@ -11,9 +11,9 @@ publish = false
 [dependencies]
 anyhow = "1"
 foiled-core = { path = "../core" }
+foiled-yaml = { path = "../yaml" }
 jsonschema = { version = "0.59", default-features = false }
 serde_json.workspace = true
-serde_yaml_ng = "0.10"
 walkdir = "2"
 
 [dev-dependencies]

@@ -27,7 +27,7 @@ fn commented_metadata_only_example_parses() {
         .take_while(|l| l.trim() != "#")
         .map(|l| format!("{}\n", l.strip_prefix("# ").unwrap_or(l)))
         .collect();
-    let value: serde_json::Value = serde_yaml_ng::from_str(&block).unwrap();
+    let value: serde_json::Value = foiled_yaml::from_str(&block).unwrap();
     let ttl: TtlDays = serde_json::from_value(value["ttl_days"].clone()).unwrap();
 
     let config = RetentionConfig {
