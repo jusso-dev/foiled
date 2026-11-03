@@ -46,6 +46,14 @@ async fn fetch(
     env: Env,
     _ctx: Context,
 ) -> worker::Result<axum::http::Response<axum::body::Body>> {
+    // First, before anything reads a header: strip the public site's
+    // forwarding headers and keep the visitor address only when the binding
+    // secret matches (#92). Unset secret: never trusted.
+    let binding_secret = env
+        .secret("PUBLIC_BINDING_SECRET")
+        .ok()
+        .map(|s| s.to_string());
+    crate::routes::public::admit_forwarded_client(&mut req, binding_secret.as_deref());
     if let Some(cert) = client_cert(&req) {
         req.extensions_mut().insert(cert);
     }

@@ -1,6 +1,6 @@
 import { cloudflareContext } from "../../context";
 import { NOT_FOUND_CACHE, PUBLIC_CACHE, publicHeaders } from "../../lib/http-headers";
-import { clientIpFrom, getPublicExploitList } from "../../lib/public-api.server";
+import { getPublicExploitList, publicRequestOptions } from "../../lib/public-api.server";
 import type { PublicExploitListItem } from "../../lib/public-types";
 import { sitemapXml } from "../../lib/seo";
 import type { Route } from "./+types/sitemap";
@@ -12,7 +12,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   let items: readonly PublicExploitListItem[] = [];
   let cache = PUBLIC_CACHE;
   try {
-    items = (await getPublicExploitList(env.API, { clientIp: clientIpFrom(request) })).items;
+    items = (await getPublicExploitList(env.API, publicRequestOptions(request, env))).items;
   } catch {
     cache = NOT_FOUND_CACHE;
   }

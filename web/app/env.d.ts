@@ -15,4 +15,10 @@ interface Env {
   ACCESS_TEAM_DOMAIN?: string;
   /** Cloudflare Access application audience tag. */
   ACCESS_AUD?: string;
+  /**
+   * Public site only. The same value as the API Worker's secret of that name,
+   * at least 32 characters. Lets the API rate limit public reads per visitor;
+   * without it every visitor shares one API bucket (docs/deploy/workers.md).
+   */
+  PUBLIC_BINDING_SECRET?: string;
 }
