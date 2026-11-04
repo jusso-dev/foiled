@@ -10,7 +10,7 @@ rust-version.workspace = true
 [dependencies]
 ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
 hex = "0.4"
-hmac = "0.12"
+hmac = "0.13"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
