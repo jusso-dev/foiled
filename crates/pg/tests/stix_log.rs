@@ -499,20 +499,32 @@ async fn one_materialiser_run_per_tenant_and_stalled_holders_are_fenced() {
 
     let c = connect().await;
     let other = format!("{tenant}-2");
-    let a = stix_lease(&c, &other, coll, "a", 50)
+    let a = stix_lease(&c, &other, coll, "a", 3_600_000)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
-        stix_lease(&c, &other, coll, "a", 50).await.unwrap(),
+        stix_lease(&c, &other, coll, "a", 3_600_000).await.unwrap(),
         Some(a),
         "a renewal keeps the generation"
     );
-    assert_eq!(stix_lease(&c, &other, coll, "b", 50).await.unwrap(), None);
+    assert_eq!(
+        stix_lease(&c, &other, coll, "b", 3_600_000).await.unwrap(),
+        None
+    );
     let day: DayRow = (1, "a".into(), vec![], None, 0);
     put_stix_day(&c, &other, coll, &day, a).await.unwrap();
-    // `a` stalls past its lease; `b` takes over with a higher generation.
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    // Simulate `a` stalling past its lease without relying on a wall-clock sleep.
+    assert_eq!(
+        c.execute(
+            "UPDATE stix_materialiser_leases SET expires_at = 0 WHERE tenant_id = $1 AND collection_id = $2 AND holder = $3",
+            &[&other, &coll, &"a"],
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    // `b` takes over with a higher generation.
     let b = stix_lease(&c, &other, coll, "b", 60_000)
         .await
         .unwrap()
