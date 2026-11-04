@@ -19,7 +19,18 @@ The idea: if you expose "Product X at version Y, which is affected by CVE Z", th
 
 ## Status
 
-Early build. The Rust workspace, the front-end Worker and CI are in place; features land issue by issue. Design and roadmap live in issues and docs:
+Pre-release. There is no tagged release or hosted service yet, and `main` is the only supported branch. The [roadmap](https://github.com/jusso-dev/foiled/issues/23) tracks remaining work. What is on `main`:
+
+- **Control plane**: a Rust (Axum) API on Cloudflare Workers with an [OpenAPI contract](api/openapi.yaml), D1 and Postgres stores, and a local mock server.
+- **Console and public pages**: the operator console (launch wizard, attempt triage, review queue, campaigns, exports) and public exploit pages, on a Workers front end.
+- **Hosts and sensors**: `foiled-hostd` leases signed jobs, supports mTLS and an offline buffer, and drives the Docker lab runtime with capture, quarantine and rotation.
+- **Decoys**: a catalogue with KEV, OSV and NVD sync, a reproducible image builder for digest-pinned vulnerable versions, Redis and SSL VPN portal emulator plug-ins, module manifests, instrumentation hooks and canaries.
+- **Analysis**: attempts with a noise score, timelines, IOC extraction, ATT&CK and CVE mapping, the confidence layer, campaign clustering, cautious actor association, enrichment and optional LLM correlation.
+- **Outputs**: STIX 2.1, MISP, IOC files and read-only TAXII 2.1, alert webhooks, an MCP server for agents, the radar and opt-in contribute-back to DShield, CrowdSec and SentryPeer.
+
+The Docker sandbox runtime is for local labs only; its egress isolation depends on operator-configured firewall rules and is not checked by hostd ([#93](https://github.com/jusso-dev/foiled/issues/93)). The Firecracker option currently falls back to a recording runtime and may report a decoy as healthy when nothing is running ([#91](https://github.com/jusso-dev/foiled/issues/91)). Firecracker and emulator supervision remain under development ([#3](https://github.com/jusso-dev/foiled/issues/3)). The [lab track](docs/mvp-walkthrough.md#lab-track) runs on one Linux machine with Docker.
+
+Review findings and hardening work are tracked as open [issues](https://github.com/jusso-dev/foiled/issues). Design and roadmap:
 
 - Roadmap and tracking: https://github.com/jusso-dev/foiled/issues/23
 - MVP scope: https://github.com/jusso-dev/foiled/milestone/1

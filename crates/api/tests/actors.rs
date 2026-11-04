@@ -42,7 +42,7 @@ fn catalogue() -> ActorCatalogue {
     paths.sort();
     for p in paths {
         let text = std::fs::read_to_string(&p).unwrap();
-        reports.push(serde_yaml_ng::from_str(&text).unwrap());
+        reports.push(foiled_yaml::from_str(&text).unwrap());
     }
     let c = ActorCatalogue::build(Some(&groups), &techniques, reports);
     assert!(c.problems.is_empty(), "{:?}", c.problems);

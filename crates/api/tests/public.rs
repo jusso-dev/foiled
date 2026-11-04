@@ -286,14 +286,19 @@ async fn published_page_holds_iocs_until_released_and_leaks_nothing() {
 #[tokio::test]
 async fn public_reads_are_rate_limited_per_client_and_the_radar_is_not_public() {
     let h = harness(NOW).await;
+    // As the public site Worker sends it, admitted as the API Worker does.
+    // Spoofed headers without the secret are covered in routes/public.rs.
+    let secret = "test-binding-secret-0123456789abcdef-not-real";
     let read = |ip: &'static str| {
         let state = h.state.clone();
         async move {
-            let req = http::Request::builder()
+            let mut req = http::Request::builder()
                 .uri("/v0/public/exploited")
                 .header("x-foiled-client-ip", ip)
+                .header("x-foiled-binding-secret", secret)
                 .body(axum::body::Body::empty())
                 .unwrap();
+            foiled_api::routes::public::admit_forwarded_client(&mut req, Some(secret));
             let res = tower::ServiceExt::oneshot(foiled_api::router(state), req)
                 .await
                 .unwrap();

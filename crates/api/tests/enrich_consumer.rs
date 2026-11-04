@@ -166,7 +166,7 @@ impl ProviderHttp for FakeThreatSieve {
 }
 
 fn config() -> EnrichConfig {
-    let mut c: EnrichConfig = serde_yaml_ng::from_str(
+    let mut c: EnrichConfig = foiled_yaml::from_str(
         &std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../configs/enrichment.yaml"

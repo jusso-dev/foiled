@@ -82,6 +82,10 @@ These apply to docs, UI text, exports, commit messages and issue text.
 - CVE ids in examples are clearly fake, for example `CVE-2099-0001` or `FOILED-DEMO-0001`.
 - No real customer data, real attacker captures with personal information, real credentials, tokens, Cloudflare account ids or zone names. Secrets live only in Wrangler secrets or environment variables.
 
+## YAML configuration
+
+The shared YAML reader rejects duplicate keys and multiple documents. Quote values such as `"012"` or `"1_000"` when they must remain strings, especially in emulator profiles and module manifests. Unknown YAML tags are ignored; do not rely on them for validation.
+
 ## Licensing
 
 - Foiled core is MIT licensed. See [LICENSE](LICENSE). By contributing you agree your contribution is released under the same licence.

@@ -43,7 +43,7 @@ Every binding the Workers use, with the issue that owns the code that reads or w
 | `foiled-api` | `RADAR` | Analytics Engine dataset | `foiled_radar` | #35 | High-volume radar counters (3 months retention). |
 | `foiled-api` | `CF_CACHE_PURGE_API_TOKEN` (optional) | #35 | Cloudflare API token with only *Zone, Cache Purge* on the public site zone. Purges withdrawn pages; without it they leave caches within 60 seconds ([research-writeups.md](../research-writeups.md#caching-and-withdrawal)). |
 | `foiled-web` | `API` | Service Binding to `foiled-api` | `foiled-api` | #14 (decision in #40) | Every console call to the API. No public API call from the browser is needed. |
-| `foiled-public` | `API` | Service Binding to `foiled-api` | `foiled-api` | #35 | Reads published, confidence-gated data only: the loaders refuse any API path outside `/v0/public/`, and those routes take no credentials ([research-writeups.md](../research-writeups.md#what-the-public-routes-can-read)). |
+| `foiled-public` | `API` | Service Binding to `foiled-api` | `foiled-api` | #35 | Reads published, confidence-gated data only: the loaders refuse any API path outside `/v0/public/`, and those routes take no credentials ([research-writeups.md](../research-writeups.md#what-the-public-routes-can-read)). Sends the visitor's address with `PUBLIC_BINDING_SECRET` so the API limits per visitor ([Public binding secret](#public-binding-secret)). |
 
 Vars (not secrets, still kept out of the tree where they identify the account):
 
@@ -79,6 +79,17 @@ Proposed names. The owning issue finalises each one.
 | `foiled-api` | `SHODAN_API_KEY` (optional) | #18 | Operator-supplied Shodan key for the Honeyscore self-check. Only set it if you enable the check ([fingerprint-resistance.md](../fingerprint-resistance.md)). |
 | `foiled-web` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #14 | Same Access check in the console Worker, on every request. Required: without them the console refuses every request unless `CONSOLE_ENV=development` (local only) ([console.md](../ui/console.md#sign-in-and-sessions)). |
 | `foiled-web` | `SESSION_SECRET` | #14 | At least 32 random characters. Encrypts the operator session cookie that holds the API token. Sign-in is refused without it; rotating it signs everyone out. |
+| `foiled-api`, `foiled-public` | `PUBLIC_BINDING_SECRET` | #92 | At least 32 random printable ASCII characters without whitespace, the **same value on both Workers**. See [Public binding secret](#public-binding-secret). Without it (or with a mismatch) all public site visitors share one API rate-limit bucket, so one visitor can exhaust the limit for everyone. |
+
+### Public binding secret
+
+The public site Worker forwards each visitor's address (from `CF-Connecting-IP`) to the API in `X-Foiled-Client-Ip`, so the API's limit on `/v0/public/*` (120 reads a minute) applies per visitor rather than to the Worker as a whole. The API hostname is reachable from the internet, so anyone can send that header too. The API Worker therefore honours it only when the request also carries `X-Foiled-Binding-Secret` equal to its `PUBLIC_BINDING_SECRET` (compared in constant time). Every request first has both headers stripped, before routing, so no route ever sees a value a caller made up. Any other request, including a direct one with a spoofed address, is limited by its connecting address. If the API Worker has no secret, or one shorter than 32 characters, it never trusts the header (fail closed).
+
+We use a shared secret because Cloudflare does not mark Service Binding requests in a documented, dependable way. Such requests arrive today without `CF-Connecting-IP` or a full `cf` object, but that is not a contract, and the same shape can come from local development or a misrouted request. The secret is sent only over the `API` Service Binding, so it never crosses the internet.
+
+Before upgrading either Worker to a version that uses this check, provision the same value on both Workers. Generate at least 32 random printable ASCII characters without whitespace (for example, a hex-encoded random value) in your secret manager and pass it directly to `wrangler secret put PUBLIC_BINDING_SECRET` through standard input for `foiled-api`. Use the same value with `wrangler secret put PUBLIC_BINDING_SECRET --env public` for `foiled-public`. Do not include a trailing newline or other whitespace: the HTTP header and the stored secret must match exactly. Keep the value out of terminal output and shell history. The public Worker warns once per isolate if its secret is missing or invalid; the API warns once per isolate when it rejects a supplied forwarding secret. Neither logs the value.
+
+To rotate it, put the new value on `foiled-public` and then on `foiled-api`. During the mismatch, visitors share one bucket and one visitor can exhaust it for everyone; plan for that window and verify the new value on both Workers afterwards. If operators browse the public pages through the console, they can also set the same secret on `foiled-web` (`wrangler secret put PUBLIC_BINDING_SECRET` in `web/`); otherwise console reads of public pages share one API bucket.
 
 Postgres credentials are not a Worker secret: they live in the Hyperdrive configuration, set when you create it.
 
@@ -125,7 +136,7 @@ export CLOUDFLARE_API_TOKEN=...       # scoped deploy token; never committed
    ```
    Create the AI Gateway in the dashboard and note its ID. The Analytics Engine dataset is created on first write. Do not enable a public `r2.dev` URL or a custom domain on the evidence bucket.
 2. **Fill in a private copy of the API config.** Copy `crates/api/wrangler.jsonc` (sketched in ADR 0009) to `crates/api/wrangler.private.jsonc` next to it, fill in the resource IDs and add your routes or custom domains there. Keep it out of git with a local exclude (`echo 'wrangler.private.jsonc' >> .git/info/exclude`) or a private fork. The console config `web/wrangler.jsonc` has no resource IDs (its only binding is the Service Binding), so it needs no private copy; attach its custom domain in the dashboard. Both configs must set `"workers_dev": false` and `"preview_urls": false`.
-3. **Set secrets** with `wrangler secret put` for each secret in the table above.
+3. **Set secrets** with `wrangler secret put` for each secret in the table above. Secrets for `foiled-public` need `--env public` in `web/`; `PUBLIC_BINDING_SECRET` goes on both `foiled-api` and `foiled-public` with the same value ([Public binding secret](#public-binding-secret)).
 4. **Protect before you publish.** Create the Access applications for the console and API hostnames. Turn on mTLS for the ingest hostname and add the WAF rule. Do this before any hostname is attached to a Worker.
 5. **Deploy the API Worker, then the console Worker** (the Service Binding needs its target):
    ```sh
@@ -133,7 +144,13 @@ export CLOUDFLARE_API_TOKEN=...       # scoped deploy token; never committed
    (cd web && pnpm build && wrangler deploy)
    ```
    The console is built by the Cloudflare Vite plugin, which writes the deploy config into the build output, so deploy it from `web/` after `pnpm build`.
-6. **Check** that the console hostname redirects to Access, the API hostname rejects a request without an Access token, the ingest hostname returns 403 without a client certificate, and the `workers.dev` URLs do not resolve.
+6. **Check** that the console hostname redirects to Access, the API hostname rejects a request without an Access token, the ingest hostname returns 403 without a client certificate, and the `workers.dev` URLs do not resolve. Check the public site from two independent client addresses: exhausting the limit from one address must not prevent the other from loading a public page. Use uncached requests in a staging environment for this check. Wherever `/v0/public/exploited` is reachable directly (for example `wrangler dev` in `crates/api`), 121 requests within the same fixed minute, each with a different `X-Foiled-Client-Ip`, must end in a 429. If the loop crosses a minute boundary, retry in the next minute:
+   ```sh
+   for i in $(seq 1 121); do
+     curl -s -o /dev/null -w '%{http_code}\n' -H "X-Foiled-Client-Ip: 192.0.2.$((i % 250))" \
+       http://localhost:8787/v0/public/exploited
+   done | sort | uniq -c   # expect 120 x 200 and 1 x 429
+   ```
 
 ## Optional: ThreatSieve
 

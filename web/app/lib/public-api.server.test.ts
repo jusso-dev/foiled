@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { exampleList, examplePage } from "../fixtures/public-example";
 import { ApiError, type ApiFetcher } from "./api.server";
 import {
+  BINDING_SECRET_HEADER,
   CLIENT_IP_HEADER,
   clientIpFrom,
   getPublicExploitList,
@@ -10,6 +11,7 @@ import {
   PublicPathError,
   PublicShapeError,
   publicApiUrl,
+  publicRequestOptions,
 } from "./public-api.server";
 
 function fakeApi(handler: (url: URL) => Response): ApiFetcher & { calls: URL[] } {
@@ -104,22 +106,64 @@ describe("client address forwarding", () => {
     };
   }
 
-  it("forwards the client address as X-Foiled-Client-Ip", async () => {
+  const bindingSecret = "test-binding-secret-0123456789abcdef-not-real";
+
+  it("forwards the client address with the binding secret", async () => {
     const api = recordingApi(exampleList);
-    await getPublicExploitList(api, { clientIp: "192.0.2.10" });
+    await getPublicExploitList(api, { clientIp: "192.0.2.10", bindingSecret });
     expect(CLIENT_IP_HEADER).toBe("X-Foiled-Client-Ip");
+    expect(BINDING_SECRET_HEADER).toBe("X-Foiled-Binding-Secret");
     expect(api.headers[0].get("X-Foiled-Client-Ip")).toBe("192.0.2.10");
+    expect(api.headers[0].get("X-Foiled-Binding-Secret")).toBe(bindingSecret);
     const page = recordingApi(examplePage);
-    await getPublicExploitPage(page, examplePage.slug, { clientIp: "2001:db8::1" });
+    await getPublicExploitPage(page, examplePage.slug, { clientIp: "2001:db8::1", bindingSecret });
     expect(page.headers[0].get("X-Foiled-Client-Ip")).toBe("2001:db8::1");
+    expect(page.headers[0].get("X-Foiled-Binding-Secret")).toBe(bindingSecret);
   });
 
-  it("leaves the header out when there is no address or it is not one", async () => {
+  it("builds the options from CF-Connecting-IP and PUBLIC_BINDING_SECRET", async () => {
+    const request = new Request("https://x/", { headers: { "CF-Connecting-IP": "203.0.113.7" } });
+    const options = publicRequestOptions(request, { PUBLIC_BINDING_SECRET: bindingSecret });
+    expect(options).toEqual({ clientIp: "203.0.113.7", bindingSecret });
+    const api = recordingApi(exampleList);
+    await getPublicExploitList(api, options);
+    expect(api.headers[0].get("X-Foiled-Client-Ip")).toBe("203.0.113.7");
+    expect(api.headers[0].get("X-Foiled-Binding-Secret")).toBe(bindingSecret);
+  });
+
+  it("sends neither header without an address or without the secret", async () => {
     const api = recordingApi(exampleList);
     await getPublicExploitList(api);
-    await getPublicExploitList(api, { clientIp: "192.0.2.10\r\nX-Evil: 1" });
-    await getPublicExploitList(api, { clientIp: "<script>" });
-    for (const h of api.headers) expect(h.has("X-Foiled-Client-Ip")).toBe(false);
+    await getPublicExploitList(api, { bindingSecret });
+    await getPublicExploitList(api, { clientIp: "192.0.2.10" });
+    await getPublicExploitList(api, { clientIp: "192.0.2.10", bindingSecret: "" });
+    await getPublicExploitList(api, { clientIp: "192.0.2.10\r\nX-Evil: 1", bindingSecret });
+    await getPublicExploitList(api, { clientIp: "<script>", bindingSecret });
+    expect(api.headers).toHaveLength(6);
+    for (const h of api.headers) {
+      expect(h.has("X-Foiled-Client-Ip")).toBe(false);
+      expect(h.has("X-Foiled-Binding-Secret")).toBe(false);
+    }
+  });
+
+  it("warns once and omits invalid secrets instead of failing the page", async () => {
+    vi.resetModules();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { getPublicExploitList: read } = await import("./public-api.server");
+      const api = recordingApi(exampleList);
+      for (const secret of [undefined, "short", `${bindingSecret}\n`, `${bindingSecret}🔒`]) {
+        await read(api, { clientIp: "192.0.2.10", bindingSecret: secret });
+      }
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).not.toContain(bindingSecret);
+      for (const headers of api.headers) {
+        expect(headers.has(CLIENT_IP_HEADER)).toBe(false);
+        expect(headers.has(BINDING_SECRET_HEADER)).toBe(false);
+      }
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("reads CF-Connecting-IP from the request", () => {

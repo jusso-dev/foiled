@@ -276,7 +276,7 @@ pub fn parse_rfc3339(s: &str) -> Option<i64> {
 
 impl ModuleManifest {
     pub fn from_yaml(text: &str) -> Result<Self, String> {
-        serde_yaml_ng::from_str(text).map_err(|e| e.to_string())
+        foiled_yaml::from_str(text).map_err(|e| e.to_string())
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {

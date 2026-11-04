@@ -1577,7 +1577,7 @@ mod tests {
     #[test]
     fn export_drops_restricted_and_third_party_facts() {
         let config: crate::enrich_pipeline::EnrichConfig =
-            serde_yaml_ng::from_str(include_str!("../../../configs/enrichment.yaml")).unwrap();
+            foiled_yaml::from_str(include_str!("../../../configs/enrichment.yaml")).unwrap();
         let mapped = crate::enrich_pipeline::lookup_outcome(
             200,
             None,

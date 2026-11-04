@@ -58,6 +58,9 @@
     "JOB_SIGNING_KEY_ID": "k1",
     "R2_S3_HOST": "<account-id>.r2.cloudflarestorage.com"
   },
+  // The secret PUBLIC_BINDING_SECRET (same value as on foiled-public) lets
+  // the API trust the visitor address the public site forwards; unset, it
+  // never does (#92, docs/deploy/workers.md#public-binding-secret).
   // ThreatSieve (#11) is opt-in and NOT bound here: a deploy with a service
   // binding to a Worker that does not exist fails. Operators who run
   // ThreatSieve add the THREATSIEVE binding to their private copy of this
