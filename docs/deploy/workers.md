@@ -79,7 +79,7 @@ Proposed names. The owning issue finalises each one.
 | `foiled-api` | `SHODAN_API_KEY` (optional) | #18 | Operator-supplied Shodan key for the Honeyscore self-check. Only set it if you enable the check ([fingerprint-resistance.md](../fingerprint-resistance.md)). |
 | `foiled-web` | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | #14 | Same Access check in the console Worker, on every request. Required: without them the console refuses every request unless `CONSOLE_ENV=development` (local only) ([console.md](../ui/console.md#sign-in-and-sessions)). |
 | `foiled-web` | `SESSION_SECRET` | #14 | At least 32 random characters. Encrypts the operator session cookie that holds the API token. Sign-in is refused without it; rotating it signs everyone out. |
-| `foiled-api`, `foiled-public` | `PUBLIC_BINDING_SECRET` | #92 | At least 32 random characters, the **same value on both Workers**. See [Public binding secret](#public-binding-secret). Without it (or with a mismatch) public pages still work, but the API limits every public site visitor as one client. |
+| `foiled-api`, `foiled-public` | `PUBLIC_BINDING_SECRET` | #92 | At least 32 random characters, the **same value on both Workers**. See [Public binding secret](#public-binding-secret). Without it (or with a mismatch) all public site visitors share one API rate-limit bucket, so one visitor can exhaust the limit for everyone. |
 
 ### Public binding secret
 
@@ -87,9 +87,9 @@ The public site Worker forwards each visitor's address (from `CF-Connecting-IP`)
 
 We use a shared secret because Cloudflare does not mark Service Binding requests in a documented, dependable way. Such requests arrive today without `CF-Connecting-IP` or a full `cf` object, but that is not a contract, and the same shape can come from local development or a misrouted request. The secret is sent only over the `API` Service Binding, so it never crosses the internet.
 
-Generate the value in your secret manager and pass it directly to `wrangler secret put PUBLIC_BINDING_SECRET` through standard input for `foiled-api`. Use the same value with `wrangler secret put PUBLIC_BINDING_SECRET --env public` for `foiled-public`. Keep the value out of terminal output and shell history.
+Before upgrading either Worker to a version that uses this check, provision the same value on both Workers. Generate it in your secret manager and pass it directly to `wrangler secret put PUBLIC_BINDING_SECRET` through standard input for `foiled-api`. Use the same value with `wrangler secret put PUBLIC_BINDING_SECRET --env public` for `foiled-public`. Do not include a trailing newline or other surrounding whitespace: the HTTP header and the stored secret must match exactly. Keep the value out of terminal output and shell history.
 
-To rotate it, put the new value on `foiled-public` and then on `foiled-api`; requests in between share one bucket for a moment rather than fail. If operators browse the public pages through the console, they can also set the same secret on `foiled-web` (`wrangler secret put PUBLIC_BINDING_SECRET` in `web/`); otherwise console reads of public pages share one API bucket, which is fine for a handful of operators.
+To rotate it, put the new value on `foiled-public` and then on `foiled-api`. During the mismatch, visitors share one bucket and one visitor can exhaust it for everyone; plan for that window and verify the new value on both Workers afterwards. If operators browse the public pages through the console, they can also set the same secret on `foiled-web` (`wrangler secret put PUBLIC_BINDING_SECRET` in `web/`); otherwise console reads of public pages share one API bucket.
 
 Postgres credentials are not a Worker secret: they live in the Hyperdrive configuration, set when you create it.
 
@@ -144,7 +144,7 @@ export CLOUDFLARE_API_TOKEN=...       # scoped deploy token; never committed
    (cd web && pnpm build && wrangler deploy)
    ```
    The console is built by the Cloudflare Vite plugin, which writes the deploy config into the build output, so deploy it from `web/` after `pnpm build`.
-6. **Check** that the console hostname redirects to Access, the API hostname rejects a request without an Access token, the ingest hostname returns 403 without a client certificate, and the `workers.dev` URLs do not resolve. Wherever `/v0/public/exploited` is reachable directly (for example `wrangler dev` in `crates/api`), 121 requests in a minute, each with a different `X-Foiled-Client-Ip`, must end in a 429:
+6. **Check** that the console hostname redirects to Access, the API hostname rejects a request without an Access token, the ingest hostname returns 403 without a client certificate, and the `workers.dev` URLs do not resolve. Check the public site from two independent client addresses: exhausting the limit from one address must not prevent the other from loading a public page. Use uncached requests in a staging environment for this check. Wherever `/v0/public/exploited` is reachable directly (for example `wrangler dev` in `crates/api`), 121 requests within the same fixed minute, each with a different `X-Foiled-Client-Ip`, must end in a 429. If the loop crosses a minute boundary, retry in the next minute:
    ```sh
    for i in $(seq 1 121); do
      curl -s -o /dev/null -w '%{http_code}\n' -H "X-Foiled-Client-Ip: 192.0.2.$((i % 250))" \
