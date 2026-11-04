@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { exampleList, examplePage } from "../fixtures/public-example";
 import { ApiError, type ApiFetcher } from "./api.server";
 import {
@@ -143,6 +143,26 @@ describe("client address forwarding", () => {
     for (const h of api.headers) {
       expect(h.has("X-Foiled-Client-Ip")).toBe(false);
       expect(h.has("X-Foiled-Binding-Secret")).toBe(false);
+    }
+  });
+
+  it("warns once and omits invalid secrets instead of failing the page", async () => {
+    vi.resetModules();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { getPublicExploitList: read } = await import("./public-api.server");
+      const api = recordingApi(exampleList);
+      for (const secret of [undefined, "short", `${bindingSecret}\n`, `${bindingSecret}🔒`]) {
+        await read(api, { clientIp: "192.0.2.10", bindingSecret: secret });
+      }
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).not.toContain(bindingSecret);
+      for (const headers of api.headers) {
+        expect(headers.has(CLIENT_IP_HEADER)).toBe(false);
+        expect(headers.has(BINDING_SECRET_HEADER)).toBe(false);
+      }
+    } finally {
+      warn.mockRestore();
     }
   });
 

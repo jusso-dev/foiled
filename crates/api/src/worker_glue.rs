@@ -40,6 +40,11 @@ use crate::store::{
 };
 use crate::{AppState, router};
 
+thread_local! {
+    // One warning per isolate avoids letting spoofed headers flood logs.
+    static FORWARDING_WARNING_EMITTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[event(fetch)]
 async fn fetch(
     mut req: HttpRequest,
@@ -53,7 +58,15 @@ async fn fetch(
         .secret("PUBLIC_BINDING_SECRET")
         .ok()
         .map(|s| s.to_string());
-    crate::routes::public::admit_forwarded_client(&mut req, binding_secret.as_deref());
+    if crate::routes::public::admit_forwarded_client(&mut req, binding_secret.as_deref()) {
+        FORWARDING_WARNING_EMITTED.with(|warned| {
+            if !warned.replace(true) {
+                worker::console_warn!(
+                    "Rejected public client forwarding credentials; the supplied address was ignored"
+                );
+            }
+        });
+    }
     if let Some(cert) = client_cert(&req) {
         req.extensions_mut().insert(cert);
     }

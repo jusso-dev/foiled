@@ -68,10 +68,26 @@ export const CLIENT_IP_HEADER = "X-Foiled-Client-Ip";
  */
 export const BINDING_SECRET_HEADER = "X-Foiled-Binding-Secret";
 
+let bindingWarningEmitted = false;
+
+/** Reject weak or non-header-safe secrets instead of throwing in fetch(). */
+function usableBindingSecret(secret: string | null | undefined): secret is string {
+  return typeof secret === "string" && secret.length >= 32 && /^[\x21-\x7e]+$/.test(secret);
+}
+
+function warnInvalidBindingSecret() {
+  if (!bindingWarningEmitted) {
+    bindingWarningEmitted = true;
+    console.warn(
+      "PUBLIC_BINDING_SECRET is missing or invalid; public visitors share one API rate-limit bucket",
+    );
+  }
+}
+
 export interface PublicRequestOptions {
   /** Visitor address from CF-Connecting-IP, forwarded so the API can limit per client. */
   clientIp?: string | null;
-  /** The PUBLIC_BINDING_SECRET Worker secret. Without it the API limits all visitors as one. */
+  /** The PUBLIC_BINDING_SECRET Worker secret: 32 or more printable ASCII characters without whitespace. */
   bindingSecret?: string | null;
 }
 
@@ -91,9 +107,10 @@ async function publicJson(
 ): Promise<unknown | null> {
   const url = publicApiUrl(path);
   const headers: Record<string, string> = { accept: "application/json" };
+  if (!usableBindingSecret(bindingSecret)) warnInvalidBindingSecret();
   // `api` is the Service Binding, so the secret never leaves Cloudflare. The
   // API ignores the address without the secret, so send both or neither.
-  if (clientIp && isIpLike(clientIp) && bindingSecret) {
+  if (clientIp && isIpLike(clientIp) && usableBindingSecret(bindingSecret)) {
     headers[CLIENT_IP_HEADER] = clientIp;
     headers[BINDING_SECRET_HEADER] = bindingSecret;
   }

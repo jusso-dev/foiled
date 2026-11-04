@@ -88,7 +88,8 @@ pub struct ForwardedClient(pub String);
 
 /// Decide, before routing, whether `req` carries a visitor address we can
 /// trust, and strip both forwarding headers so nothing downstream sees a
-/// value the caller made up (#92).
+/// value the caller made up (#92). Returns true when a supplied binding
+/// secret was rejected, so the Worker can warn without logging its value.
 ///
 /// The API Worker is reachable from the internet (MCP clients, sensors), so
 /// anyone can send [`CLIENT_IP_HEADER`]. Trust needs proof the request came
@@ -100,16 +101,22 @@ pub struct ForwardedClient(pub String);
 /// only over the binding, compared in constant time. With no secret (or one
 /// shorter than [`MIN_BINDING_SECRET_LEN`]) the header is never honoured
 /// and public reads are limited by the connecting address.
-pub fn admit_forwarded_client<B>(req: &mut http::Request<B>, secret: Option<&str>) {
+pub fn admit_forwarded_client<B>(req: &mut http::Request<B>, secret: Option<&str>) -> bool {
     let headers = req.headers_mut();
+    let secret_supplied = headers.contains_key(BINDING_SECRET_HEADER);
     let presented = take_single(headers, BINDING_SECRET_HEADER);
     let forwarded = take_single(headers, CLIENT_IP_HEADER);
-    let (Some(secret), Some(presented), Some(forwarded)) = (secret, presented, forwarded) else {
-        return;
-    };
-    if secret.len() < MIN_BINDING_SECRET_LEN || !secret_matches(presented.as_bytes(), secret) {
-        return;
+    if secret_supplied {
+        match (secret, presented.as_ref()) {
+            (Some(secret), Some(presented))
+                if secret.len() >= MIN_BINDING_SECRET_LEN
+                    && secret_matches(presented.as_bytes(), secret) => {}
+            _ => return true,
+        }
     }
+    let Some(forwarded) = forwarded.filter(|_| secret_supplied) else {
+        return false;
+    };
     // Key the limit on the canonical form, so one address has one bucket.
     let ip = forwarded
         .to_str()
@@ -119,6 +126,7 @@ pub fn admit_forwarded_client<B>(req: &mut http::Request<B>, secret: Option<&str
     if let Some(ip) = ip {
         req.extensions_mut().insert(ForwardedClient(ip.to_string()));
     }
+    false
 }
 
 /// Remove every `name` header and return the value if there was exactly
@@ -265,6 +273,31 @@ mod tests {
         // A configured secret that is too short is treated as unset.
         let short = (BINDING_SECRET_HEADER, "short");
         assert_eq!(admitted(&[ip, short], Some("short")), None);
+    }
+
+    #[test]
+    fn reports_rejected_secrets_without_exposing_headers() {
+        let ip = (CLIENT_IP_HEADER, "192.0.2.10");
+        for headers in [
+            vec![ip, (BINDING_SECRET_HEADER, "wrong")],
+            vec![
+                ip,
+                (BINDING_SECRET_HEADER, SECRET),
+                (BINDING_SECRET_HEADER, SECRET),
+            ],
+        ] {
+            let mut req = request(&headers);
+            assert!(admit_forwarded_client(&mut req, Some(SECRET)));
+            assert!(!req.headers().contains_key(BINDING_SECRET_HEADER));
+            assert!(!req.headers().contains_key(CLIENT_IP_HEADER));
+            assert!(req.extensions().get::<ForwardedClient>().is_none());
+        }
+        let mut valid = request(&[ip, (BINDING_SECRET_HEADER, SECRET)]);
+        assert!(!admit_forwarded_client(&mut valid, Some(SECRET)));
+        let mut unconfigured = request(&[ip, (BINDING_SECRET_HEADER, SECRET)]);
+        assert!(admit_forwarded_client(&mut unconfigured, None));
+        let mut absent = request(&[ip]);
+        assert!(!admit_forwarded_client(&mut absent, Some(SECRET)));
     }
 
     #[test]
