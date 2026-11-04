@@ -18,7 +18,7 @@ hex = "0.4"
 http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 subtle = "2"
 tower-service = "0.3"
 uuid = { version = "1", features = ["v4"] }
