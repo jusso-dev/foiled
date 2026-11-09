@@ -14,6 +14,6 @@
     "build": "pnpm -r build"
   },
   "devDependencies": {
-    "@redocly/cli": "^2.64.1"
+    "@redocly/cli": "^2.76.0"
   }
 }
