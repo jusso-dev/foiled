@@ -2,7 +2,7 @@
 //! short-lived R2 upload URLs for one object (#9). R2's S3 API accepts SigV4
 //! with region `auto`. Pure functions: the caller supplies the time.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;

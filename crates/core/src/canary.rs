@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use ed25519_dalek::SigningKey;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
