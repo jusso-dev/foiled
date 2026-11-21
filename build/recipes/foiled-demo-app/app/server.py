@@ -44,6 +44,8 @@ HOOK_SEQUENCE = itertools.count(1)
 
 MAX_BODY_BYTES = 1024 * 1024
 MAX_LOGGED_TARGET = 2048
+REQUEST_TIMEOUT_SECONDS = 30
+MAX_CONCURRENT_REQUESTS = 64
 DEFAULT_UPLOAD_ROOT = "/srv/demo-app/uploads"
 DEFAULT_PORT = 8080
 
@@ -164,6 +166,7 @@ class DemoHandler(BaseHTTPRequestHandler):
     server_version = SERVER_BANNER
     sys_version = ""  # suppress the default Python version in the Server header
     protocol_version = "HTTP/1.1"
+    timeout = REQUEST_TIMEOUT_SECONDS
 
     def version_string(self):
         # Exact banner with no trailing space (the base class joins server and
@@ -204,11 +207,15 @@ class DemoHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         self._access(status, len(data))
 
-    def _send_json(self, status, obj):
+    def _send_json(self, status, obj, close=False):
         data = json.dumps(obj).encode("utf-8")
+        if close:
+            self.close_connection = True
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        if close:
+            self.send_header("Connection", "close")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
@@ -217,13 +224,25 @@ class DemoHandler(BaseHTTPRequestHandler):
     def _read_body(self):
         """Read the request body, enforcing the 1 MiB cap.
 
-        Returns the body bytes, or None if the cap was exceeded (in which case a
-        413 response has already been sent).
+        Returns the body bytes, or None if the request was invalid or the cap
+        was exceeded (in which case an error response has already been sent and
+        the connection marked for close).
         """
-        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.headers.get("Content-Length")
+        if raw is None or raw == "":
+            length = 0
+        else:
+            try:
+                length = int(raw)
+            except ValueError:
+                self._send_json(400, {"error": "invalid content-length"}, close=True)
+                return None
+            if length < 0:
+                self._send_json(400, {"error": "invalid content-length"}, close=True)
+                return None
         if length > MAX_BODY_BYTES:
             self._send_json(
-                413, {"error": "payload too large", "max": MAX_BODY_BYTES}
+                413, {"error": "payload too large", "max": MAX_BODY_BYTES}, close=True
             )
             return None
         return self.rfile.read(length) if length > 0 else b""
@@ -345,18 +364,26 @@ class DemoHandler(BaseHTTPRequestHandler):
         # Detect, for evidence only, whether the resolved path escaped the upload
         # root. This decides whether to fire the hook. It does NOT change the
         # write: the write happens either way so the decoy stays vulnerable.
-        resolved = os.path.realpath(target)
-        root = os.path.realpath(self.config.upload_root)
-        escaped = os.path.commonpath([resolved, root]) != root
+        try:
+            resolved = os.path.realpath(target)
+            root = os.path.realpath(self.config.upload_root)
+            escaped = os.path.commonpath([resolved, root]) != root
+        except (OSError, ValueError):
+            self._send_json(400, {"error": "invalid path"})
+            return
         if escaped:
             self._emit_hook(
                 "trigger", resolved, self.path, started,
                 "resolved path escaped the upload root",
             )
 
-        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
-        with open(target, "wb") as handle:
-            handle.write(body)
+        try:
+            os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+            with open(target, "wb") as handle:
+                handle.write(body)
+        except (OSError, ValueError):
+            self._send_json(500, {"error": "upload write failed"})
+            return
 
         if escaped and rel_path.endswith(".sh"):
             self._emit_hook(
@@ -387,13 +414,39 @@ def make_handler(config, access_log, event_log):
     return BoundHandler
 
 
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with bounded concurrent worker threads."""
+
+    daemon_threads = True
+
+    def __init__(self, server_address, handler_class, max_workers=MAX_CONCURRENT_REQUESTS):
+        self._slots = threading.BoundedSemaphore(max_workers)
+        super().__init__(server_address, handler_class)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 def build_server(host, port, config, access_log=None, event_log=None):
-    """Create the HTTP server. Returns the ThreadingHTTPServer (not started)."""
+    """Create the HTTP server. Returns the BoundedThreadingHTTPServer (not started)."""
     access_log = access_log or JsonLog(sys.stdout)
     event_log = event_log or access_log
     config.ensure_upload_root()
     handler = make_handler(config, access_log, event_log)
-    return ThreadingHTTPServer((host, port), handler)
+    return BoundedThreadingHTTPServer((host, port), handler)
 
 
 def main(argv=None):

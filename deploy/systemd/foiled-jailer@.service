@@ -19,7 +19,7 @@
 #   - published ports taken from the catalogue entry, never a management port
 #   - no egress rule is ever opened (egress goes through the #4 proxy only)
 # It then stages the image into the chroot, creates the netns, the host-side
-# interface fc-<id> and the DNAT rules.
+# interface foil-<id> and the DNAT rules.
 
 [Unit]
 Description=Foiled decoy micro-VM %i
@@ -38,7 +38,7 @@ ExecStart=/usr/local/lib/foiled/jailer \
     --uid ${FOILED_VM_UID} \
     --gid ${FOILED_DECOY_GID} \
     --chroot-base-dir /srv/jailer \
-    --netns /run/netns/fc-%i \
+    --netns /run/netns/foiled-%i \
     --cgroup-version 2 \
     -- \
     --config-file vm.json \

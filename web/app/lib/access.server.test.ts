@@ -126,6 +126,12 @@ describe("Cloudflare Access check", () => {
     const cases: [string, string | undefined][] = [
       ["missing", undefined],
       ["junk", "a.b.c"],
+      ["null-header", `${b64url("null")}.${b64url(JSON.stringify(good))}.AA`],
+      ["array-header", `${b64url("[]")}.${b64url(JSON.stringify(good))}.AA`],
+      [
+        "null-claims",
+        `${b64url(JSON.stringify({ alg: "RS256", kid: "k1" }))}.${b64url("null")}.AA`,
+      ],
       ["forged", await sign(good, "k1", other.privateKey)],
       ["audience", await sign({ ...good, aud: ["someone-else"] })],
       ["issuer", await sign({ ...good, iss: "https://evil.example" })],

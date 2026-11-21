@@ -1,7 +1,8 @@
 # Foiled packet capture for one decoy (#9) on a research sensor (#7).
-# Suggested template. Instance name is the short decoy ID (at most 12
-# characters), for example foiled-capture@web01.service. It captures on the
-# host-side interface of that decoy, fc-<id>, as ADR 0003 (#4) defines it.
+# Instance name is the short decoy ID (at most 10 characters, matching the
+# 8-hex-char id in ADR 0003), for example foiled-capture@web01.service. It
+# captures on the host-side interface of that decoy, foil-<id>, as ADR 0003
+# (#4) defines it.
 #
 # Started and stopped by foiled-hostd. Stops when the decoy's VM unit stops.
 # Disk caps: 20 files of 100 MB (about 2 GB) per decoy, ring overwrite.
@@ -24,7 +25,7 @@ User=foiled-agent
 Group=foiled-agent
 UMask=0077
 ExecStartPre=/usr/bin/mkdir -p /var/lib/foiled/capture/%i
-ExecStart=/usr/bin/tcpdump -i fc-%i -n -U -C 100 -W 20 -w /var/lib/foiled/capture/%i/ring.pcap
+ExecStart=/usr/bin/tcpdump -i foil-%i -n -U -C 100 -W 20 -w /var/lib/foiled/capture/%i/ring.pcap
 Restart=on-failure
 RestartSec=2s
 

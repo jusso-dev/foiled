@@ -42,7 +42,7 @@ Read the operator responsibilities checklist in [threat model](../threat-model.m
 ```mermaid
 flowchart LR
   attacker[Internet attacker] -- decoy ports only --> fe["Decoy frontend IP<br/>203.0.113.20 (DNAT)"]
-  fe --> vm1["Decoy micro-VM<br/>fc-web01 tap, 10.85.1.2"]
+  fe --> vm1["Decoy micro-VM<br/>foil-web01 tap, 10.85.1.2"]
   vm1 -- DNS and allow-listed HTTP only --> svc["Logging resolver and egress proxy<br/>on the sandbox side (#4)"]
   subgraph host[Sandbox host]
     hostd["foiled-hostd<br/>user foiled-agent<br/>no listening port"]
@@ -95,7 +95,7 @@ The UID range for micro-VMs must not overlap any real account. Check `/etc/login
 | Primary public (`eth0`), primary IP | `203.0.113.10` | Nothing. | Return traffic for the host's own outbound connections only. |
 | Primary public (`eth0`), decoy frontend IP | `203.0.113.20` | Nothing on the host itself. Published decoy ports are DNAT'd straight into the decoy (#4). | Anyone, on published decoy ports only. |
 | Private management (`tailscale0` or `wg0`) | Tailnet or WireGuard address | `sshd` on 22/tcp. | Operators on your private network only. |
-| Sandbox side (taps `fc-<id>`, or the bridge from ADR 0003) | `10.85.0.0/16` | The logging resolver and egress proxy from #4, on the sandbox gateway address only. | Decoys, for DNS and allow-listed egress only. Nothing else on the host (threat model C16). |
+| Sandbox side (taps `foil-<id>`, or the bridge from ADR 0003) | `10.85.0.0/16` | The logging resolver and egress proxy from #4, on the sandbox gateway address only. | Decoys, for DNS and allow-listed egress only. Nothing else on the host (threat model C16). |
 | Loopback (`lo`) | `127.0.0.1`, `::1` | Local-only helpers, if any. `foiled-hostd` uses a Unix socket in `/run/foiled-hostd/`, not a TCP port. | The host itself. |
 
 ### Inbound ports
@@ -222,11 +222,11 @@ table inet foiled_host {
     ct state invalid drop
     # Management SSH only over the private path. Never on a public IP.
     iifname { "tailscale0", "wg0" } tcp dport 22 accept
-    # Decoys may reach only the logging resolver and egress proxy (#4). Ports are examples;
-    # rename "fc-*" to match the sandbox-side interfaces ADR 0003 defines.
-    iifname "fc-*" udp dport 53 accept
-    iifname "fc-*" tcp dport { 53, 3128 } accept
-    iifname "fc-*" counter drop
+    # Decoys may reach only the logging resolver and egress proxy (#4). Matches
+    # the sandbox-side interfaces ADR 0003 defines ("foil-*").
+    iifname "foil-*" udp dport 53 accept
+    iifname "foil-*" tcp dport { 53, 3128 } accept
+    iifname "foil-*" counter drop
     # Basic ICMP so the host behaves like a normal server.
     icmp type { echo-request, destination-unreachable, time-exceeded } limit rate 10/second accept
     icmpv6 type { echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept
@@ -328,7 +328,7 @@ polkit.addRule(function (action, subject) {
 });
 ```
 
-Decoy IDs on the host are short (at most 12 characters) because tap names such as `fc-<id>` must fit the Linux 15-character interface name limit.
+Decoy IDs on the host are short (at most 10 characters; ADR 0003 uses 8 hex characters) because tap names such as `foil-<id>` must fit the Linux 15-character interface name limit.
 
 Files the agent needs:
 
@@ -404,7 +404,7 @@ If you use it for a lab:
 
 | Scenario | Threat-model controls | Where this guide implements it | How to check |
 | --- | --- | --- | --- |
-| A decoy guest tries to reach the agent or other host services | C16 | `foiled-hostd` has no listening port. The host input chain drops everything from `fc-*` except the resolver and proxy ports. | `ss` check; ADR 0003 tests |
+| A decoy guest tries to reach the agent or other host services | C16 | `foiled-hostd` has no listening port. The host input chain drops everything from `foil-*` except the resolver and proxy ports. | `ss` check; ADR 0003 tests |
 | A decoy guest tries to reach the ingest hostname | C9, C15 | Decoy egress is default deny in #4's forward chain. Only host processes leave through the host output chain. | ADR 0003 tests |
 | A management port is exposed by mistake | C14 | Input chain policy drop; SSH only on private interfaces; Docker fallback forbidden on public hosts. | `ss` and external `nmap` checks |
 | An attacker who escaped to the host steals the agent's key | C17, R4 | The key can lease only this host's jobs and post this host's evidence. Revoke it and rebuild the host (#31, #8). | #41 acceptance test for a stolen host certificate |

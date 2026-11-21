@@ -135,14 +135,33 @@ class ServerTestCase(unittest.TestCase):
         oversize = server.MAX_BODY_BYTES + 1
         headers = {"Content-Length": str(oversize)}
         # Send a header that claims an oversize body; the server should reject it
-        # on the declared length before reading a full payload.
-        status, _h, body = self.request(
+        # on the declared length before reading a full payload and close keep-alive.
+        status, resp_headers, _body = self.request(
             "POST", "/api/upload?path=big.bin", body=b"x", headers=headers
         )
         self.assertEqual(status, 413)
+        self.assertEqual(resp_headers.get("Connection"), "close")
         self.assertNotIn(
             "big.bin", os.listdir(self.upload_root) if os.path.isdir(self.upload_root) else []
         )
+
+    def test_invalid_content_length_and_unwritable_path_still_log_access(self):
+        status, resp_headers, _body = self.request(
+            "POST", "/api/upload?path=bad.txt", body=b"x", headers={"Content-Length": "abc"}
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(resp_headers.get("Connection"), "close")
+
+        # NUL byte in path: returns 400 and logs access without crashing handler.
+        status, _h, _body = self.request("POST", "/api/upload?path=bad%00name", body=b"x")
+        self.assertEqual(status, 400)
+
+        # Directory target: returns 500 and logs access without crashing handler.
+        status, _h, _body = self.request("POST", "/api/upload?path=.", body=b"x")
+        self.assertEqual(status, 500)
+
+        lines = [json.loads(l) for l in self.access_buf.getvalue().splitlines() if l.strip()]
+        self.assertEqual([l["status"] for l in lines], [400, 400, 500])
 
     def test_access_log_lines_are_valid_json(self):
         self.request("GET", "/")

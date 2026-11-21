@@ -5,6 +5,7 @@ import { CsrfField } from "../components/console/ConsoleShell";
 import { ChecklistFields, PageHead, SubmitButton, Time } from "../components/console/Controls";
 import { ActionNotice, EmptyState, ErrorState, Notice } from "../components/console/Notice";
 import { RouteError } from "../components/console/RouteError";
+import { windowQuery } from "../components/console/Tables";
 import type { ReviewAction, ReviewActionRequest, ReviewItem, ReviewKind } from "../lib/api-types";
 import {
   field,
@@ -86,6 +87,7 @@ export async function loader(args: Route.LoaderArgs) {
   );
   return {
     filters,
+    window: { since: w.since, until: w.until },
     items: res.ok ? res.data.items : ([] as ReviewItem[]),
     total: res.ok ? res.data.total : 0,
     notes: res.ok ? res.data.notes : [],
@@ -229,6 +231,7 @@ export default function Review({ loaderData: d, actionData }: Route.ComponentPro
         <ReviewCard
           key={item.item_id}
           item={item}
+          wq={windowQuery(d.window)}
           me={d.me}
           canDecide={d.canDecide}
           result={actionData && actionData.item === item.item_id ? actionData : null}
@@ -238,22 +241,22 @@ export default function Review({ loaderData: d, actionData }: Route.ComponentPro
   );
 }
 
-function SubjectLinks({ item }: { item: ReviewItem }) {
+function SubjectLinks({ item, wq }: { item: ReviewItem; wq: string }) {
   const s = item.subject;
   const out: { to: string; text: string }[] = [];
   if (s.attempt_id && isId("attempt", s.attempt_id)) {
-    out.push({ to: `/attempts/${s.attempt_id}`, text: s.attempt_id });
+    out.push({ to: `/attempts/${s.attempt_id}${wq}`, text: s.attempt_id });
   }
   if (s.campaign_id && isId("campaign", s.campaign_id)) {
-    out.push({ to: `/campaigns/${s.campaign_id}`, text: s.campaign_id });
+    out.push({ to: `/campaigns/${s.campaign_id}${wq}`, text: s.campaign_id });
   }
-  if (s.ioc_id && isId("ioc", s.ioc_id)) out.push({ to: `/iocs/${s.ioc_id}`, text: s.ioc_id });
+  if (s.ioc_id && isId("ioc", s.ioc_id)) out.push({ to: `/iocs/${s.ioc_id}${wq}`, text: s.ioc_id });
   if (s.writeup_id && isId("writeup", s.writeup_id)) {
     out.push({ to: `/writeups/${s.writeup_id}`, text: `write-up ${s.writeup_id}` });
   }
   if (s.other_campaign_id && isId("campaign", s.other_campaign_id)) {
     out.push({
-      to: `/campaigns/${s.other_campaign_id}`,
+      to: `/campaigns/${s.other_campaign_id}${wq}`,
       text: s.campaign_id
         ? `fold ${s.other_campaign_id} into ${s.campaign_id}`
         : s.other_campaign_id,
@@ -264,7 +267,9 @@ function SubjectLinks({ item }: { item: ReviewItem }) {
     item.kind === "actor_association" &&
     (isId("campaign", actorSubject) || isId("attempt", actorSubject))
   ) {
-    out.push({ to: `/actors?subject_id=${actorSubject}`, text: "actor evidence" });
+    const actorParams = new URLSearchParams(wq.startsWith("?") ? wq.slice(1) : "");
+    actorParams.set("subject_id", String(actorSubject));
+    out.push({ to: `/actors?${actorParams.toString()}`, text: "actor evidence" });
   }
   if (!out.length) return null;
   return (
@@ -283,11 +288,13 @@ function SubjectLinks({ item }: { item: ReviewItem }) {
 
 function ReviewCard({
   item,
+  wq,
   me,
   canDecide,
   result,
 }: {
   item: ReviewItem;
+  wq: string;
   me: string;
   canDecide: boolean;
   result: { ok: boolean; message: string } | null;
@@ -337,7 +344,7 @@ function ReviewCard({
               , snoozed until <Time ms={item.snoozed_until} />
             </>
           ) : null}
-          <SubjectLinks item={item} />
+          <SubjectLinks item={item} wq={wq} />
         </p>
         {stuck ? (
           <Notice kind="warn">

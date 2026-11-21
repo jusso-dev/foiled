@@ -11,11 +11,16 @@ set -euo pipefail
 
 ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 cd "$ROOT"
-WORK="${WORK:-$(mktemp -d)}"
+AUTO_WORK=0
+if [ -z "${WORK:-}" ]; then
+  WORK="$(mktemp -d)"
+  AUTO_WORK=1
+fi
 API=127.0.0.1:8787
 NET=foiled-lab
 SUBNET=10.86.0.0/24
 ENTRY=catalogue/entries/foiled/demo-app/1.0.0.yaml
+ENTRY_BACKUP="$WORK/demo-app-entry.yaml.orig"
 PIDS=()
 
 log() { printf '\n== %s\n' "$*"; }
@@ -32,12 +37,17 @@ cleanup() {
   local status=$?
   set +e
   [ "$status" -ne 0 ] && diagnose
-  for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done
+  for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null; done
   docker ps -aq --filter label=foiled.decoy | xargs -r docker rm -f >/dev/null
   docker rm -f foiled-registry >/dev/null 2>&1
   docker network rm "$NET" >/dev/null 2>&1
   sudo iptables -D DOCKER-USER -s "$SUBNET" -m conntrack --ctstate NEW -j REJECT 2>/dev/null
-  git checkout -- "$ENTRY" 2>/dev/null
+  if [ -f "$ENTRY_BACKUP" ]; then
+    cp "$ENTRY_BACKUP" "$ENTRY" 2>/dev/null
+  fi
+  if [ "$AUTO_WORK" -eq 1 ] && [ -n "$WORK" ] && [ -d "$WORK" ]; then
+    rm -rf "$WORK" 2>/dev/null
+  fi
 }
 trap cleanup EXIT
 
@@ -72,6 +82,7 @@ DIGEST="${IMAGE#*@}"
 echo "image: $IMAGE"
 
 log "2. Pin the catalogue entry to that digest (working tree only)"
+cp "$ENTRY" "$ENTRY_BACKUP"
 python3 - "$ENTRY" "$IMAGE" <<'PY'
 import sys
 path, image = sys.argv[1], sys.argv[2]

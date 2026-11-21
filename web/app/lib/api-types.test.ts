@@ -19,6 +19,7 @@ import radarSchema from "../../../schemas/radar-feed.schema.json";
 import reviewSchema from "../../../schemas/review-item.schema.json";
 import writeUpSchema from "../../../schemas/write-up.schema.json";
 import type {
+  ActorLink,
   ActorLinkRecord,
   AgentRecord,
   Attempt,
@@ -26,12 +27,14 @@ import type {
   Campaign,
   CampaignAction,
   ConfidenceLink,
+  EvidenceSource,
   Ioc,
   QuarantineItem,
   RadarFeed,
   ReviewItem,
   WriteUp,
 } from "./api-types";
+import { SOURCE_LABEL } from "./links";
 
 type Keys<T> = Record<keyof T, true>;
 
@@ -287,12 +290,60 @@ const actorLink: Keys<ActorLinkRecord> = {
   confidence: true,
 };
 
+const campaignActorLink: Keys<ActorLink> = {
+  link_id: true,
+  actor_id: true,
+  label: true,
+  wording: true,
+  score: true,
+  band: true,
+  status: true,
+  review_queue: true,
+  confidence_ref: true,
+  report_urls: true,
+};
+
+const matchedIndicator: Keys<ActorLinkRecord["matched"]["indicators"][number]> = {
+  type: true,
+  display: true,
+  match: true,
+  ioc_id: true,
+  weight: true,
+  stale: true,
+  observed: true,
+  source_url: true,
+};
+
+const evidenceSources: Record<EvidenceSource, true> = {
+  actor_ttp_overlap: true,
+  actor_indicator_overlap: true,
+  actor_targeting: true,
+  actor_payload_overlap: true,
+  actor_asn_overlap: true,
+  rule: true,
+  sequence: true,
+  vuln_path_hook: true,
+  catalogue_prior: true,
+  vendor_desc: true,
+  predisclosure_backmatch: true,
+  enrichment: true,
+  llm: true,
+  analyst: true,
+  campaign_cluster: true,
+  noise_score: true,
+};
+
 const CASES: [string, Record<string, true>, { required: string[]; properties: object }][] = [
   ["attempt", attempt, attemptSchema],
   ["attempt-timeline", timeline, timelineSchema],
   ["confidence-link", link, linkSchema],
   ["ioc", ioc, iocSchema],
   ["campaign", campaign, campaignSchema],
+  [
+    "campaign.suggested_actor_links[]",
+    campaignActorLink,
+    campaignSchema.properties.suggested_actor_links.items,
+  ],
   ["campaign-action", action, actionSchema],
   ["agent-record", agent, agentSchema],
   ["quarantine-meta", quarantine, quarantineSchema],
@@ -300,6 +351,11 @@ const CASES: [string, Record<string, true>, { required: string[]; properties: ob
   ["write-up", writeUp, writeUpSchema],
   ["radar-feed", radar, radarSchema],
   ["actor-link", actorLink, actorLinkSchema],
+  [
+    "actor-link.matched.indicators[]",
+    matchedIndicator,
+    actorLinkSchema.properties.matched.properties.indicators.items,
+  ],
 ];
 
 describe("api-types match the JSON Schemas", () => {
@@ -309,4 +365,9 @@ describe("api-types match the JSON Schemas", () => {
       for (const r of schema.required) expect(keys, `${name}.${r}`).toHaveProperty(r);
     });
   }
+
+  it("EvidenceSource and SOURCE_LABEL cover confidence-link.schema.json $defs.source", () => {
+    expect(Object.keys(evidenceSources).sort()).toEqual([...linkSchema.$defs.source.enum].sort());
+    expect(Object.keys(SOURCE_LABEL).sort()).toEqual([...linkSchema.$defs.source.enum].sort());
+  });
 });

@@ -6,6 +6,7 @@ import { PageHead, SubmitButton } from "../components/console/Controls";
 import { LinkExplainer } from "../components/console/LinkExplainer";
 import { ActionNotice, EmptyState, ErrorState, Notice } from "../components/console/Notice";
 import { RouteError } from "../components/console/RouteError";
+import { windowQuery } from "../components/console/Tables";
 import type { ActorDecision, ActorLinkRecord } from "../lib/api-types";
 import {
   field,
@@ -29,7 +30,7 @@ export function meta(_: Route.MetaArgs) {
   return [{ title: "Actor associations · Foiled console" }];
 }
 
-const STATUSES = ["pending", "confirmed", "rejected"] as const;
+const STATUSES = ["all", "pending", "confirmed", "rejected"] as const;
 const DECISIONS: readonly ActorDecision[] = ["confirm", "reject", "reopen"];
 const LABEL_KIND = {
   nexus: "Nexus",
@@ -47,10 +48,12 @@ export async function loader(args: Route.LoaderArgs) {
   const p = new URL(args.request.url).searchParams;
   const w = windowFrom(p);
   const subject = p.get("subject_id");
+  const subjectId = isId("campaign", subject) || isId("attempt", subject) ? String(subject) : "";
+  const status = oneOf(p, "status", STATUSES) ?? (subjectId ? "all" : "pending");
   const filters = {
     window: w.key ?? "",
-    status: oneOf(p, "status", STATUSES) ?? "pending",
-    subject_id: isId("campaign", subject) || isId("attempt", subject) ? String(subject) : "",
+    status,
+    subject_id: subjectId,
     min_confidence: intField(p, "min_confidence", 0, 100) ?? "",
   };
   const res = await load(
@@ -58,13 +61,15 @@ export async function loader(args: Route.LoaderArgs) {
     op.api.listActorLinks({
       since: w.since,
       until: w.until,
-      ...filters,
-      window: undefined,
+      status: status === "all" ? undefined : status,
+      subject_id: filters.subject_id,
+      min_confidence: filters.min_confidence,
       limit: 100,
     }),
   );
   return {
     filters,
+    window: { since: w.since, until: w.until },
     items: res.ok ? res.data.items : ([] as ActorLinkRecord[]),
     truncated: res.ok ? res.data.truncated : false,
     error: res.ok ? null : res.error,
@@ -162,6 +167,7 @@ export default function Actors({ loaderData: d, actionData }: Route.ComponentPro
         <ActorCard
           key={l.link_id}
           link={l}
+          wq={windowQuery(d.window)}
           canDecide={d.canDecide}
           result={actionData && actionData.link === l.link_id ? actionData : null}
         />
@@ -188,19 +194,21 @@ function ExternalLink({ url, text }: { url: string; text: string }) {
 
 function ActorCard({
   link: l,
+  wq,
   canDecide,
   result,
 }: {
   link: ActorLinkRecord;
+  wq: string;
   canDecide: boolean;
   result: { ok: boolean; message: string } | null;
 }) {
   const id = useId();
   const subjectHref =
     l.subject_kind === "campaign" && isId("campaign", l.subject_id)
-      ? `/campaigns/${l.subject_id}`
+      ? `/campaigns/${l.subject_id}${wq}`
       : isId("attempt", l.subject_id)
-        ? `/attempts/${l.subject_id}`
+        ? `/attempts/${l.subject_id}${wq}`
         : null;
   // The chip and statement come from the API's wording; the console never upgrades it.
   const sentence = linkSentence({
@@ -257,6 +265,7 @@ function ActorCard({
             <li key={`${i.type}-${i.display}`}>
               Indicator <span className="tag">{i.type}</span>{" "}
               <span className="mono">{toPrintable(i.display)}</span> {i.match}, weight {i.weight}
+              {i.observed ? "" : " (attacker-chosen payload data)"}
               {i.stale ? " (stale report, half weight)" : ""}
             </li>
           ))}
@@ -295,9 +304,9 @@ function ActorCard({
               <textarea id={`${id}-note`} name="note" maxLength={1000} rows={2} />
             </div>
             <div className="actions-row field--wide">
-              {l.status !== "confirmed" ? (
+              {l.status !== "confirmed" || (l.new_since_confirmation?.length ?? 0) > 0 ? (
                 <SubmitButton intent="confirm" tone="primary">
-                  Confirm association
+                  {l.status === "confirmed" ? "Re-confirm association" : "Confirm association"}
                 </SubmitButton>
               ) : null}
               {l.status !== "rejected" ? (

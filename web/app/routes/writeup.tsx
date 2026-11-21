@@ -82,8 +82,11 @@ export async function loader(args: Route.LoaderArgs) {
   };
 }
 
+// Write-up bodies can be up to 64 KiB of Markdown; allow room for URL-encoding and metadata.
+const MAX_WRITEUP_FORM_BYTES = 256 * 1024;
+
 export async function action(args: Route.ActionArgs) {
-  const op = await requireMutation(args);
+  const op = await requireMutation(args, MAX_WRITEUP_FORM_BYTES);
   const f = op.form;
   const intent = oneOf(f, "intent", ["edit", ...STATUSES] as const);
   const version = intField(f, "version", 1, Number.MAX_SAFE_INTEGER);

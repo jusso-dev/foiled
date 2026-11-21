@@ -183,13 +183,20 @@ impl Runtime for DockerRuntime {
         // that crashes on start is reported as failed.
         for _ in 0..3 {
             std::thread::sleep(std::time::Duration::from_secs(1));
-            let state = self.docker(&[
+            let state = match self.docker(&[
                 "inspect".into(),
                 "--format".into(),
                 "{{.State.Running}}".into(),
                 container_name(decoy_id),
-            ])?;
+            ]) {
+                Ok(s) => s,
+                Err(e) => {
+                    self.running.lock().unwrap().retain(|d| d != decoy_id);
+                    return Err(e);
+                }
+            };
             if state != "true" {
+                self.running.lock().unwrap().retain(|d| d != decoy_id);
                 return Err(RuntimeError("container exited during start".into()));
             }
         }
@@ -218,8 +225,13 @@ impl Runtime for DockerRuntime {
     }
 
     fn destroy(&self, decoy_id: &str) -> RtResult<()> {
-        self.docker(&["rm".into(), "--force".into(), container_name(decoy_id)])
-            .map(|_| ())
+        let res = self
+            .docker(&["rm".into(), "--force".into(), container_name(decoy_id)])
+            .map(|_| ());
+        if res.is_ok() {
+            self.running.lock().unwrap().retain(|d| d != decoy_id);
+        }
+        res
     }
 
     fn snapshot(&self, decoy_id: &str, _kind: SnapshotKind) -> RtResult<String> {

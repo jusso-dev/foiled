@@ -39,7 +39,7 @@ async function feed(args: Route.LoaderArgs): Promise<Response> {
   const res = await load(args.request, op.api.listAttempts({ since, until, limit: 50 }));
   if (!res.ok) return Response.json({ ok: false, error: res.error.message }, { status: 502 });
   const items = res.data.items.map(feedItem);
-  const cursor = items.reduce((m, a) => Math.max(m, a.last_seen), asked);
+  const cursor = items.reduce((m, a) => Math.max(m, a.last_seen), since);
   const body: LiveResponse = {
     ok: true,
     items,

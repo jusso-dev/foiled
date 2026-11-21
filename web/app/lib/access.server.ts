@@ -50,7 +50,11 @@ function b64urlBytes(s: string): Uint8Array<ArrayBuffer> {
 }
 
 function b64urlJson(s: string): Record<string, unknown> {
-  return JSON.parse(new TextDecoder().decode(b64urlBytes(s))) as Record<string, unknown>;
+  const parsed: unknown = JSON.parse(new TextDecoder().decode(b64urlBytes(s)));
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("expected JSON object");
+  }
+  return parsed as Record<string, unknown>;
 }
 
 async function fetchKeys(url: string, fetcher: JwksFetcher, now: number): Promise<Jwk[]> {
