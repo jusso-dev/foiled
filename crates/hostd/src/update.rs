@@ -109,6 +109,20 @@ pub fn stage_update(
     }
     let bytes = std::fs::read(artefact).map_err(UpdateError::Io)?;
     let entry = check_artefact(&manifest, target, &bytes).map_err(UpdateError::Release)?;
+    // Defense-in-depth: even though the manifest is signed, require a plain
+    // filename with no path separators or traversal components.
+    let mut comps = Path::new(&entry.file).components();
+    if !matches!(
+        (comps.next(), comps.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    ) || entry.file.contains('/')
+        || entry.file.contains('\\')
+    {
+        return Err(UpdateError::Manifest(format!(
+            "invalid artefact filename: {}",
+            entry.file
+        )));
+    }
 
     let dir = state_dir.join("updates").join(&manifest.version);
     std::fs::create_dir_all(&dir).map_err(UpdateError::Io)?;

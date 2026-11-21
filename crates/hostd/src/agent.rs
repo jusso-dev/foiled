@@ -50,7 +50,15 @@ impl Agent {
                         (Some(foiled_core::decoy::DecoyState::Healthy), Some(p)) => {
                             self.decoys.insert(decoy_id, p);
                         }
-                        (Some(foiled_core::decoy::DecoyState::Destroyed), _) => {
+                        (
+                            Some(
+                                foiled_core::decoy::DecoyState::Stopped
+                                | foiled_core::decoy::DecoyState::Quarantined
+                                | foiled_core::decoy::DecoyState::Failed
+                                | foiled_core::decoy::DecoyState::Destroyed,
+                            ),
+                            _,
+                        ) => {
                             self.decoys.remove(&decoy_id);
                         }
                         _ => {}
@@ -108,20 +116,30 @@ impl Agent {
         let unavailable = |e: std::io::Error| ClientError::Unavailable(e.to_string());
         let mut sent = 0;
         loop {
-            let batch = self.buffer.peek(MAX_BATCH).map_err(unavailable)?;
-            if batch.is_empty() {
+            let peeked = self.buffer.peek_batch(MAX_BATCH).map_err(unavailable)?;
+            if peeked.raw_lines == 0 {
                 return Ok(sent);
             }
+            if peeked.items.is_empty() {
+                // Segment held only corrupt lines; drop them so flush does not stall.
+                self.buffer.commit(peeked.raw_lines).map_err(unavailable)?;
+                self.buffer.note_dropped(peeked.corrupt);
+                continue;
+            }
+            let batch: Vec<CaptureEvent> = peeked.items.iter().map(|(e, _)| e.clone()).collect();
             let mut refused = 0;
+            let mut committed_lines = 0usize;
             match self.cp.send_events(&batch).await {
                 Ok(()) => {}
                 Err(e) if e.is_identity_problem() => return Err(e),
                 Err(ClientError::Refused(..)) => {
-                    for (i, event) in batch.iter().enumerate() {
+                    for (event, line_after) in &peeked.items {
                         match self.cp.send_events(std::slice::from_ref(event)).await {
-                            Ok(()) => {}
+                            Ok(()) => {
+                                committed_lines = *line_after;
+                            }
                             Err(e) if e.is_identity_problem() => {
-                                self.buffer.commit(i).map_err(unavailable)?;
+                                self.buffer.commit(committed_lines).map_err(unavailable)?;
                                 return Err(e);
                             }
                             Err(e @ ClientError::Refused(..)) => {
@@ -132,9 +150,10 @@ impl Agent {
                                 );
                                 self.buffer.note_dropped(1);
                                 refused += 1;
+                                committed_lines = *line_after;
                             }
                             Err(e) => {
-                                self.buffer.commit(i).map_err(unavailable)?;
+                                self.buffer.commit(committed_lines).map_err(unavailable)?;
                                 return Err(e);
                             }
                         }
@@ -142,7 +161,10 @@ impl Agent {
                 }
                 Err(e) => return Err(e),
             }
-            self.buffer.commit(batch.len()).map_err(unavailable)?;
+            self.buffer.commit(peeked.raw_lines).map_err(unavailable)?;
+            if peeked.corrupt > 0 {
+                self.buffer.note_dropped(peeked.corrupt);
+            }
             sent += batch.len() - refused;
         }
     }

@@ -200,7 +200,12 @@ pub(crate) async fn window_model_capped(
     campaigns: Campaigns,
     cap: usize,
 ) -> Result<WindowModel, ApiError> {
-    if until <= since || until - since > 31 * DAY_MS {
+    let Some(span) = until.checked_sub(since) else {
+        return Err(ApiError::bad_request(
+            "window must be positive and at most 31 days",
+        ));
+    };
+    if span <= 0 || span > 31 * DAY_MS {
         return Err(ApiError::bad_request(
             "window must be positive and at most 31 days",
         ));
@@ -475,8 +480,8 @@ pub(crate) fn window_bounds(
     since: Option<i64>,
     until: Option<i64>,
 ) -> (i64, i64) {
-    let until = until.unwrap_or_else(|| (state.clock)() + 1);
-    let since = since.unwrap_or(until - 7 * DAY_MS);
+    let until = until.unwrap_or_else(|| (state.clock)().saturating_add(1));
+    let since = since.unwrap_or_else(|| until.saturating_sub(7 * DAY_MS));
     (since, until)
 }
 

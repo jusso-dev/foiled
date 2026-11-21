@@ -32,6 +32,19 @@ fn segment_no(p: &Path) -> Option<u64> {
         .ok()
 }
 
+/// One peeked batch from [`OfflineBuffer::peek_batch`].
+pub struct PeekedBatch {
+    /// Valid events paired with the cumulative raw-line count up to (and
+    /// including) each event, so partial commits advance past any preceding
+    /// corrupt lines as well.
+    pub items: Vec<(CaptureEvent, usize)>,
+    /// Total raw lines scanned (including corrupt lines). Pass this to
+    /// [`OfflineBuffer::commit`] once the batch is handled.
+    pub raw_lines: usize,
+    /// Number of corrupt lines skipped within `raw_lines`.
+    pub corrupt: u64,
+}
+
 impl OfflineBuffer {
     pub fn open(dir: PathBuf, cap_bytes: u64) -> std::io::Result<Self> {
         Self::open_with_segments(dir, cap_bytes, SEGMENT_BYTES)
@@ -124,18 +137,41 @@ impl OfflineBuffer {
 
     /// Up to `max` of the oldest events, without removing them.
     pub fn peek(&self, max: usize) -> std::io::Result<Vec<CaptureEvent>> {
-        let mut out = Vec::new();
+        Ok(self
+            .peek_batch(max)?
+            .items
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect())
+    }
+
+    /// Up to `max` of the oldest valid events together with raw line counts so
+    /// [`Self::commit`] advances past corrupt JSONL lines cleanly.
+    pub fn peek_batch(&self, max: usize) -> std::io::Result<PeekedBatch> {
+        let mut items = Vec::new();
+        let mut raw_lines = 0usize;
+        let mut corrupt = 0u64;
         for (_, p) in self.segments()? {
             for line in BufReader::new(fs::File::open(p)?).lines() {
-                if out.len() >= max {
-                    return Ok(out);
+                if items.len() >= max {
+                    return Ok(PeekedBatch {
+                        items,
+                        raw_lines,
+                        corrupt,
+                    });
                 }
-                if let Ok(e) = serde_json::from_str(&line?) {
-                    out.push(e);
+                raw_lines += 1;
+                match serde_json::from_str(&line?) {
+                    Ok(e) => items.push((e, raw_lines)),
+                    Err(_) => corrupt += 1,
                 }
             }
         }
-        Ok(out)
+        Ok(PeekedBatch {
+            items,
+            raw_lines,
+            corrupt,
+        })
     }
 
     /// Remove the `n` oldest events after the control plane accepted them.
@@ -214,5 +250,27 @@ mod tests {
         let oldest = b.peek(1).unwrap()[0].event_id.clone();
         assert_ne!(oldest, "e0", "the oldest events go first");
         assert_eq!(b.len().unwrap() + b.dropped(), 600, "nothing lost silently");
+    }
+
+    #[test]
+    fn corrupt_lines_advance_without_stalling_or_duplicating() {
+        let dir = tempfile::tempdir().unwrap();
+        let buf_dir = dir.path().join("buf");
+        let mut b = OfflineBuffer::open(buf_dir.clone(), 1 << 30).unwrap();
+        b.push(&event(0)).unwrap();
+        let seg = b.segments().unwrap().pop().unwrap().1;
+        let mut content = fs::read_to_string(&seg).unwrap();
+        content = format!("not-json\n{content}also-corrupt\n");
+        fs::write(&seg, content).unwrap();
+
+        let batch = b.peek_batch(10).unwrap();
+        assert_eq!(batch.items.len(), 1);
+        assert_eq!(batch.items[0].0.event_id, "e0");
+        assert_eq!(batch.items[0].1, 2);
+        assert_eq!(batch.raw_lines, 3);
+        assert_eq!(batch.corrupt, 2);
+
+        b.commit(batch.raw_lines).unwrap();
+        assert!(b.is_empty().unwrap());
     }
 }

@@ -931,7 +931,7 @@ paths:
       security: [{ mtls: [] }]
       x-foiled-status: implemented
       x-foiled-store: d1
-      x-foiled-scopes: [sensor:lease]
+      x-foiled-scopes: [sensor:report]
       parameters:
         - { name: sensor_id, in: path, required: true, schema: { type: string } }
         - { name: job_id, in: path, required: true, schema: { type: string } }

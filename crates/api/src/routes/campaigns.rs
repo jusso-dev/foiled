@@ -141,7 +141,9 @@ impl CampaignStub {
             attempt_count: c.attempts,
             notes: vec![match &c.merged_into {
                 Some(into) => format!("This campaign was merged into {into}."),
-                None => "Fewer than two attempts of this campaign are in this window. Pass                          since and until around first_seen and last_seen for the full                          campaign."
+                None => "Fewer than two attempts of this campaign are in this window. Pass \
+                         since and until around first_seen and last_seen for the full \
+                         campaign."
                     .into(),
             }],
             merged_into: c.merged_into,

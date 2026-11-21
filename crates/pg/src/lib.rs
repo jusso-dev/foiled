@@ -219,6 +219,16 @@ pub async fn insert_events(
     events: &[CaptureEvent],
     received_at: i64,
 ) -> Result<u64, InsertError> {
+    Ok(insert_events_new(client, events, received_at).await?.len() as u64)
+}
+
+/// Insert events idempotently and return the slice indices of the rows that
+/// were newly inserted (not duplicates already in `capture_events`).
+pub async fn insert_events_new(
+    client: &Client,
+    events: &[CaptureEvent],
+    received_at: i64,
+) -> Result<Vec<usize>, InsertError> {
     let stmt = client
         .prepare(
             "INSERT INTO capture_events (event_id, tenant_id, decoy_id, catalogue_id, decoy_kind, ts,
@@ -228,8 +238,8 @@ pub async fn insert_events(
              ON CONFLICT (tenant_id, source_kind, source_id, event_id) DO NOTHING",
         )
         .await?;
-    let mut inserted = 0;
-    for e in events {
+    let mut inserted = Vec::new();
+    for (idx, e) in events.iter().enumerate() {
         let (Some(tenant), Some(source)) = (&e.tenant_id, &e.source) else {
             return Err(InsertError::Unstamped(e.event_id.clone()));
         };
@@ -238,7 +248,7 @@ pub async fn insert_events(
             .ok()
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_default();
-        inserted += client
+        let n = client
             .execute(
                 &stmt,
                 &[
@@ -263,6 +273,9 @@ pub async fn insert_events(
                 ],
             )
             .await?;
+        if n > 0 {
+            inserted.push(idx);
+        }
     }
     Ok(inserted)
 }
@@ -1237,6 +1250,7 @@ pub async fn radar_points(
         .query(
             "SELECT body FROM radar_rollups
              WHERE ($1::text IS NULL OR tenant_id = $1) AND day >= $2 AND day < $3
+             ORDER BY day DESC, dimension, key, sensor, source
              LIMIT $4",
             &[&tenant_id, &since, &until, &limit],
         )

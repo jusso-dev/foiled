@@ -107,6 +107,7 @@ describe("campaigns", () => {
           score: 35,
           band: "low",
           status: "pending",
+          review_queue: false,
           confidence_ref: "/v0/actor-links/acl_000000000000000000000001",
           report_urls: ["https://example.invalid/report", "javascript:alert(1)"],
         },

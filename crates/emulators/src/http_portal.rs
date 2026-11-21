@@ -342,10 +342,16 @@ pub fn parse_head(buf: &[u8]) -> Result<Option<Head>, Reject> {
         reason,
         line: clip(line, 256),
     };
+    if start > MAX_HEAD {
+        return Err(reject(400, "head too large", b""));
+    }
 
     let Some(line_end) = body.iter().position(|&b| b == b'\n') else {
         if body.len() > MAX_REQUEST_LINE {
             return Err(reject(414, "request line too long", body));
+        }
+        if buf.len() > MAX_HEAD {
+            return Err(reject(400, "head too large", body));
         }
         return Ok(None);
     };
@@ -940,6 +946,8 @@ mod tests {
             "b".repeat(9000)
         );
         assert_eq!(status(big.as_bytes()), 400);
+        let leading_newlines = vec![b'\n'; MAX_HEAD + 1];
+        assert_eq!(status(&leading_newlines), 400);
     }
 
     #[test]

@@ -380,13 +380,33 @@ describe("actor associations", () => {
     const r = expectPage(
       await page(envWith(a), `/actors?subject_id=${actorLinkRecord.subject_id}`, { cookie }),
     );
-    expect(a.calls[0].search.get("status")).toBe("pending");
+    // Drilling down by subject_id defaults to all statuses so confirmed links with new attempts appear.
+    expect(a.calls[0].search.get("status")).toBeNull();
     expect(a.calls[0].search.get("subject_id")).toBe(actorLinkRecord.subject_id);
     const t = text(r.html);
     expect(t).toContain(actorLinkRecord.statement);
     expect(t).toContain("Possible association with");
     expect(t).not.toMatch(/attributed to/i);
     expect(t).toContain(actorLinkRecord.sources[0].publisher);
+
+    const a2 = actorApi();
+    expectPage(await page(envWith(a2), "/actors", { cookie }));
+    expect(a2.calls[0].search.get("status")).toBe("pending");
+  });
+
+  it("allows re-confirming confirmed links that have new attempts since confirmation", async () => {
+    const { cookie } = await signIn();
+    const confirmedWithNew = {
+      ...actorLinkRecord,
+      status: "confirmed" as const,
+      wording: "confirmed association" as const,
+      new_since_confirmation: ["att_000000000000000000000099"],
+    };
+    const a = fakeApi((c) =>
+      c.path === "/v0/actor-links" ? { items: [confirmedWithNew], truncated: false } : undefined,
+    );
+    const r = expectPage(await page(envWith(a), "/actors?status=confirmed", { cookie }));
+    expect(text(r.html)).toContain("Re-confirm association");
   });
 
   it("needs a note to confirm, and records decisions", async () => {

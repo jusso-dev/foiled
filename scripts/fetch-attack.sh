@@ -126,7 +126,11 @@ groups_json() {
 }
 
 if [[ "$groups" -eq 1 ]]; then
-  groups_json > "$data/groups.json"
+  fresh="$(mktemp "$data/.groups.XXXXXX")"
+  trap 'rm -f "$fresh"' EXIT
+  groups_json > "$fresh"
+  mv "$fresh" "$data/groups.json"
+  trap - EXIT
   echo "wrote data/attack/groups.json from ATT&CK v${version}"
   exit 0
 fi

@@ -96,12 +96,15 @@ export async function readForm(request: Request, max = MAX_FORM_BYTES): Promise<
 }
 
 /** For actions: a valid session, a same-origin POST and the session's CSRF token. */
-export async function requireMutation(args: RouteArgs): Promise<Mutation> {
+export async function requireMutation(
+  args: RouteArgs,
+  maxBytes = MAX_FORM_BYTES,
+): Promise<Mutation> {
   const op = await requireOperator(args);
   const { request } = args;
   if (request.method !== "POST") throw data({ message: "Method not allowed." }, { status: 405 });
   if (!sameOrigin(request)) throw data({ message: "Cross-site request refused." }, { status: 403 });
-  const form = await readForm(request);
+  const form = await readForm(request, maxBytes);
   const csrf = form.get("csrf");
   if (typeof csrf !== "string" || !safeEqual(csrf, op.session.csrf)) {
     throw data(

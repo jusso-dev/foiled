@@ -16,24 +16,51 @@ use sha2::{Digest, Sha256};
 /// `YYYY-MM-DDTHH:MM:SS[.fff]Z` to Unix milliseconds.
 pub fn parse_utc_ms(s: &str) -> Option<i64> {
     let s = s.strip_suffix('Z')?;
-    let (date, time) = s.split_once('T')?;
-    let mut d = date.split('-');
-    let (y, m, day): (i64, i64, i64) = (
-        d.next()?.parse().ok()?,
-        d.next()?.parse().ok()?,
-        d.next()?.parse().ok()?,
-    );
-    let (hms, frac) = time.split_once('.').unwrap_or((time, "0"));
-    let mut t = hms.split(':');
-    let (hh, mm, ss): (i64, i64, i64) = (
-        t.next()?.parse().ok()?,
-        t.next()?.parse().ok()?,
-        t.next()?.parse().ok()?,
-    );
-    if !(1..=12).contains(&m) || !(1..=31).contains(&day) || hh > 23 || mm > 59 || ss > 60 {
+    if !s.is_ascii() {
         return None;
     }
-    let ms: i64 = format!("{frac:0<3}")[..3].parse().ok()?;
+    let (date, time) = s.split_once('T')?;
+    let mut d = date.split('-');
+    let (y_s, m_s, day_s) = (d.next()?, d.next()?, d.next()?);
+    if d.next().is_some()
+        || !y_s.bytes().all(|b| b.is_ascii_digit())
+        || !m_s.bytes().all(|b| b.is_ascii_digit())
+        || !day_s.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let (y, m, day): (i64, i64, i64) = (y_s.parse().ok()?, m_s.parse().ok()?, day_s.parse().ok()?);
+    let (hms, frac) = match time.split_once('.') {
+        Some((h, f)) => {
+            if f.is_empty() || !f.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            (h, f)
+        }
+        None => (time, "0"),
+    };
+    let mut t = hms.split(':');
+    let (hh_s, mm_s, ss_s) = (t.next()?, t.next()?, t.next()?);
+    if t.next().is_some()
+        || !hh_s.bytes().all(|b| b.is_ascii_digit())
+        || !mm_s.bytes().all(|b| b.is_ascii_digit())
+        || !ss_s.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let (hh, mm, ss): (i64, i64, i64) =
+        (hh_s.parse().ok()?, mm_s.parse().ok()?, ss_s.parse().ok()?);
+    if !(1970..=9999).contains(&y)
+        || !(1..=12).contains(&m)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hh)
+        || !(0..=59).contains(&mm)
+        || !(0..=60).contains(&ss)
+    {
+        return None;
+    }
+    let padded = format!("{frac:0<3}");
+    let ms: i64 = padded.get(..3)?.parse().ok()?;
     // Days from civil (Howard Hinnant).
     let y2 = if m <= 2 { y - 1 } else { y };
     let era = y2.div_euclid(400);
@@ -42,7 +69,10 @@ pub fn parse_utc_ms(s: &str) -> Option<i64> {
     let doy = (153 * mp + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
-    Some(((days * 86_400 + hh * 3600 + mm * 60 + ss) * 1000) + ms)
+    let secs = days
+        .checked_mul(86_400)?
+        .checked_add(hh * 3600 + mm * 60 + ss)?;
+    secs.checked_mul(1000)?.checked_add(ms)
 }
 
 fn event_id(decoy_id: &str, generation: u32, line: &str) -> String {
@@ -199,6 +229,11 @@ mod tests {
         assert_eq!(parse_utc_ms("2000-02-29T00:00:00Z"), Some(951_782_400_000));
         assert_eq!(parse_utc_ms("2026-13-01T00:00:00Z"), None);
         assert_eq!(parse_utc_ms("2026-10-18 01:02:03"), None);
+        // Untrusted guest strings must never panic or accept negative/overflowing parts.
+        assert_eq!(parse_utc_ms("2026-10-18T01:02:03.ééZ"), None);
+        assert_eq!(parse_utc_ms("2026-10-18T-1:02:03Z"), None);
+        assert_eq!(parse_utc_ms("2026-10-18T01:02:03.-1Z"), None);
+        assert_eq!(parse_utc_ms("999999999999-10-18T01:02:03Z"), None);
     }
 
     #[test]

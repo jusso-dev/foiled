@@ -80,6 +80,7 @@ impl ControlPlane {
     ) -> Result<Self, String> {
         let mut b = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("foiled-hostd/", env!("CARGO_PKG_VERSION")));
         if let Some(id) = identity {
             b = b.identity(id).https_only(true);
@@ -183,9 +184,14 @@ impl ControlPlane {
 /// Redeem an enrolment token. There is no client certificate yet: this is
 /// the one call the ingest hostname's WAF rule lets through without one.
 pub async fn enrol(base: &str, req: &EnrolRequest) -> Result<EnrolResponse, ClientError> {
-    let http = reqwest::Client::builder()
+    let mut b = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .user_agent(concat!("foiled-hostd/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(concat!("foiled-hostd/", env!("CARGO_PKG_VERSION")));
+    if base.starts_with("https://") {
+        b = b.https_only(true);
+    }
+    let http = b
         .build()
         .map_err(|e| ClientError::Unavailable(e.to_string()))?;
     let res = http

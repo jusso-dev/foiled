@@ -8,5 +8,5 @@
 # Format is `shasum -a 256 -c` compatible: "<sha256>  <path>", paths relative to
 # this recipe directory. Regenerate with:
 #   shasum -a 256 app/server.py > sources.lock.new   (then review and update)
-cc0273d3c285c091cd50b9dd83618074444db8111fa01a7da8a55e6b832cff87  app/server.py
-1b84f3ef1cca45817ebf1057586d079009a2c0ef2cc92b667c692765356de502  app/test_app.py
+ef724743e7d50a9ccf339d576f1b82bf478f77b38fbddd3c961ae6bddba5e363  app/server.py
+2f119c2989793391220c4cb053a09cad7700785080a9ac37c8c80be02d63df12  app/test_app.py

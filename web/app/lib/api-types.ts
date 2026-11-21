@@ -181,6 +181,7 @@ export interface AgentRevoked {
 export interface RegisterAgent {
   label?: string;
   sandbox_allowed?: boolean;
+  share_opt_in?: boolean | null;
   enrolment_ttl_seconds?: number;
 }
 
@@ -290,6 +291,8 @@ export type EvidenceSource =
   | "actor_ttp_overlap"
   | "actor_indicator_overlap"
   | "actor_targeting"
+  | "actor_payload_overlap"
+  | "actor_asn_overlap"
   | "rule"
   | "sequence"
   | "vuln_path_hook"
@@ -501,6 +504,7 @@ export interface ActorLink {
   score: number;
   band: Band;
   status: "pending" | "confirmed";
+  review_queue: boolean;
   confidence_ref: string;
   report_urls: string[];
 }
@@ -906,6 +910,7 @@ export interface ActorLinkRecord {
       ioc_id?: string;
       weight: number;
       stale: boolean;
+      observed: boolean;
       source_url: string;
     }[];
     targeting: string[];

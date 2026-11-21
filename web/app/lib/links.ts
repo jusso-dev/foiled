@@ -87,6 +87,8 @@ export const SOURCE_LABEL: Record<EvidenceSource, string> = {
   actor_ttp_overlap: "Shared techniques with public reporting",
   actor_indicator_overlap: "Shared indicators with public reporting",
   actor_targeting: "Similar targeting in public reporting",
+  actor_payload_overlap: "Shared payload indicators with public reporting",
+  actor_asn_overlap: "Shared ASN with public reporting",
   rule: "Signature rule",
   sequence: "Request sequence",
   vuln_path_hook: "Vulnerable-path hook",

@@ -287,7 +287,10 @@ export default function CampaignPage({ loaderData: d, actionData }: Route.Compon
             </p>
           )}
           <p>
-            <Link className="link" to={`/actors?subject_id=${c.campaign_id}`}>
+            <Link
+              className="link"
+              to={`/actors?subject_id=${c.campaign_id}${wq ? `&${wq.slice(1)}` : ""}`}
+            >
               Actor evidence and decisions for this campaign
             </Link>
           </p>

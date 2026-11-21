@@ -239,7 +239,8 @@ async fn scheduled(event: worker::ScheduledEvent, env: Env, _ctx: worker::Schedu
         }
     };
     if event.cron() == PURGE_CRON {
-        match crate::enrichment::purge(&store, now_ms()).await {
+        let now = now_ms();
+        match crate::enrichment::purge(&store, now).await {
             Ok(c) => worker::console_log!(
                 "purge: enrichment expired {}, past retention {}, failures {}",
                 c.expired,
@@ -247,6 +248,20 @@ async fn scheduled(event: worker::ScheduledEvent, env: Env, _ctx: worker::Schedu
                 c.failures
             ),
             Err(_) => worker::console_error!("purge: enrichment purge failed; next run retries"),
+        }
+        // Drop expired rate-limit windows older than 24h so D1 does not grow unboundedly.
+        let cutoff = now.saturating_sub(86_400_000);
+        match store
+            .db
+            .prepare(sql::RATE_LIMITS_PRUNE)
+            .bind(&[n(cutoff), n(1000)])
+        {
+            Ok(stmt) => {
+                if let Err(e) = stmt.run().await {
+                    worker::console_error!("purge: rate_limits prune failed: {e}");
+                }
+            }
+            Err(e) => worker::console_error!("purge: rate_limits bind failed: {e}"),
         }
         return;
     }
@@ -388,11 +403,20 @@ async fn ingest_batch(batch: MessageBatch<serde_json::Value>, env: Env) -> worke
     let mut events: Vec<CaptureEvent> = Vec::new();
     for m in batch.messages()? {
         match serde_json::from_value::<CaptureEvent>(m.into_body()) {
-            Ok(e) => events.push(e),
+            Ok(e) if e.tenant_id.is_some() && e.source.is_some() => events.push(e),
+            Ok(e) => {
+                // Never came through the ingest API. Drop only the bad message
+                // so valid events in the same batch are still stored.
+                worker::console_error!("ingest consumer: dropping unstamped event {}", e.event_id);
+            }
             // Only the ingest API sends here, so this is a bug; drop it
             // rather than retry forever.
             Err(e) => worker::console_error!("ingest consumer: dropping undecodable message: {e}"),
         }
+    }
+    if events.is_empty() {
+        batch.ack_all();
+        return Ok(());
     }
     let store = CfStore {
         db: env.d1("DB")?,
@@ -407,10 +431,12 @@ async fn ingest_batch(batch: MessageBatch<serde_json::Value>, env: Env) -> worke
             return Ok(());
         }
     };
-    match foiled_pg::insert_events(&client, &events, now_ms()).await {
-        Ok(_) => {
+    match foiled_pg::insert_events_new(&client, &events, now_ms()).await {
+        Ok(inserted) => {
+            let fresh: Vec<CaptureEvent> =
+                inserted.into_iter().map(|i| events[i].clone()).collect();
             if let Ok(radar) = env.analytics_engine("RADAR") {
-                for e in &events {
+                for e in &fresh {
                     let point = AnalyticsEngineDataPointBuilder::new()
                         .indexes([e.catalogue_id.as_str()])
                         .add_blob(e.channel.as_str())
@@ -423,11 +449,13 @@ async fn ingest_batch(batch: MessageBatch<serde_json::Value>, env: Env) -> worke
                     }
                 }
             }
-            send_for_enrichment(&env, &events).await;
+            if !fresh.is_empty() {
+                send_for_enrichment(&env, &fresh).await;
+            }
             batch.ack_all();
         }
         Err(foiled_pg::InsertError::Unstamped(id)) => {
-            // Never came through the ingest API. Drop rather than retry forever.
+            // Unreachable after filtering above; kept for exhaustiveness.
             worker::console_error!("ingest consumer: dropping unstamped event {id}");
             batch.ack_all();
         }

@@ -107,6 +107,10 @@ pub const RATE_LIMIT_HIT: &str = "INSERT INTO rate_limits (key, window_start, co
      ON CONFLICT (key, window_start) DO UPDATE SET count = count + 1 \
      RETURNING count";
 
+/// Delete expired rate-limit windows older than `?1` (unix ms), at most `?2`.
+pub const RATE_LIMITS_PRUNE: &str = "DELETE FROM rate_limits WHERE rowid IN \
+     (SELECT rowid FROM rate_limits WHERE window_start < ?1 LIMIT ?2)";
+
 // Enrolment and the sensor and host registry (#31).
 
 pub const AGENT_COLUMNS: &str = "id, tenant_id, role, label, status, sandbox_allowed, share_opt_in, \
@@ -1373,5 +1377,25 @@ mod tests {
             .query_row("SELECT count(*) FROM enrich_failures", [], |r| r.get(0))
             .unwrap();
         assert_eq!(left, 2);
+
+        // Rate limits: expired windows are pruned in bounded batches.
+        for (k, w) in [("k1", now - 2 * day), ("k2", now - 2 * day), ("k3", now)] {
+            let _: i64 = c
+                .query_row(RATE_LIMIT_HIT, params![k, w], |r| r.get(0))
+                .unwrap();
+        }
+        assert_eq!(
+            c.execute(RATE_LIMITS_PRUNE, params![now - day, 1]).unwrap(),
+            1
+        );
+        assert_eq!(
+            c.execute(RATE_LIMITS_PRUNE, params![now - day, 10])
+                .unwrap(),
+            1
+        );
+        let rl_left: i64 = c
+            .query_row("SELECT count(*) FROM rate_limits", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rl_left, 1);
     }
 }
