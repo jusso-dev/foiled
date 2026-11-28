@@ -76,6 +76,7 @@ async fn implemented_operations_are_routed_and_planned_ones_are_not() {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     let state = AppState::new(store, Arc::new(|| 1_800_000_000_000));
     let spec = spec();

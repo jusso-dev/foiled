@@ -40,6 +40,7 @@ async fn harness() -> H {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     for (n, id, tenant, role, scopes) in [
         (

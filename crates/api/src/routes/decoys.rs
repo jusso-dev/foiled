@@ -347,6 +347,32 @@ async fn action(
         .ok_or_else(|| ApiError::not_found("action"))?;
     let (job_kind, target) = action_target(action).ok_or_else(|| ApiError::not_found("action"))?;
     body.reason.validate().map_err(ApiError::bad_request)?;
+    // An agent token's reset or destroy waits for a human (#95): through
+    // MCP it becomes a pending action. Calling the route directly does not
+    // skip that, unless an admin marked the token for trusted automation.
+    // Operator tokens are unchanged.
+    if who.role == Role::Mcp && matches!(action, "reset" | "destroy") {
+        let auto = state
+            .store
+            .token(&who.id)
+            .await?
+            .is_some_and(|t| t.auto_approve);
+        if !auto {
+            let mut rec = audit_record(&state, &who, job_kind, Some(id), Outcome::Denied);
+            rec.reason_code = Some(reason_code_str(&body.reason));
+            rec.reason_text = Some(body.reason.text.clone());
+            rec.detail = serde_json::json!({"error_code": "approval_required"});
+            state.store.append_audit(rec).await?;
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "approval_required",
+                format!(
+                    "an agent token's {action} needs a human's approval: call the MCP tool, \
+                     which records a pending action to approve in the console"
+                ),
+            ));
+        }
+    }
     let idem = idempotency_key(&headers)?;
 
     if let Some(key) = &idem

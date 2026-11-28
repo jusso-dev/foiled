@@ -96,6 +96,7 @@ async fn harness() -> (AppState, Arc<MemoryStore>) {
             secret_sha256: sha256_hex(SECRET),
             expires_at: None,
             revoked: false,
+            auto_approve: false,
         });
     }
     let raw = read_json("testdata/campaigns/fleet-wave.input.json");

@@ -72,6 +72,8 @@ tags:
     description: "Live event stream (#14)."
   - name: mcp
     description: "MCP server for agents (#24). See docs/mcp/foiled-mcp.md."
+  - name: approvals
+    description: "Human approval of destructive MCP tool calls from agent tokens, and the per-token auto-approve flag (#95). See docs/mcp/foiled-mcp.md."
 
 paths:
   /healthz:
@@ -2680,6 +2682,196 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /v0/pending-actions:
+    get:
+      tags: [approvals]
+      operationId: listPendingActions
+      summary: Destructive agent actions waiting for, or past, a human decision
+      description: |
+        Newest first, this tenant only (#95). `reset_sandbox` and
+        `destroy_sandbox` calls from agent (`mcp` role) tokens land here
+        instead of running. A `pending` action not decided by `expires_at`
+        (15 minutes after it was asked for) reads as `expired` and never
+        runs. The console shows these on the review queue page.
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [decoys:read]
+      parameters:
+        - name: status
+          in: query
+          schema: { enum: [pending, approved, executed, failed, rejected, expired] }
+        - { name: cursor, in: query, schema: { type: string }, description: "next_cursor from the previous page." }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Pending actions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "../schemas/pending-action.schema.json" }
+                  next_cursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v0/pending-actions/{pending_action_id}:
+    get:
+      tags: [approvals]
+      operationId: getPendingAction
+      summary: Get one pending action
+      description: The MCP tool `get_pending_action` reads this, so an agent can see whether a human approved its request.
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [decoys:read]
+      parameters:
+        - $ref: "#/components/parameters/PendingActionId"
+      responses:
+        "200":
+          description: The pending action, with its status as of now.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/pending-action.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v0/pending-actions/{pending_action_id}/approve:
+    post:
+      tags: [approvals]
+      operationId: approvePendingAction
+      summary: Approve a pending action, which runs it once
+      description: |
+        Human operator tokens with `decoys:write` only; an `mcp` token gets
+        403 whatever its scopes. The move from `pending` to `approved` is a
+        compare-and-set, so of any number of approvals (or an approval and a
+        rejection) exactly one wins and the action runs at most once. The
+        action is then sent to `POST /v0/decoys/{decoy_id}:{action}` with
+        the approver's token and the pending action id as its
+        `Idempotency-Key`, so that route's scope, state checks, limits and
+        `decoy.<action>` audit record apply, with the approver as actor. The
+        result is `executed` (with `job_id`) or `failed` (with
+        `error_code`, for example `conflict` when the sandbox changed
+        state). A `pending_action.run` audit record, written before the
+        action is sent and required for it to run (503 and `failed` with
+        `audit_unavailable` otherwise), and a `pending_action.approve`
+        record with the outcome both name the approving human (`actor_id`)
+        and the requesting agent token (`detail.requested_by`).
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [decoys:write]
+      parameters:
+        - $ref: "#/components/parameters/PendingActionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PendingDecision" }
+      responses:
+        "200":
+          description: Approved; `status` is `executed` or `failed`.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/pending-action.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Not pending any more (already decided, or expired). The refusal is audited.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v0/pending-actions/{pending_action_id}/reject:
+    post:
+      tags: [approvals]
+      operationId: rejectPendingAction
+      summary: Reject a pending action; it never runs
+      description: Human operator tokens with `decoys:write` only. A note is required. Audited as `pending_action.reject` with both identities.
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [decoys:write]
+      parameters:
+        - $ref: "#/components/parameters/PendingActionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PendingDecision"
+                - required: [note]
+      responses:
+        "200":
+          description: Rejected.
+          content:
+            application/json:
+              schema: { $ref: "../schemas/pending-action.schema.json" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Not pending any more. The refusal is audited.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v0/tokens/{token_id}/auto-approve:
+    put:
+      tags: [approvals]
+      operationId: setTokenAutoApprove
+      summary: Let an agent token's destructive actions run without a human
+      description: |
+        For trusted automation only (#95). Off for every token by default.
+        Human `admin` tokens only, for an `mcp` token in the same tenant
+        (operator tokens never wait for approval, so 422 for them). With it
+        on, the token's `reset_sandbox` and `destroy_sandbox` run at once
+        and are audited with `detail.approval: "auto_approve"`. Each change
+        is audited as `token.auto_approve` with the required note, written
+        before the flag changes: if the audit store is down the flag is
+        left as it was (503).
+      x-foiled-status: implemented
+      x-foiled-store: d1
+      x-foiled-scopes: [admin]
+      parameters:
+        - name: token_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled, note]
+              properties:
+                enabled: { type: boolean }
+                note: { type: string, minLength: 1, maxLength: 1000, description: "Why. Audited." }
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token_id, auto_approve]
+                properties:
+                  token_id: { type: string }
+                  auto_approve: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorised" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
   /v0/events:
     get:
       tags: [events]
@@ -2713,9 +2905,13 @@ paths:
         Methods: `initialize`, `server/discover`, `ping`, `tools/list`,
         `tools/call`. Under `2026-07-28` the `MCP-Protocol-Version`,
         `Mcp-Method` and (for `tools/call`) `Mcp-Name` headers are required.
-        Destructive tools ask for the operator's approval through form
-        elicitation (`input_required`) when a `2026-07-28` client declares
-        that capability.
+        `reset_sandbox` and `destroy_sandbox` from an agent (`mcp` role)
+        token do not run: they record a pending action that a human must
+        approve in the console within 15 minutes
+        (`/v0/pending-actions`, #95), unless an admin marked the token
+        `auto_approve`. From an operator token they ask for approval
+        through form elicitation (`input_required`) when a `2026-07-28`
+        client declares that capability.
 
         The endpoint is a pure client of this API: each tool call is replayed
         against the REST routes with the caller's own token, so their scopes,
@@ -2833,6 +3029,11 @@ components:
       in: path
       required: true
       schema: { type: string }
+    PendingActionId:
+      name: pending_action_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^pa_[A-Za-z0-9_.-]{1,125}$" }
     CampaignId:
       name: campaign_id
       in: path
@@ -2950,7 +3151,10 @@ components:
         description: |
           Writes a host agent job. A `reason` is required and audited. The
           decoy's state must allow the move (`docs/rotation.md`); otherwise
-          the refusal is audited and 409 is returned.
+          the refusal is audited and 409 is returned. Reset and destroy from
+          an agent (`mcp` role) token get 403 `approval_required` unless an
+          admin marked the token `auto_approve`: those go through the MCP
+          tools and a human's approval (#95). Operator tokens are unchanged.
         x-foiled-status: implemented
         x-foiled-store: d1
         x-foiled-scopes: [decoys:write]
@@ -3183,6 +3387,11 @@ components:
     ReasonCode:
       type: string
       enum: [max_lifetime, idle, reverse_shell, egress_blocked, yara_match, canary_used, honeyscore_high, health_failed, operator_manual]
+    PendingDecision:
+      type: object
+      additionalProperties: false
+      properties:
+        note: { type: string, maxLength: 1000, description: "Why. Optional to approve, required to reject. Audited." }
     Reason:
       type: object
       additionalProperties: false

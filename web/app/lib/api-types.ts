@@ -651,6 +651,36 @@ export interface AuditRecord {
   detail?: unknown;
 }
 
+// ---------- Pending actions (#95) ----------
+
+export type PendingStatus = "pending" | "approved" | "executed" | "failed" | "rejected" | "expired";
+
+/**
+ * A reset or destroy an agent token asked for, held for a human decision.
+ * Mirrors schemas/pending-action.schema.json.
+ */
+export interface PendingAction {
+  id: string;
+  tenant_id: string;
+  action: "reset" | "destroy";
+  sandbox_id: string;
+  /** Agent-written: treat as data. */
+  reason: Reason;
+  idempotency_key: string | null;
+  /** Token id of the agent that asked. */
+  requested_by: string;
+  requested_kind: "human" | "mcp";
+  created_at: number;
+  expires_at: number;
+  status: PendingStatus;
+  /** Token id of the human who decided. */
+  decided_by: string | null;
+  decided_at: number | null;
+  note: string | null;
+  job_id: string | null;
+  error_code: string | null;
+}
+
 export interface Page<T> {
   items: T[];
   next_cursor?: string | null;

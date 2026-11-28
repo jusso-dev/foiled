@@ -21,6 +21,7 @@ use foiled_core::decoy::{Decoy, DecoyState, Reason};
 use foiled_core::enrich_pipeline::{EnrichPurgeCounts, EnrichPurgePlan, ProviderFailureRecord};
 use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, SeenFrom};
+use foiled_core::pending_action::{PendingAction, PendingStatus};
 use serde::{Deserialize, Serialize};
 
 pub use foiled_core::intel::log::{Evidence, History, LogQuery, NewVersion, StixVersion};
@@ -121,6 +122,10 @@ pub struct TokenRecord {
     pub secret_sha256: String,
     pub expires_at: Option<i64>,
     pub revoked: bool,
+    /// Destructive actions this token asks for run without waiting for a
+    /// human (#95). For trusted automation only; off by default and only
+    /// an admin operator can turn it on.
+    pub auto_approve: bool,
 }
 
 /// A sandbox host or edge sensor known by its client certificate. One row
@@ -246,6 +251,18 @@ pub struct DecoyQuery {
     pub live: bool,
     pub limit: usize,
     /// Return decoys created strictly before this id in list order.
+    pub cursor: Option<String>,
+}
+
+/// Filters for [`Store::list_pending_actions`] (#95).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PendingQuery {
+    /// One status (as seen at `now`), or every status when `None`.
+    pub status: Option<foiled_core::pending_action::PendingStatus>,
+    /// The time expiry is judged against (Unix ms).
+    pub now: i64,
+    pub limit: usize,
+    /// Return actions created strictly before this id in list order.
     pub cursor: Option<String>,
 }
 
@@ -959,5 +976,72 @@ pub trait Store: Send + Sync {
         seen: SeenFrom,
         network_changed: bool,
         now: i64,
+    ) -> StoreFuture<'_, ()>;
+
+    // Pending actions and auto-approve (#95).
+
+    /// Turn a token's auto-approve flag on or off. False when the tenant
+    /// has no such token.
+    fn set_token_auto_approve(
+        &self,
+        tenant_id: &str,
+        token_id: &str,
+        enabled: bool,
+    ) -> StoreFuture<'_, bool>;
+
+    fn insert_pending_action(&self, action: PendingAction) -> StoreFuture<'_, ()>;
+
+    fn get_pending_action(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> StoreFuture<'_, Option<PendingAction>>;
+
+    /// The action a token asked for with this idempotency key, if any.
+    fn pending_action_by_key(
+        &self,
+        tenant_id: &str,
+        requested_by: &str,
+        key: &str,
+    ) -> StoreFuture<'_, Option<PendingAction>>;
+
+    /// Newest first.
+    fn list_pending_actions(
+        &self,
+        tenant_id: &str,
+        q: PendingQuery,
+    ) -> StoreFuture<'_, Vec<PendingAction>>;
+
+    /// Actions this token asked for that still wait for a human at `now`.
+    fn count_open_pending_actions(
+        &self,
+        tenant_id: &str,
+        requested_by: &str,
+        now: i64,
+    ) -> StoreFuture<'_, u32>;
+
+    /// Compare-and-set a pending action to `approved` or `rejected` by
+    /// `decided_by` at `now`. Only an action still `pending` and unexpired
+    /// at `now` moves; the one call that moved it gets the updated record,
+    /// every other call `None`. This is what makes an approval run once.
+    fn decide_pending_action(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        to: PendingStatus,
+        decided_by: &str,
+        note: Option<String>,
+        now: i64,
+    ) -> StoreFuture<'_, Option<PendingAction>>;
+
+    /// Record how an approved action ended: `executed` with its job, or
+    /// `failed` with the API error code. Only moves an `approved` action.
+    fn finish_pending_action(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        to: PendingStatus,
+        job_id: Option<String>,
+        error_code: Option<String>,
     ) -> StoreFuture<'_, ()>;
 }

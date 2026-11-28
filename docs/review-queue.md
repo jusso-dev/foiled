@@ -2,7 +2,7 @@
 
 Status: built in #35. The console screens are #14. Related: [radar.md](radar.md), [research-writeups.md](research-writeups.md), [confidence.md](confidence.md) (#27), [exploit-attribution.md](exploit-attribution.md) (#12), [attack-mapping.md](attack-mapping.md) (#26), [campaigns.md](campaigns.md#analyst-actions) (#33), [iocs.md](iocs.md) (#34), [contribute-back.md](contribute-back.md#delayed-public-iocs) (#37), [alerting.md](alerting.md#review-queue-instead-of-paging) (#15), actor possible-association (#29).
 
-One queue for everything that needs a person before it is trusted or published. Code: `foiled_core::review` (state machine, priority, SLA), `crates/api/src/routes/review.rs` (derivation and actions). Schema: [review-item.schema.json](../schemas/review-item.schema.json). Golden: `testdata/review/expected/`.
+One queue for everything that needs a person before it is trusted or published. The console's review queue page also lists destructive MCP agent actions waiting for a human (#95); those are not queue items and have their own routes, described in [foiled-mcp.md](mcp/foiled-mcp.md#human-approval-for-destructive-tools). Code: `foiled_core::review` (state machine, priority, SLA), `crates/api/src/routes/review.rs` (derivation and actions). Schema: [review-item.schema.json](../schemas/review-item.schema.json). Golden: `testdata/review/expected/`.
 
 ## Item types
 

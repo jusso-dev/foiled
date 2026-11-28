@@ -54,6 +54,7 @@ fn harness_with(issuer: bool) -> H {
             secret_sha256: sha256_hex(SECRET),
             expires_at: None,
             revoked: false,
+            auto_approve: false,
         });
     }
     let clock = Arc::new(AtomicI64::new(NOW));

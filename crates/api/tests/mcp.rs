@@ -42,6 +42,7 @@ fn token(id: &str, tenant: &str, role: Role, scopes: &[Scope]) -> TokenRecord {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     }
 }
 
@@ -204,6 +205,29 @@ async fn audit(state: &AppState, tok: &str) -> Vec<Value> {
         .unwrap();
     let (_, _, v) = send(state, req).await;
     v["items"].as_array().cloned().unwrap_or_default()
+}
+
+/// A REST call with a JSON body; returns the status and body.
+async fn rest(
+    state: &AppState,
+    tok: &str,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", format!("Bearer fo_{tok}.{SECRET}"))
+        .header("content-type", "application/json")
+        .body(if body.is_null() {
+            Body::empty()
+        } else {
+            Body::from(body.to_string())
+        })
+        .unwrap();
+    let (st, _, v) = send(state, req).await;
+    (st, v)
 }
 
 fn bless() -> bool {
@@ -502,6 +526,7 @@ async fn tools_list_follows_scopes_and_config() {
         [
             "list_sandboxes",
             "get_sandbox",
+            "get_pending_action",
             "query_attempts",
             "get_attempt",
             "get_attempt_timeline",
@@ -659,6 +684,7 @@ async fn create_list_query_destroy_contract() {
     )
     .await;
     assert_eq!(error_code(&r), "invalid_arguments");
+    // From an agent token, confirm only records a pending action (#95).
     let r = tool(
         &s,
         "agent",
@@ -666,21 +692,48 @@ async fn create_list_query_destroy_contract() {
         json!({"sandbox_id": id, "reason": "operator asked to end the test", "confirm": true}),
     )
     .await;
-    assert_eq!(data(&r)["job_kind"], "decoy.destroy");
+    assert_eq!(data(&r)["status"], "pending");
+    let pa = data(&r)["pending_action_id"].as_str().unwrap().to_string();
+    golden(
+        "testdata/mcp/results/destroy-pending-approval.json",
+        &r["structuredContent"],
+    );
+    // A human approves it in the console; it runs as the approver.
+    let (st, v) = rest(
+        &s,
+        "operator",
+        "POST",
+        &format!("/v0/pending-actions/{pa}/approve"),
+        json!({"note": "yes, end it"}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "executed");
+    let r = tool(
+        &s,
+        "agent",
+        "get_pending_action",
+        json!({"pending_action_id": pa}),
+    )
+    .await;
+    assert_eq!(data(&r)["status"], "executed");
+    assert!(data(&r)["job_id"].is_string());
 
     // One mcp.tool_call record per call, plus the API's own decoy records.
     let a = audit(&s, "operator").await;
-    assert_eq!(a.len(), 9);
-    let destroy = &a[0];
+    assert_eq!(a.len(), 10);
+    let destroy = &a[1];
     assert_eq!(destroy["actor_id"], "agent");
     assert_eq!(destroy["actor_kind"], "mcp");
     assert_eq!(destroy["target"], id.as_str());
     assert_eq!(destroy["reason_code"], "operator_manual");
     assert_eq!(destroy["reason_text"], "operator asked to end the test");
     assert_eq!(destroy["detail"]["tool"], "destroy_sandbox");
-    assert_eq!(destroy["detail"]["status"], "ok");
-    assert!(destroy["job_id"].is_string());
-    let refused = &a[2];
+    assert_eq!(destroy["detail"]["status"], "pending_approval");
+    assert_eq!(destroy["detail"]["approval"], "pending");
+    assert_eq!(destroy["detail"]["pending_action_id"], pa.as_str());
+    assert!(destroy["job_id"].is_null());
+    let refused = &a[3];
     assert_eq!(refused["outcome"], "denied");
     assert_eq!(refused["detail"]["error_code"], "confirmation_required");
     let req = Request::get(format!("/v0/audit?target={id}&action=decoy.destroy"))
@@ -688,7 +741,9 @@ async fn create_list_query_destroy_contract() {
         .body(Body::empty())
         .unwrap();
     let (_, _, v) = send(&s, req).await;
-    assert_eq!(v["items"][0]["actor_kind"], "mcp");
+    // The decoy record names the approving human, who sent the action.
+    assert_eq!(v["items"][0]["actor_kind"], "human");
+    assert_eq!(v["items"][0]["actor_id"], "operator");
 
     // get_events for the sandbox reads its lifecycle from the audit log.
     let r = tool(&s, "agent", "get_events", json!({"sandbox_id": id})).await;
@@ -1208,6 +1263,8 @@ async fn audit_failure_does_not_undo_a_finished_action() {
 
 #[tokio::test]
 async fn elicitation_asks_the_operator_before_destructive_tools() {
+    // Agent tokens never reach elicitation: their destructive calls wait
+    // for console approval (#95). Elicitation still guards operator tokens.
     let s = state().await;
     let r = tool(
         &s,
@@ -1224,7 +1281,14 @@ async fn elicitation_asks_the_operator_before_destructive_tools() {
     }});
 
     // First call: input_required with a form asking for approval.
-    let r = modern_tool(&s, "agent", "destroy_sandbox", args.clone(), caps.clone()).await;
+    let r = modern_tool(
+        &s,
+        "operator",
+        "destroy_sandbox",
+        args.clone(),
+        caps.clone(),
+    )
+    .await;
     assert_eq!(r["resultType"], "input_required");
     let ask = &r["inputRequests"]["approve"];
     assert_eq!(ask["method"], "elicitation/create");
@@ -1241,7 +1305,7 @@ async fn elicitation_asks_the_operator_before_destructive_tools() {
     // Declined.
     let r = modern_tool(
         &s,
-        "agent",
+        "operator",
         "destroy_sandbox",
         args.clone(),
         retry(json!({"action": "decline"}), &state_token),
@@ -1253,7 +1317,7 @@ async fn elicitation_asks_the_operator_before_destructive_tools() {
     other["reason"] = json!("something else");
     let r = modern_tool(
         &s,
-        "agent",
+        "operator",
         "destroy_sandbox",
         other,
         retry(
@@ -1266,7 +1330,7 @@ async fn elicitation_asks_the_operator_before_destructive_tools() {
     // Approved.
     let r = modern_tool(
         &s,
-        "agent",
+        "operator",
         "destroy_sandbox",
         args.clone(),
         retry(
@@ -1285,7 +1349,7 @@ async fn elicitation_asks_the_operator_before_destructive_tools() {
     // Without the capability, confirm is all there is, and the audit says so.
     let r = tool(
         &s,
-        "agent",
+        "operator",
         "reset_sandbox",
         json!({"sandbox_id": "nope", "reason": "x", "confirm": true}),
     )

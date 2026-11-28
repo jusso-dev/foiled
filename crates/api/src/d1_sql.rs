@@ -10,10 +10,80 @@ pub const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/d1/0004_enrich_cache.sql"),
     include_str!("../../../migrations/d1/0005_enrich_consumer.sql"),
     include_str!("../../../migrations/d1/0006_sandbox_runtime.sql"),
+    include_str!("../../../migrations/d1/0007_pending_actions.sql"),
 ];
 
-pub const TOKEN_BY_ID: &str = "SELECT id, tenant_id, role, scopes, secret_sha256, expires_at, revoked \
-     FROM api_tokens WHERE id = ?1";
+pub const TOKEN_BY_ID: &str = "SELECT id, tenant_id, role, scopes, secret_sha256, expires_at, revoked, \
+     auto_approve FROM api_tokens WHERE id = ?1";
+
+/// `?1` tenant, `?2` token id, `?3` 1 or 0. Returns the id when the row exists.
+pub const SET_TOKEN_AUTO_APPROVE: &str =
+    "UPDATE api_tokens SET auto_approve = ?3 WHERE tenant_id = ?1 AND id = ?2 RETURNING id";
+
+// Pending actions (#95).
+
+pub const PENDING_COLUMNS: &str = "id, tenant_id, action, sandbox_id, reason_code, reason_text, \
+     idempotency_key, requested_by, requested_kind, created_at, expires_at, status, decided_by, \
+     decided_at, note, job_id, error_code";
+
+pub const INSERT_PENDING: &str = "INSERT INTO pending_actions (id, tenant_id, action, sandbox_id, \
+     reason_code, reason_text, idempotency_key, requested_by, requested_kind, created_at, expires_at, \
+     status, decided_by, decided_at, note, job_id, error_code) \
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+
+pub fn pending_by_id() -> String {
+    format!("SELECT {PENDING_COLUMNS} FROM pending_actions WHERE tenant_id = ?1 AND id = ?2")
+}
+
+/// `?1` tenant, `?2` requesting token, `?3` idempotency key.
+pub fn pending_by_key() -> String {
+    format!(
+        "SELECT {PENDING_COLUMNS} FROM pending_actions \
+         WHERE tenant_id = ?1 AND requested_by = ?2 AND idempotency_key = ?3"
+    )
+}
+
+/// `?1` tenant, `?2` status filter (`pending`, `expired`, another stored
+/// status, or NULL for all), `?3` now, `?4`/`?5` keyset cursor
+/// (created_at, id) or NULL, `?6` limit. `pending` and `expired` both
+/// read `pending` rows, split by `expires_at`.
+pub fn list_pending() -> String {
+    format!(
+        "SELECT {PENDING_COLUMNS} FROM pending_actions \
+         WHERE tenant_id = ?1 \
+           AND (?2 IS NULL \
+                OR (?2 = 'pending' AND status = 'pending' AND expires_at > ?3) \
+                OR (?2 = 'expired' AND status = 'pending' AND expires_at <= ?3) \
+                OR (?2 NOT IN ('pending', 'expired') AND status = ?2)) \
+           AND (?4 IS NULL OR created_at < ?4 OR (created_at = ?4 AND id < ?5)) \
+         ORDER BY created_at DESC, id DESC LIMIT ?6"
+    )
+}
+
+/// Resolve a pending action list cursor to its keyset position.
+pub const PENDING_CURSOR: &str =
+    "SELECT created_at, id FROM pending_actions WHERE tenant_id = ?1 AND id = ?2";
+
+/// `?1` tenant, `?2` requesting token, `?3` now.
+pub const COUNT_OPEN_PENDING: &str = "SELECT COUNT(*) AS n FROM pending_actions \
+     WHERE tenant_id = ?1 AND requested_by = ?2 AND status = 'pending' AND expires_at > ?3";
+
+/// Compare-and-set from `pending`, unexpired at `?6`, to `?3`. `?4` decider,
+/// `?5` note. One statement, so of two concurrent decisions exactly one
+/// gets the row back. `?6` is read just before this statement runs (no
+/// other await in between), so an approval can land after `expires_at` by
+/// at most this statement's own latency.
+pub fn decide_pending() -> String {
+    format!(
+        "UPDATE pending_actions SET status = ?3, decided_by = ?4, decided_at = ?6, note = ?5 \
+         WHERE tenant_id = ?1 AND id = ?2 AND status = 'pending' AND expires_at > ?6 \
+         RETURNING {PENDING_COLUMNS}"
+    )
+}
+
+/// `?1` tenant, `?2` id, `?3` `executed` or `failed`, `?4` job id, `?5` error code.
+pub const FINISH_PENDING: &str = "UPDATE pending_actions SET status = ?3, job_id = ?4, error_code = ?5 \
+     WHERE tenant_id = ?1 AND id = ?2 AND status = 'approved'";
 
 pub const IDENTITY_BY_CERT: &str = "SELECT id, tenant_id, role, scopes, cert_sha256, revoked, valid_until, \
      expires_at FROM identities WHERE cert_sha256 = ?1";
@@ -540,6 +610,191 @@ mod tests {
             .query_row(TOKEN_BY_ID, params!["t"], |r| r.get(3))
             .unwrap();
         assert_eq!(scopes, "admin");
+    }
+
+    #[test]
+    fn auto_approve_defaults_off_and_is_set_per_tenant() {
+        let c = db();
+        c.execute(
+            "INSERT INTO api_tokens (id, tenant_id, role, scopes, secret_sha256, created_at) \
+             VALUES ('agent', 't1', 'mcp', 'decoys:write', 'ff', 1)",
+            [],
+        )
+        .unwrap();
+        let flag = |c: &Connection| -> i64 {
+            c.query_row(TOKEN_BY_ID, params!["agent"], |r| r.get(7))
+                .unwrap()
+        };
+        assert_eq!(flag(&c), 0);
+        let other: Option<String> = c
+            .query_row(SET_TOKEN_AUTO_APPROVE, params!["t2", "agent", 1], |r| {
+                r.get(0)
+            })
+            .optional()
+            .unwrap();
+        assert_eq!(other, None, "another tenant's token is not found");
+        assert_eq!(flag(&c), 0);
+        let mine: Option<String> = c
+            .query_row(SET_TOKEN_AUTO_APPROVE, params!["t1", "agent", 1], |r| {
+                r.get(0)
+            })
+            .optional()
+            .unwrap();
+        assert_eq!(mine.as_deref(), Some("agent"));
+        assert_eq!(flag(&c), 1);
+        assert!(
+            c.execute("UPDATE api_tokens SET auto_approve = 2", [])
+                .is_err()
+        );
+    }
+
+    fn pending(c: &Connection, id: &str, created: i64, key: Option<&str>) {
+        c.execute(
+            INSERT_PENDING,
+            params![
+                id,
+                "t1",
+                "destroy",
+                "dcy1",
+                "operator_manual",
+                "done",
+                key,
+                "agent",
+                "mcp",
+                created,
+                created + 1000,
+                "pending",
+                None::<String>,
+                None::<i64>,
+                None::<String>,
+                None::<String>,
+                None::<String>
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn pending_actions_decide_once_and_expire() {
+        let c = db();
+        pending(&c, "pa_1", 10, Some("k1"));
+        pending(&c, "pa_2", 20, None);
+        pending(&c, "pa_3", 30, None);
+        // Keys are unique per requesting token.
+        assert!(
+            c.execute(
+                INSERT_PENDING,
+                params![
+                    "pa_x",
+                    "t1",
+                    "reset",
+                    "dcy1",
+                    "operator_manual",
+                    "x",
+                    "k1",
+                    "agent",
+                    "mcp",
+                    1,
+                    2,
+                    "pending",
+                    None::<String>,
+                    None::<i64>,
+                    None::<String>,
+                    None::<String>,
+                    None::<String>
+                ],
+            )
+            .is_err()
+        );
+        let key: String = c
+            .query_row(&pending_by_key(), params!["t1", "agent", "k1"], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(key, "pa_1");
+
+        let ids = |status: Option<&str>, now: i64| -> Vec<String> {
+            let mut st = c.prepare(&list_pending()).unwrap();
+            st.query_map(
+                params!["t1", status, now, None::<i64>, None::<String>, 10],
+                |r| r.get(0),
+            )
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+        };
+        assert_eq!(ids(None, 0), vec!["pa_3", "pa_2", "pa_1"]);
+        // pa_1 expires at 1010, pa_2 at 1020.
+        assert_eq!(ids(Some("pending"), 1015), vec!["pa_3", "pa_2"]);
+        assert_eq!(ids(Some("expired"), 1015), vec!["pa_1"]);
+        let open: i64 = c
+            .query_row(COUNT_OPEN_PENDING, params!["t1", "agent", 1015], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(open, 2);
+
+        let decide = |id: &str, to: &str, now: i64| -> Option<String> {
+            c.query_row(
+                &decide_pending(),
+                params!["t1", id, to, "operator", "ok", now],
+                |r| r.get(11),
+            )
+            .optional()
+            .unwrap()
+        };
+        // Expired: never moves.
+        assert_eq!(decide("pa_1", "approved", 1015), None);
+        // The first decision wins; a second finds nothing to move.
+        assert_eq!(
+            decide("pa_2", "approved", 1015).as_deref(),
+            Some("approved")
+        );
+        assert_eq!(decide("pa_2", "approved", 1016), None);
+        assert_eq!(decide("pa_2", "rejected", 1016), None);
+        assert_eq!(
+            decide("pa_3", "rejected", 1015).as_deref(),
+            Some("rejected")
+        );
+        assert_eq!(ids(Some("approved"), 1015), vec!["pa_2"]);
+
+        // Only an approved action is finished, once.
+        assert_eq!(
+            c.execute(
+                FINISH_PENDING,
+                params!["t1", "pa_3", "executed", "j1", None::<String>]
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            c.execute(
+                FINISH_PENDING,
+                params!["t1", "pa_2", "executed", "j1", None::<String>]
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.execute(
+                FINISH_PENDING,
+                params!["t1", "pa_2", "failed", None::<String>, "x"]
+            )
+            .unwrap(),
+            0
+        );
+        let (status, job): (String, String) = c
+            .query_row(&pending_by_id(), params!["t1", "pa_2"], |r| {
+                Ok((r.get(11)?, r.get(15)?))
+            })
+            .unwrap();
+        assert_eq!((status.as_str(), job.as_str()), ("executed", "j1"));
+        // Another tenant sees nothing.
+        let none: Option<String> = c
+            .query_row(&pending_by_id(), params!["t2", "pa_2"], |r| r.get(0))
+            .optional()
+            .unwrap();
+        assert_eq!(none, None);
     }
 
     fn job(c: &Connection, id: &str, decoy: &str, host: Option<&str>, created: i64, expires: i64) {

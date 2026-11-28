@@ -17,7 +17,7 @@ Every route except `/login` and `/design` needs a signed-in operator. Scopes are
 | `/launch` | Launch wizard: choose an entry, placement and lifetime, confirm. | `GET /v0/catalogue/entries`, `GET /v0/sensors`, `POST /v0/decoys`, `GET /v0/audit` | `catalogue:read`, `decoys:write`, `decoys:elevate` for drafts |
 | `/decoys`, `/decoys/:id` | Decoy list; status until healthy, actions and teardown with a reason, audit trail. | `GET /v0/decoys`, `GET /v0/decoys/{id}`, `POST /v0/decoys/{id}:{action}`, `GET /v0/audit?target=` | `decoys:read`, `decoys:write` |
 | `/attempts`, `/attempts/:id` | Attempt list with filters; detail with timeline, confidence explainability, analyst overrides and IOCs. | `GET /v0/attempts`, `/v0/attempts/{id}`, `/timeline`, `/links`, `/iocs`, `POST /v0/attempts/{id}/links` | `attempts:read`, `attempts:write`, `iocs:read` |
-| `/review` | Review queue: claim, release, approve, reject, snooze and promote to a write-up, with notes. | `GET /v0/review-queue`, `POST /v0/review-queue/{id}/actions` | `review:read`, `review:write` |
+| `/review` | Review queue: claim, release, approve, reject, snooze and promote to a write-up, with notes. Above it, agent resets and destroys waiting for a human (#95): approve or reject. | `GET /v0/review-queue`, `POST /v0/review-queue/{id}/actions`, `GET /v0/pending-actions`, `POST /v0/pending-actions/{id}/approve` and `/reject` | `review:read`, `review:write`; `decoys:read`, `decoys:write` for agent actions |
 | `/writeups`, `/writeups/:id` | Research write-ups: start, edit drafts, lint findings, submit, second review with checklist, publish, withdraw, versions. | `GET`/`POST /v0/write-ups`, `GET`/`PATCH /v0/write-ups/{id}`, `/transitions`, `/versions` | `review:read`, `review:write`, `review:publish` |
 | `/radar` | Operator radar: counts, trends and headlines for the tenant or the fleet. Trusted side only. | `GET /v0/radar` | `review:read` |
 | `/actors` | Actor possible-associations with what matched, public sources and decisions. | `GET /v0/actor-links`, `POST /v0/actor-links/{id}/decision` | `campaigns:read`, `review:write` |
@@ -168,6 +168,18 @@ INDICATORS: type, value (defanged), roles, last seen, sightings, confidence
 ## Review queue
 
 ```text
+AGENT ACTIONS WAITING FOR APPROVAL                                      1 pending
+An MCP agent asked to reset or destroy these sandboxes. Nothing has run. ...
++--------------------------------------------------------------------------------+
+| DESTROY SANDBOX dcy-demo-1                                           pa_id0004 |
+| Asked by agent token agent01 2026-10-18 02:02, expires 2026-10-18 02:17.       |
+| Reason given by the agent (operator_manual): "the test is over"                |
+| Note (audited; required to reject) [                                     ]     |
+| [Approve destroy] [Reject]                                                     |
++--------------------------------------------------------------------------------+
+```
+
+```text
 REVIEW QUEUE   2 matching. Highest priority first; overdue items lead.
 Status [pending v]  Kind [Any v]  Window [7 days v]  [ ] Mine  [ ] Overdue only  [Apply]
 +--------------------------------------------------------------------------------+
@@ -182,6 +194,8 @@ Status [pending v]  Kind [Any v]  Window [7 days v]  [ ] Mine  [ ] Overdue only 
 ```
 
 One queue over pending CVE and technique links, pre-disclosure candidates, IOC publication candidates, campaign labels and merge proposals, false-positive feedback, actor possible-associations and write-ups in review ([review-queue.md](../review-queue.md), #35). Each item is worded like the link it stands for; a merge proposal links both campaigns. Claim and release take an item; approve needs a note (a campaign label also needs the title, a write-up the full second-reviewer checklist); reject needs a note; snooze is 1, 7 or 30 days (the API's limit is 30); "Start a write-up" promotes a CVE, pre-disclosure, technique or campaign label item to a draft and opens it. An item whose decision did not finish shows as "needs attention" (its own filter) with a prompt to check the audit log before deciding it again. Every action sends the item's `version`, so a stale page gets a 409 instead of overwriting someone else's decision, and is audited by the API as `review.<action>`. An item claimed by someone else shows who holds it and offers no actions.
+
+Above the queue, when there are any, the page lists destructive agent actions waiting for a human (#95, [foiled-mcp.md](../mcp/foiled-mcp.md#human-approval-for-destructive-tools)): an MCP agent's `reset_sandbox` or `destroy_sandbox` that has not run. Each shows the sandbox (linked), the agent token, the agent's reason as plain text (agent-written, possibly steered by attacker text), when it was asked for and when it expires (15 minutes later). Approve sends the decision with the operator's own token; the API runs the action once and the page says whether it was queued (with the job id) or refused. Reject needs a note. A page left open past the expiry, or an action someone else already decided, gets a 409 with the API's message. The panel needs `decoys:read`; the buttons need `decoys:write`, and an agent token can never use them. Both decisions are audited with the agent token and the operator. The panel shows 50 at a time, oldest last; "Older pending actions" loads the next 50 (`pending_cursor`) and keeps the queue's filters.
 
 ## Write-ups
 
@@ -284,7 +298,7 @@ Local development: put `SESSION_SECRET` and `CONSOLE_ENV=development` in `web/.d
 
 ## Tests
 
-Route tests (`web/app/routes/*.test.tsx`) run the real route config, loaders, actions and components through React Router's static handler against a fake `API` binding (`web/app/test/harness.tsx`), using the repository's golden API output from `testdata/` as fixtures. They cover sign-in, sessions and CSRF, the wizard for both decoy kinds, decoy teardown, triage and overrides, review decisions, campaigns, IOCs, exports, quarantine, the registry, hostile attacker text and the issue's mock happy path (launch an emulator profile, see the attempt, confirm the CVE from the queue, export). `api-types.test.ts` checks the console's types against the JSON Schemas, and `client-safety.test.ts` checks that no source outside server modules reaches for the token or browser storage.
+Route tests (`web/app/routes/*.test.tsx`) run the real route config, loaders, actions and components through React Router's static handler against a fake `API` binding (`web/app/test/harness.tsx`), using the repository's golden API output from `testdata/` as fixtures. They cover sign-in, sessions and CSRF, the wizard for both decoy kinds, decoy teardown, triage and overrides, review decisions, approving and rejecting agent actions, campaigns, IOCs, exports, quarantine, the registry, hostile attacker text and the issue's mock happy path (launch an emulator profile, see the attempt, confirm the CVE from the queue, export). `api-types.test.ts` checks the console's types against the JSON Schemas, and `client-safety.test.ts` checks that no source outside server modules reaches for the token or browser storage.
 
 ## Not in this change
 

@@ -71,6 +71,7 @@ fn state() -> (Arc<MemoryStore>, Arc<FakeIssuer>, AppState) {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     let issuer = Arc::new(FakeIssuer::new());
     let mut state = AppState::new(store.clone(), Arc::new(|| NOW));

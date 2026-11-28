@@ -1,0 +1,21 @@
+{
+  "action": "destroy",
+  "created_at": 1792288923000,
+  "decided_at": 1792288923000,
+  "decided_by": "analyst",
+  "error_code": null,
+  "expires_at": 1792289823000,
+  "id": "pa_id0004",
+  "idempotency_key": null,
+  "job_id": "id0008",
+  "note": "I asked for this",
+  "reason": {
+    "code": "operator_manual",
+    "text": "agent says the test is over"
+  },
+  "requested_by": "agent",
+  "requested_kind": "mcp",
+  "sandbox_id": "id0000",
+  "status": "executed",
+  "tenant_id": "t1"
+}

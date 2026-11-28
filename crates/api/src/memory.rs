@@ -10,6 +10,7 @@ use foiled_core::decoy::{Decoy, DecoyState, Reason};
 use foiled_core::enrich_pipeline::{EnrichPurgeCounts, EnrichPurgePlan, ProviderFailureRecord};
 use foiled_core::enrichment::{CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
+use foiled_core::pending_action::{PendingAction, PendingStatus};
 
 use foiled_core::radar::{AnalyticsPoint, RadarPoint};
 use foiled_core::review::ReviewState;
@@ -20,8 +21,8 @@ use crate::sinks::RadarSink;
 use crate::store::{
     AgentCerts, AgentQuery, AuditQuery, BudgetOutcome, DayAttempt, DayRecord, DecoyQuery,
     EnrolmentTokenRecord, Evidence, History, IdentityRecord, IpIocRow, JobRecord, LinkOverride,
-    LogQuery, NewCert, NewVersion, PendingStep, PublishedIoc, StixVersion, Store, StoreError,
-    StoreFuture, TokenRecord, WriteUpVersion,
+    LogQuery, NewCert, NewVersion, PendingQuery, PendingStep, PublishedIoc, StixVersion, Store,
+    StoreError, StoreFuture, TokenRecord, WriteUpVersion,
 };
 
 #[derive(Default)]
@@ -65,6 +66,12 @@ struct Inner {
     /// Tenant, write-up id and page.
     public_pages: Vec<(String, String, PublicPage)>,
     radar: Vec<RadarPoint>,
+    pending: Vec<PendingAction>,
+    /// Each pending action read moves this clock on by `.1` ms (tests).
+    pending_read_delay: Option<(std::sync::Arc<std::sync::atomic::AtomicI64>, i64)>,
+    /// The next pending action insert loses a race: a concurrent call
+    /// stores the same request first (tests).
+    lose_pending_insert: bool,
 }
 
 #[derive(Default)]
@@ -174,6 +181,21 @@ impl MemoryStore {
     /// Make public page removals fail, or work again (tests only).
     pub fn fail_page_removal(&self, fail: bool) {
         self.lock().fail_page_removal = fail;
+    }
+
+    /// Make every pending action read take `ms` of `clock` (tests only).
+    pub fn delay_pending_reads(
+        &self,
+        clock: std::sync::Arc<std::sync::atomic::AtomicI64>,
+        ms: i64,
+    ) {
+        self.lock().pending_read_delay = Some((clock, ms));
+    }
+
+    /// Make the next pending action insert lose a race to a concurrent call
+    /// with the same request, stored under another id (tests only).
+    pub fn lose_next_pending_insert(&self) {
+        self.lock().lose_pending_insert = true;
     }
 
     /// Make every later audit append with `action` fail (tests only).
@@ -2041,6 +2063,180 @@ impl Store for MemoryStore {
             if network_changed {
                 a.network_changed_at = Some(now);
             }
+        }
+        ready(Ok(()))
+    }
+
+    fn set_token_auto_approve(
+        &self,
+        tenant_id: &str,
+        token_id: &str,
+        enabled: bool,
+    ) -> StoreFuture<'_, bool> {
+        let mut g = self.lock();
+        let found = match g.tokens.get_mut(token_id) {
+            Some(t) if t.tenant_id == tenant_id => {
+                t.auto_approve = enabled;
+                true
+            }
+            _ => false,
+        };
+        ready(Ok(found))
+    }
+
+    fn insert_pending_action(&self, action: PendingAction) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        if std::mem::take(&mut g.lose_pending_insert) {
+            let mut winner = action.clone();
+            winner.id = format!("{}_winner", action.id);
+            g.pending.push(winner);
+        }
+        let clash = g.pending.iter().any(|p| {
+            p.id == action.id
+                || (action.idempotency_key.is_some()
+                    && p.tenant_id == action.tenant_id
+                    && p.requested_by == action.requested_by
+                    && p.idempotency_key == action.idempotency_key)
+        });
+        if clash {
+            return ready(Err(StoreError(format!(
+                "pending action {} exists",
+                action.id
+            ))));
+        }
+        g.pending.push(action);
+        ready(Ok(()))
+    }
+
+    fn get_pending_action(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> StoreFuture<'_, Option<PendingAction>> {
+        let g = self.lock();
+        if let Some((clock, ms)) = &g.pending_read_delay {
+            clock.fetch_add(*ms, std::sync::atomic::Ordering::SeqCst);
+        }
+        let found = g
+            .pending
+            .iter()
+            .find(|p| p.tenant_id == tenant_id && p.id == id)
+            .cloned();
+        ready(Ok(found))
+    }
+
+    fn pending_action_by_key(
+        &self,
+        tenant_id: &str,
+        requested_by: &str,
+        key: &str,
+    ) -> StoreFuture<'_, Option<PendingAction>> {
+        let found = self
+            .lock()
+            .pending
+            .iter()
+            .find(|p| {
+                p.tenant_id == tenant_id
+                    && p.requested_by == requested_by
+                    && p.idempotency_key.as_deref() == Some(key)
+            })
+            .cloned();
+        ready(Ok(found))
+    }
+
+    fn list_pending_actions(
+        &self,
+        tenant_id: &str,
+        q: PendingQuery,
+    ) -> StoreFuture<'_, Vec<PendingAction>> {
+        let g = self.lock();
+        // Resolve the cursor among every action of the tenant, as D1 does,
+        // so a page boundary survives its action being decided or expiring.
+        let before = q.cursor.as_ref().and_then(|c| {
+            g.pending
+                .iter()
+                .find(|p| p.tenant_id == tenant_id && &p.id == c)
+                .map(|p| (p.created_at, p.id.clone()))
+        });
+        let mut all: Vec<PendingAction> = g
+            .pending
+            .iter()
+            .filter(|p| p.tenant_id == tenant_id)
+            .filter(|p| q.status.is_none_or(|s| p.status_at(q.now) == s))
+            .filter(|p| {
+                before
+                    .as_ref()
+                    .is_none_or(|(t, i)| (p.created_at, &p.id) < (*t, i))
+            })
+            .cloned()
+            .collect();
+        all.sort_by(|a, b| (b.created_at, &b.id).cmp(&(a.created_at, &a.id)));
+        all.truncate(q.limit);
+        ready(Ok(all))
+    }
+
+    fn count_open_pending_actions(
+        &self,
+        tenant_id: &str,
+        requested_by: &str,
+        now: i64,
+    ) -> StoreFuture<'_, u32> {
+        let n = self
+            .lock()
+            .pending
+            .iter()
+            .filter(|p| {
+                p.tenant_id == tenant_id
+                    && p.requested_by == requested_by
+                    && p.status_at(now) == PendingStatus::Pending
+            })
+            .count();
+        ready(Ok(n as u32))
+    }
+
+    fn decide_pending_action(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        to: PendingStatus,
+        decided_by: &str,
+        note: Option<String>,
+        now: i64,
+    ) -> StoreFuture<'_, Option<PendingAction>> {
+        let mut g = self.lock();
+        let moved = g
+            .pending
+            .iter_mut()
+            .find(|p| {
+                p.tenant_id == tenant_id && p.id == id && p.status_at(now) == PendingStatus::Pending
+            })
+            .map(|p| {
+                p.status = to;
+                p.decided_by = Some(decided_by.to_string());
+                p.decided_at = Some(now);
+                p.note = note;
+                p.clone()
+            });
+        ready(Ok(moved))
+    }
+
+    fn finish_pending_action(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        to: PendingStatus,
+        job_id: Option<String>,
+        error_code: Option<String>,
+    ) -> StoreFuture<'_, ()> {
+        let mut g = self.lock();
+        if let Some(p) = g
+            .pending
+            .iter_mut()
+            .find(|p| p.tenant_id == tenant_id && p.id == id && p.status == PendingStatus::Approved)
+        {
+            p.status = to;
+            p.job_id = job_id;
+            p.error_code = error_code;
         }
         ready(Ok(()))
     }

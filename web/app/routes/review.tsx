@@ -6,7 +6,13 @@ import { ChecklistFields, PageHead, SubmitButton, Time } from "../components/con
 import { ActionNotice, EmptyState, ErrorState, Notice } from "../components/console/Notice";
 import { RouteError } from "../components/console/RouteError";
 import { windowQuery } from "../components/console/Tables";
-import type { ReviewAction, ReviewActionRequest, ReviewItem, ReviewKind } from "../lib/api-types";
+import type {
+  PendingAction,
+  ReviewAction,
+  ReviewActionRequest,
+  ReviewItem,
+  ReviewKind,
+} from "../lib/api-types";
 import {
   field,
   intField,
@@ -30,7 +36,8 @@ import {
 } from "../lib/review";
 import type { Route } from "./+types/review";
 
-// The analyst review queue (docs/review-queue.md).
+// The analyst review queue (docs/review-queue.md), and destructive agent
+// actions waiting for a human's approval (#95, docs/mcp/foiled-mcp.md).
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "Review queue · Foiled console" }];
@@ -56,6 +63,7 @@ const ACTIONS: readonly ReviewAction[] = [
   "promote",
 ];
 const SNOOZE_DAYS = [1, 7, 30] as const;
+const PENDING_INTENTS = ["approve_pending", "reject_pending"] as const;
 
 function windowOf(request: Request) {
   const w = windowFrom(new URL(request.url).searchParams);
@@ -85,8 +93,29 @@ export async function loader(args: Route.LoaderArgs) {
       limit: 100,
     }),
   );
+  // Agent resets and destroys waiting for a human (#95). Read with
+  // decoys:read; deciding needs decoys:write, which the API checks again.
+  const pendingCursor = params.get("pending_cursor");
+  const pending = op.can("decoys:read")
+    ? await load(
+        args.request,
+        op.api.listPendingActions({
+          status: "pending",
+          limit: 50,
+          cursor: isId("pendingAction", pendingCursor) ? pendingCursor : undefined,
+        }),
+      )
+    : null;
+  // The next page keeps the review queue's own filters.
+  const nextCursor = pending?.ok ? (pending.data.next_cursor ?? null) : null;
+  const pendingNext = new URLSearchParams(params);
+  if (nextCursor) pendingNext.set("pending_cursor", nextCursor);
   return {
     filters,
+    pending: pending?.ok ? pending.data.items : ([] as PendingAction[]),
+    pendingError: pending && !pending.ok ? pending.error : null,
+    pendingNext: nextCursor ? `/review?${pendingNext}` : null,
+    canApprove: op.can("decoys:write"),
     window: { since: w.since, until: w.until },
     items: res.ok ? res.data.items : ([] as ReviewItem[]),
     total: res.ok ? res.data.total : 0,
@@ -101,6 +130,8 @@ export async function loader(args: Route.LoaderArgs) {
 export async function action(args: Route.ActionArgs) {
   const op = await requireMutation(args);
   const f = op.form;
+  const pendingIntent = oneOf(f, "intent", PENDING_INTENTS);
+  if (pendingIntent) return decidePending(args.request, op, pendingIntent);
   const itemId = f.get("item_id");
   const act = oneOf(f, "intent", ACTIONS);
   const kind = oneOf(f, "kind", KINDS);
@@ -153,6 +184,36 @@ export async function action(args: Route.ActionArgs) {
   return { ...base, ok: true, message: `${done[act]}${effect} The action is in the audit log.` };
 }
 
+async function decidePending(
+  request: Request,
+  op: Awaited<ReturnType<typeof requireMutation>>,
+  intent: (typeof PENDING_INTENTS)[number],
+) {
+  const pendingId = op.form.get("pending_id");
+  const base = { item: typeof pendingId === "string" ? pendingId : "" };
+  const fail = (message: string) => ({ ...base, ok: false, message });
+  if (!isId("pendingAction", pendingId)) return fail("Unknown pending action.");
+  const note = field(op.form, "note", 1000);
+  const decision = intent === "approve_pending" ? "approve" : "reject";
+  if (decision === "reject" && !note) return fail("Add a note: a rejection needs a reason.");
+  const res = await load(request, op.api.decidePendingAction(pendingId, decision, note));
+  if (!res.ok) return fail(res.error.message);
+  const p = res.data;
+  const message =
+    p.status === "executed"
+      ? `Approved. The ${p.action} is queued as job ${p.job_id ?? ""}.`
+      : p.status === "failed"
+        ? `Approved, but the API refused the ${p.action} (${p.error_code ?? "error"}). It did not run.`
+        : p.status === "rejected"
+          ? `Rejected. The ${p.action} will not run.`
+          : `Recorded as ${p.status}.`;
+  return {
+    ...base,
+    ok: p.status !== "failed",
+    message: `${message} The decision is in the audit log.`,
+  };
+}
+
 export default function Review({ loaderData: d, actionData }: Route.ComponentProps) {
   const id = useId();
   return (
@@ -162,6 +223,20 @@ export default function Review({ loaderData: d, actionData }: Route.ComponentPro
           {d.error ? "" : `${d.total} matching. `}Highest priority first; overdue items lead.
         </span>
       </PageHead>
+      <PendingActions
+        items={d.pending}
+        error={d.pendingError}
+        next={d.pendingNext}
+        canApprove={d.canApprove}
+        result={actionData && d.pending.some((p) => p.id === actionData.item) ? actionData : null}
+        decided={
+          actionData &&
+          !d.pending.some((p) => p.id === actionData.item) &&
+          actionData.item.startsWith("pa_")
+            ? actionData
+            : null
+        }
+      />
       <section className="card panel" aria-label="Review queue">
         <Form method="get" className="filters" aria-label="Filter the review queue">
           <div className="field">
@@ -424,6 +499,119 @@ function ReviewCard({
         )}
       </div>
     </section>
+  );
+}
+
+function PendingActions({
+  items,
+  error,
+  canApprove,
+  result,
+  decided,
+  next,
+}: {
+  items: PendingAction[];
+  next: string | null;
+  error: { status: number; message: string; notServed: boolean } | null;
+  canApprove: boolean;
+  result: { item: string; ok: boolean; message: string } | null;
+  decided: { ok: boolean; message: string } | null;
+}) {
+  if (!error && items.length === 0 && !decided) return null;
+  return (
+    <section className="card panel" aria-labelledby="pending-actions-h">
+      <header className="panel__head">
+        <h2 id="pending-actions-h" className="panel__title">
+          Agent actions waiting for approval
+        </h2>
+        {items.length ? <span className="tag tag--warn">{items.length} pending</span> : null}
+      </header>
+      <div className="panel__body">
+        <p className="muted">
+          An MCP agent asked to reset or destroy these sandboxes. Nothing has run. Approve only if
+          you asked for it: the agent may have read attacker text. Each action expires 15 minutes
+          after it was asked for, runs at most once, and your decision is audited with the agent's
+          token.
+        </p>
+        {error ? <ErrorState what="Pending actions" error={error} issue={95} /> : null}
+        <ActionNotice result={decided} />
+        {items.map((p) => (
+          <PendingCard
+            key={p.id}
+            p={p}
+            canApprove={canApprove}
+            result={result?.item === p.id ? result : null}
+          />
+        ))}
+        {next ? (
+          <p className="pager">
+            <Link className="link" to={next}>
+              Older pending actions
+            </Link>
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function PendingCard({
+  p,
+  canApprove,
+  result,
+}: {
+  p: PendingAction;
+  canApprove: boolean;
+  result: { ok: boolean; message: string } | null;
+}) {
+  const id = useId();
+  return (
+    <article className="card panel" aria-labelledby={`${id}-h`}>
+      <header className="panel__head">
+        <h3 id={`${id}-h`} className="panel__title">
+          {p.action === "destroy" ? "Destroy" : "Reset"} sandbox{" "}
+          {isId("opaque", p.sandbox_id) ? (
+            <Link className="link mono" to={`/decoys/${p.sandbox_id}`}>
+              {toPrintable(p.sandbox_id)}
+            </Link>
+          ) : (
+            <span className="mono">{toPrintable(p.sandbox_id)}</span>
+          )}
+        </h3>
+        <span className="mono muted">{toPrintable(p.id)}</span>
+      </header>
+      <div className="panel__body">
+        <p>
+          Asked by agent token <span className="mono">{toPrintable(p.requested_by)}</span>{" "}
+          <Time ms={p.created_at} />, expires <Time ms={p.expires_at} />.
+        </p>
+        <p>
+          Reason given by the agent ({toPrintable(p.reason.code)}):{" "}
+          <q className="mono">{toPrintable(p.reason.text)}</q>
+        </p>
+        {canApprove ? (
+          <Form method="post" className="form-grid">
+            <CsrfField />
+            <input type="hidden" name="pending_id" value={p.id} />
+            <div className="field field--wide">
+              <label htmlFor={`${id}-note`}>Note (audited; required to reject)</label>
+              <textarea id={`${id}-note`} name="note" maxLength={1000} rows={2} />
+            </div>
+            <div className="actions-row field--wide">
+              <SubmitButton intent="approve_pending" tone="danger">
+                {p.action === "destroy" ? "Approve destroy" : "Approve reset"}
+              </SubmitButton>
+              <SubmitButton intent="reject_pending">Reject</SubmitButton>
+            </div>
+            <div className="field--wide">
+              <ActionNotice result={result} />
+            </div>
+          </Form>
+        ) : (
+          <p className="muted">Approving needs the decoys:write scope.</p>
+        )}
+      </div>
+    </article>
   );
 }
 

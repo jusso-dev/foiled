@@ -33,6 +33,7 @@ fn token(id: &str, tenant: &str, role: Role, scopes: &[Scope]) -> TokenRecord {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     }
 }
 
