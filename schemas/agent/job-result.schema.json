@@ -9,6 +9,7 @@
     "job_id": { "type": "string", "minLength": 1 },
     "outcome": { "enum": ["succeeded", "failed", "rejected"] },
     "decoy_state": { "enum": ["pending", "starting", "healthy", "rotating", "stopped", "quarantined", "failed", "destroyed"] },
-    "detail": { "type": "string", "maxLength": 2000 }
+    "detail": { "type": "string", "maxLength": 2000 },
+    "dry_run": { "type": "boolean", "description": "True when the agent ran the job on the recording runtime (sandbox_runtime = \"fake\"): nothing was started and nothing is captured. The control plane marks the decoy as a dry run (#91). Omitted when false." }
   }
 }

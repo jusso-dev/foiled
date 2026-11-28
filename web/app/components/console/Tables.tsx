@@ -219,7 +219,7 @@ export function DecoysTable({ items, caption }: { items: readonly Decoy[]; capti
                 <span className="tag">{d.decoy_kind}</span>
               </td>
               <td>
-                <DecoyStateTag state={d.state} />
+                <DecoyStateTag state={d.state} dryRun={d.dry_run} />
               </td>
               <td className="mono muted">{d.host_id ?? "not placed yet"}</td>
               <td className="mono muted">

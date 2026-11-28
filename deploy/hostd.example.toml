@@ -15,6 +15,19 @@ state_dir = "/var/lib/foiled"
 
 # Assume public exposure unless this is a lab box with no public address.
 publicly_exposed = true
+
+# Which decoy runtime this host drives. What works today:
+#   "firecracker"  The production runtime and the default (ADR 0002). Its
+#                  driver is not built in yet (#3), so foiled-hostd refuses to
+#                  start with it rather than report decoys that do not run.
+#   "docker"       Hardened Docker for a local lab. Works today. Refused when
+#                  publicly_exposed = true. See docs/mvp-walkthrough.md.
+#   "fake"         Dry run: the recording runtime. Nothing runs and nothing is
+#                  captured; the console marks these decoys as dry runs.
+#                  Refused when publicly_exposed = true.
+# With this file as shipped, foiled-hostd exits with an error until the
+# Firecracker driver lands. For a lab, set publicly_exposed = false and
+# sandbox_runtime = "docker".
 sandbox_runtime = "firecracker"
 
 # Only these artefacts may run here.

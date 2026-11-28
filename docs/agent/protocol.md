@@ -16,6 +16,8 @@ Between the control plane API Worker and `foiled-hostd` on each sandbox host ([A
 
 Edge sensors (`role = "sensor"` in the agent config) use the same calls under `/v0/sensors/{sensor_id}/...` with `sensor:lease` (lease and ack), `sensor:report` (heartbeat and renewal), `sensor:ingest` and `sensor:upload`; a wrong id is 403 `wrong_sensor`. A sensor only leases jobs placed on it, never unplaced ones. The `host_id` field of a job body or heartbeat carries the sensor id.
 
+**Runtime and dry runs (#91).** Every heartbeat carries `sandbox_runtime`, the runtime the agent drives: `firecracker`, `docker` or `fake`. The control plane stores it on the agent's registry record, where the console shows it. `fake` is the recording runtime, a dry run in which nothing runs: job results from it carry `dry_run: true`, and a create, rotate or reset acknowledged that way marks the decoy `dry_run` in `/v0/decoys` until a later build on a real runtime clears it. The agent refuses to start with a runtime it does not have (Firecracker until #3), and refuses `docker` and `fake` on a publicly exposed host.
+
 Identity calls (#31, [edge-sensor.md](../deploy/edge-sensor.md)):
 
 | Call | Auth | Request | Response |
@@ -97,7 +99,7 @@ sequenceDiagram
     H->>RT: create, start
     H->>API: ack {succeeded, healthy}
     API->>D1: pending -> starting -> healthy
-    H->>API: heartbeat (healthy, KVM, disk, skew)
+    H->>API: heartbeat (healthy, KVM, runtime, disk, skew)
     Note over RT: attacker exploits the decoy
     H->>API: POST /v0/uploads {sha256}
     API-->>H: presigned PUT for one object

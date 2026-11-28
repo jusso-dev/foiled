@@ -121,8 +121,17 @@ export default function DecoyPage({ loaderData: d, actionData }: Route.Component
   return (
     <>
       <PageHead title={<span className="mono">{decoy.id}</span>}>
-        <DecoyStateTag state={decoy.state} />
+        <DecoyStateTag state={decoy.state} dryRun={decoy.dry_run} />
       </PageHead>
+      {decoy.dry_run ? (
+        <Notice kind="warn" title="Dry run">
+          <p>
+            The host built this decoy on the recording runtime,{" "}
+            <span className="mono">sandbox_runtime = "fake"</span>. Nothing is running, nothing
+            listens and nothing is captured, whatever the state says.
+          </p>
+        </Notice>
+      ) : null}
       {d.launched ? (
         <Notice kind="ok" title="Launch accepted">
           <p>
@@ -150,7 +159,7 @@ export default function DecoyPage({ loaderData: d, actionData }: Route.Component
           <div className="panel__body">
             <Facts
               items={[
-                ["State", <DecoyStateTag key="State" state={decoy.state} />],
+                ["State", <DecoyStateTag key="State" state={decoy.state} dryRun={decoy.dry_run} />],
                 ["Label", decoy.label ? toPrintable(decoy.label) : "none"],
                 [
                   "Catalogue entry",

@@ -258,6 +258,20 @@ async fn ack(
         }
         applied = Some(cur);
     }
+    // A build (create, rotate or reset) that reached a state says whether
+    // it ran on the recording runtime. Only builds change it: stopping a
+    // dry-run decoy leaves it a dry run (#91).
+    if applied.is_some()
+        && matches!(
+            JobKind::parse(&job.kind),
+            Some(JobKind::DecoyCreate | JobKind::DecoyRotate | JobKind::DecoyReset)
+        )
+    {
+        state
+            .store
+            .set_decoy_dry_run(&who.tenant_id, &job.decoy_id, result.dry_run)
+            .await?;
+    }
 
     let outcome = match result.outcome {
         JobOutcome::Succeeded => Outcome::Accepted,
@@ -272,6 +286,7 @@ async fn ack(
         "outcome": status,
         "decoy_state": applied.map(DecoyState::as_str),
         "detail": result.detail,
+        "dry_run": result.dry_run,
     });
     state.store.append_audit(rec).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -295,6 +310,10 @@ async fn heartbeat(
     state
         .store
         .record_heartbeat(&who.tenant_id, &who.id, value, skew, now)
+        .await?;
+    state
+        .store
+        .set_agent_runtime(&who.tenant_id, &who.id, hb.sandbox_runtime)
         .await?;
     note_seen(&state, &who, &meta, true).await?;
     Ok(StatusCode::NO_CONTENT)

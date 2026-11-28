@@ -69,7 +69,8 @@ Only from signed releases, using the rules in [ADR 0007](0007-edge-ingest.md) (#
 
 - `foiled-agent` runs with no capabilities. Network setup for each decoy (ADR 0003) is done by the `foiled-jailer@` unit's root `ExecStartPre` step, which only applies fixed, validated policy; the agent starts and stops those units through a polkit rule that allows nothing else ([deploy guide](../deploy/vps.md)).
 - The agent never holds database credentials, Cloudflare API tokens or R2 keys. Its certificate is the only credential on the host.
-- `publicly_exposed` defaults to true, and the agent refuses to start with the Docker runtime on a public host.
+- `publicly_exposed` defaults to true, and the agent refuses to start with the Docker runtime or the `fake` dry-run runtime on a public host.
+- The agent refuses to start with a `sandbox_runtime` that is not built in (Firecracker until #3 lands) instead of substituting another runtime (#91). It reports the runtime it drives in every heartbeat; decoys built on `fake` are marked `dry_run` by the control plane.
 
 ### How "no management port" is checked
 

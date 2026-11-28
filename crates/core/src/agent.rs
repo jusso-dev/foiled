@@ -253,6 +253,45 @@ pub struct JobResult {
     pub decoy_state: Option<DecoyState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The job ran on the recording runtime (`sandbox_runtime = "fake"`):
+    /// nothing was started, nothing listens and nothing is captured. The
+    /// control plane marks the decoy as a dry run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dry_run: bool,
+}
+
+/// The decoy runtime a host agent is configured for (ADR 0002). The same
+/// names appear in `hostd.toml` and in heartbeats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxRuntime {
+    /// Firecracker micro-VMs under the jailer. The internet-facing default.
+    Firecracker,
+    /// Hardened Docker. Local labs only, refused on a publicly exposed host.
+    Docker,
+    /// The recording runtime: every call succeeds and nothing runs. Dry runs
+    /// only, refused on a publicly exposed host.
+    Fake,
+}
+
+impl SandboxRuntime {
+    pub const ALL: [SandboxRuntime; 3] = [
+        SandboxRuntime::Firecracker,
+        SandboxRuntime::Docker,
+        SandboxRuntime::Fake,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SandboxRuntime::Firecracker => "firecracker",
+            SandboxRuntime::Docker => "docker",
+            SandboxRuntime::Fake => "fake",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.as_str() == s)
+    }
 }
 
 /// Periodic host health report.
@@ -269,6 +308,9 @@ pub struct Heartbeat {
     pub host_time: i64,
     pub buffered_events: u64,
     pub dropped_events: u64,
+    /// The runtime this agent is driving. Absent from agents older than #91.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_runtime: Option<SandboxRuntime>,
 }
 
 #[cfg(test)]
@@ -300,6 +342,49 @@ mod tests {
         let mut k = TrustedKeys::default();
         k.add_hex(&signer.key_id, &signer.public_key_hex()).unwrap();
         k
+    }
+
+    #[test]
+    fn runtime_names_round_trip_and_fixtures_parse() {
+        for r in SandboxRuntime::ALL {
+            assert_eq!(SandboxRuntime::parse(r.as_str()), Some(r));
+            assert_eq!(
+                serde_json::to_value(r).unwrap(),
+                serde_json::Value::String(r.as_str().into())
+            );
+        }
+        assert_eq!(SandboxRuntime::parse("recording"), None);
+
+        let hb: Heartbeat = serde_json::from_str(include_str!(
+            "../../../testdata/agent/heartbeats/lab-host-dry-run.json"
+        ))
+        .unwrap();
+        assert_eq!(hb.sandbox_runtime, Some(SandboxRuntime::Fake));
+        let hb: Heartbeat = serde_json::from_str(include_str!(
+            "../../../testdata/agent/heartbeats/host-1.json"
+        ))
+        .unwrap();
+        assert_eq!(hb.sandbox_runtime, Some(SandboxRuntime::Firecracker));
+        // Agents that predate the field still parse.
+        let mut old = serde_json::to_value(&hb).unwrap();
+        old.as_object_mut().unwrap().remove("sandbox_runtime");
+        let hb: Heartbeat = serde_json::from_value(old).unwrap();
+        assert_eq!(hb.sandbox_runtime, None);
+
+        let r: JobResult = serde_json::from_str(include_str!(
+            "../../../testdata/agent/results/succeeded-dry-run.json"
+        ))
+        .unwrap();
+        assert!(r.dry_run);
+        let r: JobResult = serde_json::from_str(include_str!(
+            "../../../testdata/agent/results/succeeded.json"
+        ))
+        .unwrap();
+        assert!(!r.dry_run);
+        assert!(
+            !serde_json::to_string(&r).unwrap().contains("dry_run"),
+            "omitted when false, so older control planes accept it"
+        );
     }
 
     #[test]

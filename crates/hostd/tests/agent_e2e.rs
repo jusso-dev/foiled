@@ -12,7 +12,7 @@ use foiled_api::auth::{ClientCert, sha256_hex};
 use foiled_api::memory::MemoryStore;
 use foiled_api::store::{IdentityRecord, TokenRecord};
 use foiled_api::{AppState, router};
-use foiled_core::agent::{JobSigner, TrustedKeys};
+use foiled_core::agent::{JobSigner, SandboxRuntime, TrustedKeys};
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::CaptureEvent;
 use foiled_core::decoy::DecoyState;
@@ -91,6 +91,7 @@ fn agent(base: &str, dir: &std::path::Path, allow: &[&str]) -> (Agent, Arc<FakeR
             replays: ReplayStore::open(dir.join("replays.json")).unwrap(),
         },
         runtime: runtime.clone(),
+        sandbox_runtime: SandboxRuntime::Fake,
         cp: ControlPlane::new(base, "host-1", None).unwrap(),
         buffer: OfflineBuffer::open(dir.join("buffer"), 1 << 30).unwrap(),
         publicly_exposed: true,
@@ -130,11 +131,14 @@ async fn operator_launch_reaches_a_healthy_decoy_through_the_agent() {
     let d = store.decoy(&decoy).unwrap();
     assert_eq!(d.state, DecoyState::Healthy);
     assert_eq!(d.host_id.as_deref(), Some("host-1"));
+    // The recording runtime ran it, so the control plane knows nothing runs.
+    assert!(d.dry_run);
 
     agent.heartbeat(NOW + 250).await.unwrap();
     let (hb, skew) = store.heartbeat("t1", "host-1").unwrap();
     assert_eq!(skew, 250);
     assert_eq!(hb["running_decoys"][0], decoy);
+    assert_eq!(hb["sandbox_runtime"], "fake");
 }
 
 #[tokio::test]

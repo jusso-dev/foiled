@@ -102,6 +102,12 @@ export interface Decoy {
   updated_at: number;
   expires_at: number;
   created_by: string;
+  /**
+   * The host last built this decoy on the recording runtime
+   * (`sandbox_runtime = "fake"`). Nothing runs and nothing is captured,
+   * whatever `state` says (#91).
+   */
+  dry_run: boolean;
 }
 
 export interface CreateDecoy {
@@ -146,6 +152,9 @@ export type DecoyAction = "stop" | "rotate" | "reset" | "mark-compromised" | "de
 
 // ---------- Hosts and sensors (#31) ----------
 
+/** The decoy runtime an agent reports in its heartbeat (#91). `fake` is a dry run. */
+export type SandboxRuntime = "firecracker" | "docker" | "fake";
+
 export interface AgentRecord {
   id: string;
   tenant_id: string;
@@ -165,6 +174,8 @@ export interface AgentRecord {
   network_changed_at: number | null;
   revoked_at: number | null;
   revoke_reason: Reason | null;
+  /** From the agent's last heartbeat; null before the first one. */
+  sandbox_runtime: SandboxRuntime | null;
 }
 
 export interface AgentCreated {

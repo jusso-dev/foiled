@@ -216,6 +216,72 @@ async fn a_rotation_rebuilds_and_bumps_the_generation() {
     assert_eq!(d.generation, 2);
 }
 
+async fn ack_build(h: &H, job_id: &str, extra: Value) -> StatusCode {
+    let mut body = json!({"job_id": job_id, "outcome": "succeeded", "decoy_state": "healthy"});
+    body.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    host(h, 1, &format!("/v0/hosts/host-1/jobs/{job_id}:ack"), body)
+        .await
+        .0
+}
+
+#[tokio::test]
+async fn decoys_built_on_the_fake_runtime_are_marked_as_dry_runs() {
+    let h = harness(true);
+    let decoy = create_redis(&h).await;
+    let get = |id: &str| {
+        let req = Request::get(format!("/v0/decoys/{id}"))
+            .header("authorization", format!("Bearer fo_admin1.{SECRET}"))
+            .body(Body::empty())
+            .unwrap();
+        send(&h, req)
+    };
+    assert_eq!(get(&decoy).await.1["dry_run"], false);
+
+    let create = keys().verify(&lease(&h, 1, "host-1").await[0]).unwrap();
+    assert_eq!(
+        ack_build(&h, &create.job_id, json!({"dry_run": true})).await,
+        StatusCode::NO_CONTENT
+    );
+    let (_, d) = get(&decoy).await;
+    assert_eq!(d["state"], "healthy");
+    assert_eq!(d["dry_run"], true, "healthy on paper, nothing running");
+    let rec = h
+        .store
+        .audit()
+        .into_iter()
+        .find(|a| a.action == "job.ack")
+        .unwrap();
+    assert_eq!(rec.detail["dry_run"], true);
+
+    // Stopping does not clear it: the decoy never ran.
+    let reason = json!({"reason": {"code": "operator_manual", "text": "pause"}});
+    operator(&h, &format!("/v0/decoys/{decoy}:stop"), reason).await;
+    let stop = keys().verify(&lease(&h, 1, "host-1").await[0]).unwrap();
+    let body = json!({"job_id": stop.job_id, "outcome": "succeeded", "decoy_state": "stopped"});
+    host(
+        &h,
+        1,
+        &format!("/v0/hosts/host-1/jobs/{}:ack", stop.job_id),
+        body,
+    )
+    .await;
+    assert_eq!(get(&decoy).await.1["dry_run"], true);
+
+    // A real rebuild clears it.
+    let reason = json!({"reason": {"code": "operator_manual", "text": "real runtime now"}});
+    operator(&h, &format!("/v0/decoys/{decoy}:rotate"), reason).await;
+    let rotate = keys().verify(&lease(&h, 1, "host-1").await[0]).unwrap();
+    assert_eq!(
+        ack_build(&h, &rotate.job_id, json!({})).await,
+        StatusCode::NO_CONTENT
+    );
+    let (_, d) = get(&decoy).await;
+    assert_eq!(d["dry_run"], false);
+    assert_eq!(d["generation"], 2);
+}
+
 #[tokio::test]
 async fn impossible_reported_states_are_refused() {
     let h = harness(true);
@@ -266,6 +332,12 @@ async fn heartbeats_record_clock_skew_for_the_calling_host_only() {
     assert_eq!(s, StatusCode::NO_CONTENT);
     let (_, skew) = h.store.heartbeat("t1", "host-1").unwrap();
     assert_eq!(skew, 1500);
+    let mut fake = hb("host-1");
+    fake["sandbox_runtime"] = json!("fake");
+    let (s, _) = host(&h, 1, "/v0/hosts/host-1/heartbeat", fake).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (stored, _) = h.store.heartbeat("t1", "host-1").unwrap();
+    assert_eq!(stored["sandbox_runtime"], "fake");
     let (s, _) = host(&h, 1, "/v0/hosts/host-1/heartbeat", hb("host-2")).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     let (s, _) = host(&h, 1, "/v0/hosts/host-2/heartbeat", hb("host-2")).await;

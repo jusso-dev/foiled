@@ -95,10 +95,12 @@ Production shape, per [deploy/vps.md](deploy/vps.md) and [deploy/workers.md](dep
 1. Control plane on Workers: D1 and Postgres migrations applied, `JOB_SIGNING_KEY` and R2 secrets set, the console behind Cloudflare Access, the ingest hostname behind mTLS. This repository never deploys; an operator does.
 2. A clean Ubuntu LTS VPS with KVM, users and disk laid out as in the deploy guide, the [nftables ruleset](../configs/nftables/honeypot.nft) loaded, and the host agent enrolled with a client certificate.
 3. Build the demo image (ADR 0004) and push it to a registry you control; pin the digest in the catalogue entry and the host allow-list.
-4. Run `foiled-hostd` with `sandbox_runtime = "firecracker"`.
+4. Run `foiled-hostd` with `sandbox_runtime = "firecracker"`. Today it exits with an error at this step (see below).
 5. Launch, exploit, verify egress with the ADR 0003 operator checklist, rotate and export exactly as in the lab track, using the console or the API with your token.
 
-**What is missing today:** step 4 runs the recording runtime, because the Firecracker driver is follow-up work under #3. Everything around it (signed jobs, the gate, the executor's rotate and destroy sequences, capture envelopes, the buffer, ingest, export, audit) is the code the lab track exercises.
+**What is missing today:** step 4 stops. The Firecracker driver is follow-up work under #3, and `foiled-hostd` refuses to start with a runtime it does not have rather than fall back to one that runs nothing (#91). Everything around it (signed jobs, the gate, the executor's rotate and destroy sequences, capture envelopes, the buffer, ingest, export, audit) is the code the lab track exercises.
+
+**Dry runs.** To exercise the control loop without Docker, a lab host that is not publicly exposed can set `sandbox_runtime = "fake"`. That is the recording runtime: every call succeeds and nothing runs. The agent reports `fake` in its heartbeats, the registry shows it, and every decoy it builds is marked as a dry run in the API (`dry_run: true`) and the console, so it is never mistaken for a working decoy. The agent refuses `fake` on a publicly exposed host.
 
 ## Not needed for the MVP
 
@@ -106,7 +108,7 @@ The MCP server (#24) and the console launch wizard (#14) come next and build on 
 
 ## Transcript
 
-CI keeps a full transcript of `scripts/mvp-lab.sh` in the `MVP lab walkthrough (Docker)` job log of every pull request. A local run of the same control loop with the recording runtime (no Docker on the machine) looked like this:
+CI keeps a full transcript of `scripts/mvp-lab.sh` in the `MVP lab walkthrough (Docker)` job log of every pull request. A local run of the same control loop with the recording runtime (`sandbox_runtime = "fake"`, no Docker on the machine) looked like this:
 
 ```text
 created 5dcb9d987a5f47a6975fc9376a8176e5 pending

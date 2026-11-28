@@ -32,6 +32,30 @@ describe("hosts and sensors", () => {
     expect(t).toContain("revoked");
   });
 
+  it("shows the runtime each agent reported and flags the fake runtime as a dry run", async () => {
+    const { cookie } = await signIn();
+    const a = fakeApi((c) => {
+      if (c.path === "/v0/hosts" && c.method === "GET") {
+        return {
+          items: [
+            { ...agents.host, id: "host-0001", sandbox_runtime: "fake" },
+            { ...agents.host, id: "host-0002", sandbox_runtime: null },
+          ],
+          next_cursor: null,
+        };
+      }
+      if (c.path === "/v0/sensors" && c.method === "GET") {
+        return { items: [agents.sensor], next_cursor: null };
+      }
+      return undefined;
+    });
+    const t = text(expectPage(await page(envWith(a), "/registry", { cookie })).html);
+    expect(t).toContain("Runtime");
+    expect(t).toContain("dry run");
+    expect(t).toContain("not reported");
+    expect(t).toContain("Docker (lab)");
+  });
+
   it("registers a sensor and shows the enrolment token once", async () => {
     const { cookie, session } = await signIn();
     const a = api();

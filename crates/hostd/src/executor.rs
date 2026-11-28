@@ -16,6 +16,7 @@ fn ok(job: &JobBody, state: Option<DecoyState>) -> JobResult {
         outcome: JobOutcome::Succeeded,
         decoy_state: state,
         detail: None,
+        dry_run: false,
     }
 }
 
@@ -25,6 +26,7 @@ fn failed(job: &JobBody, state: Option<DecoyState>, e: RuntimeError) -> JobResul
         outcome: JobOutcome::Failed,
         decoy_state: state,
         detail: Some(e.0),
+        dry_run: false,
     }
 }
 

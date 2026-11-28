@@ -239,7 +239,7 @@ Malware downloads are **off by default**. They turn on only when the console Wor
 
 ## Hosts and sensors
 
-The registry lists hosts and sensors with status, sandbox permission, last seen, certificate expiry and network changes. Registering mints a one-time enrolment token that is shown once in the response and never stored by the console. Re-enrol and revoke need a reason; revoke also needs a tick box because it is final. When the CA could not revoke a certificate, the console says to finish it in the Cloudflare dashboard.
+The registry lists hosts and sensors with status, sandbox permission, the runtime from the last heartbeat, last seen, certificate expiry and network changes. An agent on the `fake` runtime, and every decoy it built, carries a "dry run" tag: nothing runs and nothing is captured there (#91). Registering mints a one-time enrolment token that is shown once in the response and never stored by the console. Re-enrol and revoke need a reason; revoke also needs a tick box because it is final. When the CA could not revoke a certificate, the console says to finish it in the Cloudflare dashboard.
 
 ## Live feed
 

@@ -874,6 +874,22 @@ pub trait Store: Send + Sync {
         now: i64,
     ) -> StoreFuture<'_, ()>;
 
+    /// Mark whether a decoy was last built on the recording runtime (#91).
+    fn set_decoy_dry_run(
+        &self,
+        tenant_id: &str,
+        decoy_id: &str,
+        dry_run: bool,
+    ) -> StoreFuture<'_, ()>;
+
+    /// Remember the runtime an agent named in its heartbeat (#91).
+    fn set_agent_runtime(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        runtime: Option<foiled_core::agent::SandboxRuntime>,
+    ) -> StoreFuture<'_, ()>;
+
     // Enrolment and the sensor and host registry (#31).
 
     /// Register an agent and its first enrolment token together.

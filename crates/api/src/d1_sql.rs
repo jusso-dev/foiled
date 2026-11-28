@@ -9,6 +9,7 @@ pub const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/d1/0003_enrolment.sql"),
     include_str!("../../../migrations/d1/0004_enrich_cache.sql"),
     include_str!("../../../migrations/d1/0005_enrich_consumer.sql"),
+    include_str!("../../../migrations/d1/0006_sandbox_runtime.sql"),
 ];
 
 pub const TOKEN_BY_ID: &str = "SELECT id, tenant_id, role, scopes, secret_sha256, expires_at, revoked \
@@ -22,7 +23,7 @@ pub const INSERT_DECOY: &str = "INSERT INTO decoys (id, tenant_id, catalogue_id,
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
 const DECOY_COLUMNS: &str = "id, tenant_id, catalogue_id, decoy_kind, label, state, host_id, generation, \
-     created_at, updated_at, expires_at, created_by";
+     created_at, updated_at, expires_at, created_by, dry_run";
 
 pub fn decoy_by_id() -> String {
     format!("SELECT {DECOY_COLUMNS} FROM decoys WHERE tenant_id = ?1 AND id = ?2")
@@ -95,6 +96,10 @@ pub fn finish_job() -> String {
 pub const SET_DECOY_STATE: &str = "UPDATE decoys SET state = ?4, generation = generation + ?5, updated_at = ?6 \
      WHERE tenant_id = ?1 AND id = ?2 AND state = ?3 RETURNING id";
 
+/// `?3` 1 when the host ran the job on the recording runtime, else 0.
+pub const SET_DECOY_DRY_RUN: &str =
+    "UPDATE decoys SET dry_run = ?3 WHERE tenant_id = ?1 AND id = ?2";
+
 pub const UPSERT_HEARTBEAT: &str = "INSERT INTO host_heartbeats (tenant_id, host_id, heartbeat, clock_skew_ms, received_at) \
      VALUES (?1, ?2, ?3, ?4, ?5) \
      ON CONFLICT (tenant_id, host_id) DO UPDATE SET heartbeat = ?3, clock_skew_ms = ?4, received_at = ?5";
@@ -115,7 +120,11 @@ pub const RATE_LIMITS_PRUNE: &str = "DELETE FROM rate_limits WHERE rowid IN \
 
 pub const AGENT_COLUMNS: &str = "id, tenant_id, role, label, status, sandbox_allowed, share_opt_in, \
      created_at, created_by, enrolled_at, cert_sha256, cert_expires_at, last_seen_at, last_ip, \
-     last_asn, network_changed_at, revoked_at, revoke_reason_code, revoke_reason_text";
+     last_asn, network_changed_at, revoked_at, revoke_reason_code, revoke_reason_text, sandbox_runtime";
+
+/// The runtime from an agent's heartbeat. `?3` runtime name or NULL.
+pub const SET_AGENT_RUNTIME: &str =
+    "UPDATE agents SET sandbox_runtime = ?3 WHERE tenant_id = ?1 AND id = ?2";
 
 pub const INSERT_AGENT: &str = "INSERT INTO agents (id, tenant_id, role, label, status, sandbox_allowed, share_opt_in, \
      created_at, created_by, enrolled_at, cert_sha256, cert_expires_at, last_seen_at, last_ip, \
@@ -653,6 +662,62 @@ mod tests {
             })
             .unwrap();
         assert_eq!(generation, 2);
+    }
+
+    #[test]
+    fn dry_run_and_agent_runtime_are_recorded() {
+        let c = db();
+        insert_decoy(&c, "d1", "t1", 1, "healthy");
+        let dry = |c: &Connection| -> i64 {
+            c.query_row(&decoy_by_id(), params!["t1", "d1"], |r| r.get(12))
+                .unwrap()
+        };
+        assert_eq!(dry(&c), 0, "decoys are not dry runs by default");
+        c.execute(SET_DECOY_DRY_RUN, params!["t2", "d1", 1])
+            .unwrap();
+        assert_eq!(dry(&c), 0, "another tenant cannot mark it");
+        c.execute(SET_DECOY_DRY_RUN, params!["t1", "d1", 1])
+            .unwrap();
+        assert_eq!(dry(&c), 1);
+
+        c.execute(
+            INSERT_AGENT,
+            params![
+                "h1",
+                "t1",
+                "host",
+                None::<String>,
+                "active",
+                1,
+                None::<i64>,
+                1,
+                "op",
+                None::<i64>,
+                None::<String>,
+                None::<i64>,
+                None::<i64>,
+                None::<String>,
+                None::<i64>,
+                None::<i64>,
+                None::<i64>,
+                None::<String>,
+                None::<String>
+            ],
+        )
+        .unwrap();
+        let runtime = |c: &Connection| -> Option<String> {
+            c.query_row(&agent_by_id(), params!["t1", "host", "h1"], |r| r.get(19))
+                .unwrap()
+        };
+        assert_eq!(runtime(&c), None);
+        c.execute(SET_AGENT_RUNTIME, params!["t1", "h1", "fake"])
+            .unwrap();
+        assert_eq!(runtime(&c).as_deref(), Some("fake"));
+        assert!(
+            c.execute(SET_AGENT_RUNTIME, params!["t1", "h1", "recording"])
+                .is_err(),
+            "only known runtimes are stored"
+        );
     }
 
     #[test]

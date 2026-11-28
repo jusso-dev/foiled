@@ -5,7 +5,7 @@
   "description": "A registered edge sensor or sandbox host as returned by /v0/sensors and /v0/hosts (#31). The certificate fingerprint is the identity; the private key never leaves the agent.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "tenant_id", "role", "label", "status", "sandbox_allowed", "share_opt_in", "created_at", "created_by", "enrolled_at", "cert_sha256", "cert_expires_at", "last_seen_at", "last_ip", "last_asn", "network_changed_at", "revoked_at", "revoke_reason"],
+  "required": ["id", "tenant_id", "role", "label", "status", "sandbox_allowed", "share_opt_in", "created_at", "created_by", "enrolled_at", "cert_sha256", "cert_expires_at", "last_seen_at", "last_ip", "last_asn", "network_changed_at", "revoked_at", "revoke_reason", "sandbox_runtime"],
   "properties": {
     "id": { "type": "string", "minLength": 1 },
     "tenant_id": { "type": "string", "minLength": 1 },
@@ -37,6 +37,10 @@
           }
         }
       ]
+    },
+    "sandbox_runtime": {
+      "enum": [null, "firecracker", "docker", "fake"],
+      "description": "The runtime named in the agent's last heartbeat (#91), or null before the first one. fake means every decoy on this agent is a dry run: nothing runs and nothing is captured."
     }
   }
 }

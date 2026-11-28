@@ -6,7 +6,6 @@
 //! ```
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use foiled_core::agent::TrustedKeys;
@@ -15,11 +14,10 @@ use foiled_hostd::agent::Agent;
 use foiled_hostd::buffer::OfflineBuffer;
 use foiled_hostd::client::ControlPlane;
 use foiled_hostd::config::{HostConfig, SandboxRuntime};
-use foiled_hostd::docker::{DockerRuntime, container_name};
+use foiled_hostd::docker::container_name;
 use foiled_hostd::enrol::IdentityFiles;
 use foiled_hostd::gate::{JobGate, ReplayStore};
 use foiled_hostd::logcapture::line_to_event;
-use foiled_hostd::runtime::{FakeRuntime, Runtime};
 use foiled_hostd::update;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
@@ -152,6 +150,17 @@ async fn main() {
 }
 
 async fn run(cfg: HostConfig) {
+    // First, before touching the state directory or the network: a host
+    // configured for a runtime this build cannot drive must not start and
+    // report decoys that are not running (#91).
+    let (sandbox_runtime, runtime) =
+        foiled_hostd::runtime::from_config(&cfg).unwrap_or_else(|e| fail(e));
+    if sandbox_runtime == SandboxRuntime::Fake {
+        eprintln!(
+            "foiled-hostd: sandbox_runtime = \"fake\": dry run. Nothing runs and nothing is captured; \
+             the control plane marks these decoys as dry runs"
+        );
+    }
     let mut keys = TrustedKeys::default();
     for k in &cfg.trusted_keys {
         keys.add_hex(&k.id, &k.public_key)
@@ -171,20 +180,12 @@ async fn run(cfg: HostConfig) {
     };
     let buffer = OfflineBuffer::open(cfg.state_dir.join("buffer"), cfg.buffer_cap())
         .unwrap_or_else(|e| fail(e));
-    let docker = cfg.sandbox_runtime == SandboxRuntime::Docker;
-    let runtime: Arc<dyn Runtime> = if docker {
-        Arc::new(DockerRuntime::new(cfg.docker.clone()))
-    } else {
-        // The Firecracker and module drivers land with the runtime work (#3).
-        eprintln!(
-            "foiled-hostd: Firecracker driver not available yet, using the recording runtime"
-        );
-        Arc::new(FakeRuntime::default())
-    };
+    let docker = sandbox_runtime == SandboxRuntime::Docker;
     let mut agent = Agent {
         host_id: cfg.host_id.clone(),
         gate,
         runtime,
+        sandbox_runtime,
         cp,
         buffer,
         publicly_exposed: cfg.publicly_exposed,

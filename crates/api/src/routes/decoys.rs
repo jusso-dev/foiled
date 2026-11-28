@@ -229,6 +229,7 @@ async fn create(
         updated_at: now,
         expires_at: now + lifetime * 1000,
         created_by: who.id.clone(),
+        dry_run: false,
     };
     let job = JobRecord {
         id: (state.ids)(),
