@@ -17,6 +17,7 @@ pub mod buffer;
 pub mod client;
 pub mod config;
 pub mod docker;
+pub mod egress;
 pub mod enrol;
 pub mod executor;
 pub mod gate;

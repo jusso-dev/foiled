@@ -258,6 +258,27 @@ pub struct JobResult {
     /// control plane marks the decoy as a dry run.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dry_run: bool,
+    /// Machine-readable cause for a `failed` outcome, when the host knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<FailureCode>,
+}
+
+/// Why a job failed, for failures an operator must act on before a retry
+/// can work. Unclassified failures carry only `detail`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureCode {
+    /// The host could not confirm that new outbound connections from the
+    /// decoy network are blocked, so it refused to start the decoy (#93).
+    EgressUnverified,
+}
+
+impl FailureCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FailureCode::EgressUnverified => "egress_unverified",
+        }
+    }
 }
 
 /// The decoy runtime a host agent is configured for (ADR 0002). The same
@@ -444,5 +465,28 @@ mod tests {
         }
         assert!(JobKind::DecoyDestroy.needs_reason());
         assert!(!JobKind::DecoyCreate.needs_reason());
+    }
+
+    #[test]
+    fn failure_codes_round_trip_and_are_optional() {
+        let r = JobResult {
+            job_id: "j1".into(),
+            outcome: JobOutcome::Failed,
+            decoy_state: Some(DecoyState::Failed),
+            detail: Some("no deny rule".into()),
+            dry_run: false,
+            failure_code: Some(FailureCode::EgressUnverified),
+        };
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["failure_code"], FailureCode::EgressUnverified.as_str());
+        assert_eq!(serde_json::from_value::<JobResult>(json).unwrap(), r);
+        let old: JobResult =
+            serde_json::from_str(r#"{"job_id":"j1","outcome":"succeeded"}"#).unwrap();
+        assert_eq!(old.failure_code, None);
+        assert!(
+            !serde_json::to_string(&old)
+                .unwrap()
+                .contains("failure_code")
+        );
     }
 }

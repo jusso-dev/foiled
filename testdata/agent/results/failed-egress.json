@@ -1,0 +1,1 @@
+{"job_id":"job-2","outcome":"failed","decoy_state":"failed","detail":"egress unverified: no rule denies new outbound IPv4 connections from 10.86.0.0/24","failure_code":"egress_unverified"}

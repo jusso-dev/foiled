@@ -68,7 +68,19 @@ Failures: a failed containment step (stop, destroy) reports `failed` with the de
 { "job_id": "job-1", "outcome": "succeeded", "decoy_state": "healthy", "detail": null }
 ```
 
-`outcome` is `succeeded`, `failed` or `rejected` (the gate refused the job; `detail` says why). The control plane applies `decoy_state` by walking the allowed transitions in [rotation.md](../rotation.md): for example `pending` to `healthy` passes through `starting`, and a successful rotate or reset always passes through `rotating`, which bumps the generation. A state that cannot be reached is refused with 409. Every ack is audited as `job.ack`; rejections are audited as denied.
+```json
+{ "job_id": "job-2", "outcome": "failed", "decoy_state": "failed",
+  "detail": "egress unverified: no rule denies new outbound IPv4 connections from 10.86.0.0/24",
+  "failure_code": "egress_unverified" }
+```
+
+`outcome` is `succeeded`, `failed` or `rejected` (the gate refused the job; `detail` says why). The control plane applies `decoy_state` by walking the allowed transitions in [rotation.md](../rotation.md): for example `pending` to `healthy` passes through `starting`, and a successful rotate or reset always passes through `rotating`, which bumps the generation. A state that cannot be reached is refused with 409. Every ack is audited as `job.ack`; rejections are audited as denied. `failure_code` is optional and only set on `failed` outcomes the operator must fix before a retry can work (on any other outcome the ack is refused with 422); the ack audit record carries it in `detail.failure_code`:
+
+| Code | Meaning |
+| --- | --- |
+| `egress_unverified` | The host could not confirm that new outbound connections from the decoy network are blocked (network missing, wrong driver or subnet, no covering deny rule, a rule that lets traffic out first, or the firewall could not be listed), so it did not start the decoy (#93). The decoy is reported `failed`. See [the lab walkthrough](../mvp-walkthrough.md). |
+
+**Upgrade order.** The control plane decodes job results and heartbeats strictly and refuses a member it does not know with 422. New optional members (`sandbox_runtime` and `dry_run` in #91, `failure_code` in #93) are therefore deployed API first: upgrade the API Worker, then the hosts. A host that is ahead of the API has its heartbeats refused and its acknowledgements carrying a new member dropped (a refused ack is not retried), so the job is never recorded as finished.
 
 ## Leases
 

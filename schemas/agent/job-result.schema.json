@@ -10,6 +10,12 @@
     "outcome": { "enum": ["succeeded", "failed", "rejected"] },
     "decoy_state": { "enum": ["pending", "starting", "healthy", "rotating", "stopped", "quarantined", "failed", "destroyed"] },
     "detail": { "type": "string", "maxLength": 2000 },
-    "dry_run": { "type": "boolean", "description": "True when the agent ran the job on the recording runtime (sandbox_runtime = \"fake\"): nothing was started and nothing is captured. The control plane marks the decoy as a dry run (#91). Omitted when false." }
-  }
+    "dry_run": { "type": "boolean", "description": "True when the agent ran the job on the recording runtime (sandbox_runtime = \"fake\"): nothing was started and nothing is captured. The control plane marks the decoy as a dry run (#91). Omitted when false." },
+    "failure_code": {
+      "description": "Machine-readable cause of a failed outcome. egress_unverified: the host could not confirm that new outbound connections from the decoy network are blocked, so it did not start the decoy (#93).",
+      "enum": ["egress_unverified"]
+    }
+  },
+  "if": { "required": ["failure_code"] },
+  "then": { "properties": { "outcome": { "const": "failed" } } }
 }

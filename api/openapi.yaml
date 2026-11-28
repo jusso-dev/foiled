@@ -523,7 +523,9 @@ paths:
         by walking the allowed transitions (`docs/rotation.md`); a successful
         rotate or reset always passes through `rotating` and bumps the
         generation. Impossible states are refused with 409. Audited as
-        `job.ack`.
+        `job.ack`, with any `failure_code` (for example
+        `egress_unverified`, #93) copied into the audit detail. A
+        `failure_code` on an outcome other than `failed` is refused with 422.
       security: [{ mtls: [] }]
       x-foiled-status: implemented
       x-foiled-store: d1
@@ -542,6 +544,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorised" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
 
   /v0/uploads:
     post:

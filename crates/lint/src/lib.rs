@@ -727,6 +727,27 @@ mod tests {
     }
 
     #[test]
+    fn job_results_carry_a_failure_code_only_when_failed() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let schema = load(&root.join("schemas/agent/job-result.schema.json")).unwrap();
+        let v = jsonschema::validator_for(&schema).unwrap();
+        let ok = |doc: serde_json::Value| v.is_valid(&doc);
+        assert!(ok(serde_json::json!({"job_id": "j", "outcome": "failed",
+            "failure_code": "egress_unverified"})));
+        assert!(ok(serde_json::json!({"job_id": "j", "outcome": "failed"})));
+        assert!(ok(
+            serde_json::json!({"job_id": "j", "outcome": "succeeded"})
+        ));
+        for outcome in ["succeeded", "rejected"] {
+            assert!(
+                !ok(serde_json::json!({"job_id": "j", "outcome": outcome,
+                    "failure_code": "egress_unverified"})),
+                "{outcome}"
+            );
+        }
+    }
+
+    #[test]
     fn shipped_contribute_back_policy_matches_code_defaults() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let value = load(&root.join(CONTRIBUTE_BACK)).unwrap();
