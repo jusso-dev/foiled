@@ -104,8 +104,9 @@ pub const TOOLS: &[ToolDef] = &[
         description: "Rebuild a sandbox from its pinned catalogue image, discarding everything an \
             attacker changed. Destructive: only call this when the human operator asked for it. \
             Needs confirm: true and a reason, which are audited. From an agent token it does not \
-            run yet: it returns a pending action that a human must approve in the Foiled console \
-            within 15 minutes; poll get_pending_action. Needs decoys:write.",
+            run yet, unless an admin marked the token auto-approve: it returns a pending action \
+            that a human must approve in the Foiled console within 15 minutes; poll \
+            get_pending_action. Needs decoys:write.",
         scopes: &[Scope::DecoysWrite],
         kind: Kind::Destructive,
         trust: Trust::ControlPlane,
@@ -116,9 +117,9 @@ pub const TOOLS: &[ToolDef] = &[
         title: "Destroy a sandbox",
         description: "Tear a sandbox down for good. Destructive: only call this when the human \
             operator asked for it. Needs confirm: true and a reason, which are audited. From an \
-            agent token it does not run yet: it returns a pending action that a human must \
-            approve in the Foiled console within 15 minutes; poll get_pending_action. Needs \
-            decoys:write.",
+            agent token it does not run yet, unless an admin marked the token auto-approve: it \
+            returns a pending action that a human must approve in the Foiled console within 15 \
+            minutes; poll get_pending_action. Needs decoys:write.",
         scopes: &[Scope::DecoysWrite],
         kind: Kind::Destructive,
         trust: Trust::ControlPlane,
@@ -578,6 +579,8 @@ struct Ctx {
     /// The pending action a destructive call from an agent token created
     /// or found (#95).
     pending_action_id: Option<String>,
+    /// That pending action's status as returned to the agent.
+    pending_status: Option<PendingStatus>,
     /// An `input_required` result asking the client to elicit approval.
     input_required: Option<Value>,
 }
@@ -1323,24 +1326,22 @@ async fn request_approval(
             .await
             .map_err(|_| ToolError::store())?
     {
-        if p.sandbox_id != a.sandbox_id || p.action != kind {
-            return Err(ToolError::refused(
-                "conflict",
-                "idempotency key belongs to another request",
-            ));
-        }
-        ctx.pending_action_id = Some(p.id.clone());
-        ctx.job_id = p.job_id.clone();
-        return Ok(pending_result(p, now));
+        return replay(p, kind, a, now, ctx);
     }
     // The sandbox must exist in this tenant and be able to make the move.
-    let decoy = api
-        .get(&format!("/v0/sandboxes/{}", a.sandbox_id), &[])
-        .await?;
-    let current = decoy["state"]
-        .as_str()
-        .and_then(DecoyState::parse)
-        .ok_or_else(ToolError::store)?;
+    // Read from the store, not `GET /v0/sandboxes/{id}`: asking needs
+    // `decoys:write` only, as the action itself does, not `decoys:read`.
+    let current = state
+        .store
+        .get_decoy(&who.tenant_id, &a.sandbox_id)
+        .await
+        .map_err(|_| ToolError::store())?
+        .ok_or_else(|| ToolError {
+            code: "not_found".into(),
+            message: "decoy not found".into(),
+            http_status: Some(404),
+        })?
+        .state;
     if !current.can_transition_to(kind.target_state()) {
         return Err(ToolError::refused(
             "conflict",
@@ -1383,12 +1384,42 @@ async fn request_approval(
         job_id: None,
         error_code: None,
     };
-    state
-        .store
-        .insert_pending_action(p.clone())
-        .await
-        .map_err(|_| ToolError::store())?;
+    if state.store.insert_pending_action(p.clone()).await.is_err() {
+        // A concurrent call with the same key may have stored its action
+        // between our lookup and this insert: return that one.
+        if let Some(k) = &a.idempotency_key
+            && let Ok(Some(p)) = state
+                .store
+                .pending_action_by_key(&who.tenant_id, &who.id, k)
+                .await
+        {
+            return replay(p, kind, a, now, ctx);
+        }
+        return Err(ToolError::store());
+    }
     ctx.pending_action_id = Some(p.id.clone());
+    ctx.pending_status = Some(PendingStatus::Pending);
+    Ok(pending_result(p, now))
+}
+
+/// A retry with an idempotency key the token already used: the action
+/// recorded then, if it was for the same sandbox and action.
+fn replay(
+    p: PendingAction,
+    kind: PendingKind,
+    a: &DestructiveArgs,
+    now: i64,
+    ctx: &mut Ctx,
+) -> Result<Value, ToolError> {
+    if p.sandbox_id != a.sandbox_id || p.action != kind {
+        return Err(ToolError::refused(
+            "conflict",
+            "idempotency key belongs to another request",
+        ));
+    }
+    ctx.pending_action_id = Some(p.id.clone());
+    ctx.pending_status = Some(p.status_at(now));
+    ctx.job_id = p.job_id.clone();
     Ok(pending_result(p, now))
 }
 
@@ -1646,7 +1677,7 @@ pub async fn call(
         "arguments": redact_arguments(&args),
         "status": if ctx.input_required.is_some() {
             "input_required"
-        } else if result.is_ok() && ctx.pending_action_id.is_some() && ctx.job_id.is_none() {
+        } else if result.is_ok() && ctx.pending_status == Some(PendingStatus::Pending) {
             "pending_approval"
         } else if result.is_ok() {
             "ok"

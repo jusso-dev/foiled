@@ -70,7 +70,9 @@ pub const COUNT_OPEN_PENDING: &str = "SELECT COUNT(*) AS n FROM pending_actions 
 
 /// Compare-and-set from `pending`, unexpired at `?6`, to `?3`. `?4` decider,
 /// `?5` note. One statement, so of two concurrent decisions exactly one
-/// gets the row back.
+/// gets the row back. `?6` is read just before this statement runs (no
+/// other await in between), so an approval can land after `expires_at` by
+/// at most this statement's own latency.
 pub fn decide_pending() -> String {
     format!(
         "UPDATE pending_actions SET status = ?3, decided_by = ?4, decided_at = ?6, note = ?5 \

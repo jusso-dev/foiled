@@ -2756,9 +2756,11 @@ paths:
         `decoy.<action>` audit record apply, with the approver as actor. The
         result is `executed` (with `job_id`) or `failed` (with
         `error_code`, for example `conflict` when the sandbox changed
-        state). A `pending_action.approve` audit record names both the
-        approving human (`actor_id`) and the requesting agent token
-        (`detail.requested_by`).
+        state). A `pending_action.run` audit record, written before the
+        action is sent and required for it to run (503 and `failed` with
+        `audit_unavailable` otherwise), and a `pending_action.approve`
+        record with the outcome both name the approving human (`actor_id`)
+        and the requesting agent token (`detail.requested_by`).
       x-foiled-status: implemented
       x-foiled-store: d1
       x-foiled-scopes: [decoys:write]
@@ -2831,7 +2833,9 @@ paths:
         (operator tokens never wait for approval, so 422 for them). With it
         on, the token's `reset_sandbox` and `destroy_sandbox` run at once
         and are audited with `detail.approval: "auto_approve"`. Each change
-        is audited as `token.auto_approve` with the required note.
+        is audited as `token.auto_approve` with the required note, written
+        before the flag changes: if the audit store is down the flag is
+        left as it was (503).
       x-foiled-status: implemented
       x-foiled-store: d1
       x-foiled-scopes: [admin]

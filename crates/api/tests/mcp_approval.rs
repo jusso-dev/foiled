@@ -16,7 +16,7 @@ use axum::body::Body;
 use foiled_api::auth::sha256_hex;
 use foiled_api::mcp::tools::AUDIT_ACTION;
 use foiled_api::memory::MemoryStore;
-use foiled_api::routes::pending::{AUDIT_APPROVE, AUDIT_AUTO_APPROVE, AUDIT_REJECT};
+use foiled_api::routes::pending::{AUDIT_APPROVE, AUDIT_AUTO_APPROVE, AUDIT_REJECT, AUDIT_RUN};
 use foiled_api::store::{Store, TokenRecord};
 use foiled_api::{AppState, router};
 use foiled_core::auth::{MCP_SCOPES, Role, Scope};
@@ -705,4 +705,255 @@ async fn approval_that_the_api_refuses_is_recorded_as_failed() {
     )
     .await;
     assert_eq!(st, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn asking_needs_decoys_write_only() {
+    let h = harness();
+    h.store
+        .add_token(token("agentwo", "t1", Role::Mcp, &[Scope::DecoysWrite]));
+    let id = sandbox(&h).await;
+    let pa = ask(&h, "agentwo", &id).await;
+    assert_eq!(jobs(&h, &id, "decoy.destroy"), 0);
+    let rec = audit_of(&h, AUDIT_ACTION);
+    assert_eq!(rec[0].detail["pending_action_id"], pa.as_str());
+    // A missing sandbox is still not found.
+    let r = tool(
+        &h.state,
+        "agentwo",
+        "destroy_sandbox",
+        destroy_args("dcy_none"),
+    )
+    .await;
+    assert_eq!(error_code(&r), "not_found");
+}
+
+#[tokio::test]
+async fn a_same_key_insert_that_loses_a_race_returns_the_stored_action() {
+    let h = harness();
+    let id = sandbox(&h).await;
+    let mut args = destroy_args(&id);
+    args["idempotency_key"] = json!("k-race");
+    h.store.lose_next_pending_insert();
+    let r = tool(&h.state, "agent", "destroy_sandbox", args.clone()).await;
+    let d = data(&r);
+    assert_eq!(d["status"], "pending");
+    let won = d["pending_action_id"].as_str().unwrap().to_string();
+    assert!(won.ends_with("_winner"), "{won}");
+    // A retry sees the same one.
+    let again = tool(&h.state, "agent", "destroy_sandbox", args.clone()).await;
+    assert_eq!(data(&again)["pending_action_id"], won.as_str());
+    // The race's winner was for another action: conflict, not success.
+    let mut other = args.clone();
+    other["idempotency_key"] = json!("k-race-2");
+    h.store.lose_next_pending_insert();
+    let first = tool(&h.state, "agent", "destroy_sandbox", other.clone()).await;
+    assert_eq!(data(&first)["status"], "pending");
+    let r = tool(&h.state, "agent", "reset_sandbox", other).await;
+    assert_eq!(error_code(&r), "conflict");
+}
+
+#[tokio::test]
+async fn a_replay_of_a_decided_action_is_not_audited_as_pending() {
+    let h = harness();
+    let id = sandbox(&h).await;
+    let mut args = destroy_args(&id);
+    args["idempotency_key"] = json!("k-done");
+    let r = tool(&h.state, "agent", "destroy_sandbox", args.clone()).await;
+    let pa = data(&r)["pending_action_id"].as_str().unwrap().to_string();
+    let (st, _) = rest(
+        &h.state,
+        "operator",
+        "POST",
+        &format!("/v0/pending-actions/{pa}/reject"),
+        json!({"note": "no"}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let r = tool(&h.state, "agent", "destroy_sandbox", args.clone()).await;
+    assert_eq!(data(&r)["status"], "rejected");
+    let recs = audit_of(&h, AUDIT_ACTION);
+    assert_eq!(recs[0].detail["status"], "pending_approval");
+    assert_eq!(recs[1].detail["status"], "ok");
+    assert_eq!(recs[1].detail["pending_action_id"], pa.as_str());
+
+    // An expired one replays as expired, not pending either.
+    let mut args = destroy_args(&id);
+    args["idempotency_key"] = json!("k-late");
+    tool(&h.state, "agent", "destroy_sandbox", args.clone()).await;
+    h.clock.store(NOW + PENDING_ACTION_TTL_MS, Ordering::SeqCst);
+    let r = tool(&h.state, "agent", "destroy_sandbox", args).await;
+    assert_eq!(data(&r)["status"], "expired");
+    let recs = audit_of(&h, AUDIT_ACTION);
+    assert_eq!(recs.last().unwrap().detail["status"], "ok");
+}
+
+#[tokio::test]
+async fn pending_pages_survive_a_decision_on_the_cursor() {
+    let h = harness();
+    let id = sandbox(&h).await;
+    let mut asked = Vec::new();
+    for i in 0..3 {
+        h.clock.store(NOW + i, Ordering::SeqCst);
+        asked.push(ask(&h, "agent", &id).await);
+    }
+    let list = |cursor: Option<&str>| {
+        let mut path = "/v0/pending-actions?status=pending&limit=2".to_string();
+        if let Some(c) = cursor {
+            path.push_str(&format!("&cursor={c}"));
+        }
+        path
+    };
+    let (st, v) = rest(&h.state, "operator", "GET", &list(None), Value::Null).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["items"][0]["id"], asked[2].as_str());
+    assert_eq!(v["items"][1]["id"], asked[1].as_str());
+    let cursor = v["next_cursor"].as_str().unwrap().to_string();
+    assert_eq!(cursor, asked[1]);
+    // The last action on the page is decided before the next page loads.
+    let (st, _) = rest(
+        &h.state,
+        "operator",
+        "POST",
+        &format!("/v0/pending-actions/{cursor}/reject"),
+        json!({"note": "no"}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, v) = rest(
+        &h.state,
+        "operator",
+        "GET",
+        &list(Some(&cursor)),
+        Value::Null,
+    )
+    .await;
+    // Not back to the start: only the action older than the cursor.
+    let ids: Vec<&str> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec![asked[0].as_str()], "{v}");
+}
+
+#[tokio::test]
+async fn expiry_is_judged_when_the_approval_commits() {
+    let h = harness();
+    let id = sandbox(&h).await;
+    let pa = ask(&h, "agent", &id).await;
+    // The request arrives a millisecond before expiry; reading the action
+    // takes that millisecond.
+    h.clock
+        .store(NOW + PENDING_ACTION_TTL_MS - 1, Ordering::SeqCst);
+    h.store.delay_pending_reads(h.clock.clone(), 1);
+    let (st, v) = rest(
+        &h.state,
+        "operator",
+        "POST",
+        &format!("/v0/pending-actions/{pa}/approve"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("expired"));
+    assert_eq!(jobs(&h, &id, "decoy.destroy"), 0);
+}
+
+#[tokio::test]
+async fn an_approval_whose_audit_cannot_be_written_does_not_run() {
+    let h = harness();
+    let id = sandbox(&h).await;
+    let pa = ask(&h, "agent", &id).await;
+    h.store.fail_audit_for(AUDIT_RUN);
+    let (st, v) = rest(
+        &h.state,
+        "operator",
+        "POST",
+        &format!("/v0/pending-actions/{pa}/approve"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert_eq!(jobs(&h, &id, "decoy.destroy"), 0);
+    assert_eq!(h.store.decoy(&id).unwrap().state, DecoyState::Healthy);
+    let p = h
+        .store
+        .get_pending_action("t1", &pa)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(p.status.as_str(), "failed");
+    assert_eq!(p.error_code.as_deref(), Some("audit_unavailable"));
+
+    // With the audit store up, the run record holds both identities.
+    let h = harness();
+    let id = sandbox(&h).await;
+    let pa = ask(&h, "agent", &id).await;
+    let (st, _) = rest(
+        &h.state,
+        "analyst",
+        "POST",
+        &format!("/v0/pending-actions/{pa}/approve"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let run = audit_of(&h, AUDIT_RUN);
+    assert_eq!(run.len(), 1);
+    assert_eq!(run[0].actor_id, "analyst");
+    assert_eq!(run[0].detail["requested_by"], "agent");
+    assert_eq!(run[0].detail["pending_action_id"], pa.as_str());
+}
+
+#[tokio::test]
+async fn a_job_queued_before_the_route_failed_is_recorded_as_executed() {
+    let h = harness();
+    let id = sandbox(&h).await;
+    let pa = ask(&h, "agent", &id).await;
+    // The decoy route queues the job, then its own audit write fails.
+    h.store.fail_audit_for("decoy.destroy");
+    let (st, v) = rest(
+        &h.state,
+        "operator",
+        "POST",
+        &format!("/v0/pending-actions/{pa}/approve"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(jobs(&h, &id, "decoy.destroy"), 1);
+    assert_eq!(v["status"], "executed");
+    let job = h
+        .store
+        .jobs()
+        .into_iter()
+        .find(|j| j.decoy_id == id && j.kind == "decoy.destroy")
+        .unwrap();
+    assert_eq!(v["job_id"], job.id.as_str());
+    assert!(v["error_code"].is_null());
+    let a = audit_of(&h, AUDIT_APPROVE);
+    assert_eq!(a[0].outcome.as_str(), "accepted");
+    assert_eq!(a[0].detail["error_after_queue"], "store_unavailable");
+}
+
+#[tokio::test]
+async fn auto_approve_is_not_enabled_without_its_audit_record() {
+    let h = harness();
+    h.store.fail_audit_for(AUDIT_AUTO_APPROVE);
+    let (st, v) = rest(
+        &h.state,
+        "operator",
+        "PUT",
+        "/v0/tokens/agent/auto-approve",
+        json!({"enabled": true, "note": "CI cleanup job"}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert!(!h.store.token("agent").await.unwrap().unwrap().auto_approve);
+    // So the agent's destroy still waits for a human.
+    let id = sandbox(&h).await;
+    ask(&h, "agent", &id).await;
+    assert_eq!(jobs(&h, &id, "decoy.destroy"), 0);
 }

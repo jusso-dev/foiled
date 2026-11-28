@@ -130,6 +130,40 @@ describe("pending agent actions on the review queue", () => {
     expect(a.calls.some((c) => c.method === "POST")).toBe(false);
   });
 
+  it("pages through more pending actions, keeping the pending filter", async () => {
+    const { cookie } = await signIn();
+    const older = { ...pendingDestroy, id: "pa_older" };
+    const a = fakeApi((c) => {
+      if (c.path === "/v0/review-queue") {
+        return { items: [reviewItem], total: 1, truncated: false, notes: [] };
+      }
+      if (c.path === "/v0/pending-actions") {
+        return c.search.get("cursor") === PA
+          ? { items: [older], next_cursor: null }
+          : { items: [pendingDestroy], next_cursor: PA };
+      }
+      return undefined;
+    });
+    const first = expectPage(await page(envWith(a), "/review?kind=cve_link", { cookie }));
+    const href = `/review?kind=cve_link&amp;pending_cursor=${PA}`;
+    expect(first.html).toContain(href);
+    expect(text(first.html)).toContain("Older pending actions");
+
+    const second = expectPage(
+      await page(envWith(a), `/review?kind=cve_link&pending_cursor=${PA}`, { cookie }),
+    );
+    const call = a.calls.filter((c) => c.path === "/v0/pending-actions").at(-1);
+    expect(call?.search.get("cursor")).toBe(PA);
+    expect(call?.search.get("status")).toBe("pending");
+    expect(text(second.html)).toContain("pa_older");
+    expect(text(second.html)).not.toContain("Older pending actions");
+
+    // A malformed cursor is dropped, not sent.
+    await page(envWith(a), "/review?pending_cursor=../audit", { cookie });
+    const bad = a.calls.filter((c) => c.path === "/v0/pending-actions").at(-1);
+    expect(bad?.search.get("cursor")).toBeNull();
+  });
+
   it("hides the approve buttons without decoys:write and the panel when nothing waits", async () => {
     const ro = await signIn({ ...ADMIN, scopes: ["decoys:read", "review:read"] });
     const r = expectPage(await page(envWith(api()), "/review", { cookie: ro.cookie }));

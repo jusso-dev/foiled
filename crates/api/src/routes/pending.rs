@@ -43,6 +43,10 @@ pub fn router() -> Router<AppState> {
 
 /// Audit actions written here.
 pub const AUDIT_APPROVE: &str = "pending_action.approve";
+/// Written after the approval wins and before the action is sent. If it
+/// cannot be written the action does not run, so every run has a durable
+/// record of both the approving human and the requesting agent.
+pub const AUDIT_RUN: &str = "pending_action.run";
 pub const AUDIT_REJECT: &str = "pending_action.reject";
 pub const AUDIT_AUTO_APPROVE: &str = "token.auto_approve";
 
@@ -228,7 +232,11 @@ async fn approve(
         return Err(not_pending(&state, &who, AUDIT_APPROVE, &p, now).await?);
     }
     // The compare-and-set is the gate: of any number of approvals, at most
-    // one gets the row back, and only before it expires.
+    // one gets the row back, and only before it expires. Expiry is judged
+    // at the decision, not when the request arrived: the clock is read
+    // again after the last await before the statement, so the only
+    // tolerance left is that one statement's latency.
+    let now = (state.clock)();
     let Some(p) = state
         .store
         .decide_pending_action(
@@ -249,19 +257,54 @@ async fn approve(
         return Err(not_pending(&state, &who, AUDIT_APPROVE, &latest, now).await?);
     };
 
+    // The audit store is not D1, so the decision and its audit record
+    // cannot share a transaction. Write the record first: if it fails the
+    // action does not run, and the approved row ends `failed` (it never
+    // runs again; the agent may ask anew).
+    let run = decision_record(
+        &state,
+        &who,
+        AUDIT_RUN,
+        &p,
+        Outcome::Accepted,
+        json!({"status": p.status, "note": note}),
+    );
+    if let Err(e) = state.store.append_audit(run).await {
+        let _ = state
+            .store
+            .finish_pending_action(
+                &who.tenant_id,
+                &id,
+                PendingStatus::Failed,
+                None,
+                Some("audit_unavailable".into()),
+            )
+            .await;
+        return Err(e.into());
+    }
+
     // Run it as the approver, through the same route an operator uses. The
     // pending action id is the idempotency key, so even a repeated send
     // could only ever queue one job.
     let ran = run_action(&state, &headers, &p).await;
-    let (status, job_id, error) = match &ran {
+    let (status, job_id, error) = match ran {
         Ok(r) => (
             PendingStatus::Executed,
             r["job_id"].as_str().map(str::to_string),
             None,
         ),
-        Err(e) => (PendingStatus::Failed, None, Some(e.clone())),
+        // The route may have queued the job and then failed (its own audit
+        // write, say). A queued job will run, so record it as executed.
+        Err(e) => match queued_job(&state, &p).await {
+            Some(job) => (PendingStatus::Executed, Some(job), Some(e)),
+            None => (PendingStatus::Failed, None, Some(e)),
+        },
     };
-    let error_code = error.as_ref().map(|e| e.code.to_string());
+    let executed = status == PendingStatus::Executed;
+    let error_code = error
+        .as_ref()
+        .filter(|_| !executed)
+        .map(|e| e.code.to_string());
     // The action already ran (or failed). A bookkeeping or audit failure
     // must not hide that from the approver: the row stays `approved`,
     // which never runs again, and the API wrote its own decoy record.
@@ -280,6 +323,7 @@ async fn approve(
     done.job_id = job_id;
     done.error_code = error_code.clone();
     let outcome = match &error {
+        _ if executed => Outcome::Accepted,
         None => Outcome::Accepted,
         Some(e) if e.status.is_server_error() => Outcome::Failed,
         Some(_) => Outcome::Denied,
@@ -295,10 +339,29 @@ async fn approve(
             "note": note,
             "error_code": error_code,
             "http_status": error.as_ref().map(|e| e.status.as_u16()),
+            // Set when the job was queued but the route then failed.
+            "error_after_queue": error.as_ref().filter(|_| executed).map(|e| e.code.clone()),
         }),
     );
+    // The `pending_action.run` record already holds both identities; this
+    // one adds the outcome, which the pending action and the API's
+    // `decoy.<action>` record also hold.
     let _ = state.store.append_audit(rec).await;
     Ok(Json(done))
+}
+
+/// The job the decoy route queued for this pending action, if any. The
+/// pending action id is its idempotency key.
+async fn queued_job(state: &AppState, p: &PendingAction) -> Option<String> {
+    let kind = format!("decoy.{}", p.action.as_str());
+    state
+        .store
+        .job_by_idempotency_key(&p.tenant_id, &p.id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|j| j.decoy_id == p.sandbox_id && j.kind == kind)
+        .map(|j| j.id)
 }
 
 /// An error from the decoy action route, as the approver sees it.
@@ -373,6 +436,7 @@ async fn reject(
     if p.status_at(now) != PendingStatus::Pending {
         return Err(not_pending(&state, &who, AUDIT_REJECT, &p, now).await?);
     }
+    let now = (state.clock)();
     let Some(done) = state
         .store
         .decide_pending_action(
@@ -433,27 +497,34 @@ async fn set_auto_approve(
             "auto-approve applies to mcp tokens only; operator tokens never wait for approval",
         ));
     }
-    if !state
+    // The flag is in D1 and the audit log is not, so they cannot commit
+    // together. Audit first: if that fails the flag is untouched, so the
+    // approval bypass is never on without a record. If the flag write then
+    // fails, a second record says the change did not apply.
+    let record = |outcome: Outcome| {
+        let mut rec = audit_record(&state, &who, AUDIT_AUTO_APPROVE, Some(&token_id), outcome);
+        rec.reason_text = note.clone();
+        rec.detail = json!({
+            "token_id": token_id,
+            "auto_approve": body.enabled,
+            "was": target.auto_approve,
+        });
+        rec
+    };
+    state.store.append_audit(record(Outcome::Accepted)).await?;
+    let set = state
         .store
         .set_token_auto_approve(&who.tenant_id, &token_id, body.enabled)
-        .await?
-    {
-        return Err(ApiError::not_found("token"));
+        .await;
+    if !matches!(set, Ok(true)) {
+        let mut undone = record(Outcome::Failed);
+        undone.detail["applied"] = json!(false);
+        let _ = state.store.append_audit(undone).await;
+        return Err(match set {
+            Ok(_) => ApiError::not_found("token"),
+            Err(e) => e.into(),
+        });
     }
-    let mut rec = audit_record(
-        &state,
-        &who,
-        AUDIT_AUTO_APPROVE,
-        Some(&token_id),
-        Outcome::Accepted,
-    );
-    rec.reason_text = note;
-    rec.detail = json!({
-        "token_id": token_id,
-        "auto_approve": body.enabled,
-        "was": target.auto_approve,
-    });
-    state.store.append_audit(rec).await?;
     Ok(Json(AutoApproveResult {
         token_id,
         auto_approve: body.enabled,

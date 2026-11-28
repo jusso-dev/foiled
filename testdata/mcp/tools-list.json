@@ -510,7 +510,7 @@
         "readOnlyHint": false,
         "title": "Reset a sandbox"
       },
-      "description": "Rebuild a sandbox from its pinned catalogue image, discarding everything an attacker changed. Destructive: only call this when the human operator asked for it. Needs confirm: true and a reason, which are audited. From an agent token it does not run yet: it returns a pending action that a human must approve in the Foiled console within 15 minutes; poll get_pending_action. Needs decoys:write.",
+      "description": "Rebuild a sandbox from its pinned catalogue image, discarding everything an attacker changed. Destructive: only call this when the human operator asked for it. Needs confirm: true and a reason, which are audited. From an agent token it does not run yet, unless an admin marked the token auto-approve: it returns a pending action that a human must approve in the Foiled console within 15 minutes; poll get_pending_action. Needs decoys:write.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -653,7 +653,7 @@
         "readOnlyHint": false,
         "title": "Destroy a sandbox"
       },
-      "description": "Tear a sandbox down for good. Destructive: only call this when the human operator asked for it. Needs confirm: true and a reason, which are audited. From an agent token it does not run yet: it returns a pending action that a human must approve in the Foiled console within 15 minutes; poll get_pending_action. Needs decoys:write.",
+      "description": "Tear a sandbox down for good. Destructive: only call this when the human operator asked for it. Needs confirm: true and a reason, which are audited. From an agent token it does not run yet, unless an admin marked the token auto-approve: it returns a pending action that a human must approve in the Foiled console within 15 minutes; poll get_pending_action. Needs decoys:write.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

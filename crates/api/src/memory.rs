@@ -67,6 +67,11 @@ struct Inner {
     public_pages: Vec<(String, String, PublicPage)>,
     radar: Vec<RadarPoint>,
     pending: Vec<PendingAction>,
+    /// Each pending action read moves this clock on by `.1` ms (tests).
+    pending_read_delay: Option<(std::sync::Arc<std::sync::atomic::AtomicI64>, i64)>,
+    /// The next pending action insert loses a race: a concurrent call
+    /// stores the same request first (tests).
+    lose_pending_insert: bool,
 }
 
 #[derive(Default)]
@@ -176,6 +181,21 @@ impl MemoryStore {
     /// Make public page removals fail, or work again (tests only).
     pub fn fail_page_removal(&self, fail: bool) {
         self.lock().fail_page_removal = fail;
+    }
+
+    /// Make every pending action read take `ms` of `clock` (tests only).
+    pub fn delay_pending_reads(
+        &self,
+        clock: std::sync::Arc<std::sync::atomic::AtomicI64>,
+        ms: i64,
+    ) {
+        self.lock().pending_read_delay = Some((clock, ms));
+    }
+
+    /// Make the next pending action insert lose a race to a concurrent call
+    /// with the same request, stored under another id (tests only).
+    pub fn lose_next_pending_insert(&self) {
+        self.lock().lose_pending_insert = true;
     }
 
     /// Make every later audit append with `action` fail (tests only).
@@ -2066,6 +2086,11 @@ impl Store for MemoryStore {
 
     fn insert_pending_action(&self, action: PendingAction) -> StoreFuture<'_, ()> {
         let mut g = self.lock();
+        if std::mem::take(&mut g.lose_pending_insert) {
+            let mut winner = action.clone();
+            winner.id = format!("{}_winner", action.id);
+            g.pending.push(winner);
+        }
         let clash = g.pending.iter().any(|p| {
             p.id == action.id
                 || (action.idempotency_key.is_some()
@@ -2088,8 +2113,11 @@ impl Store for MemoryStore {
         tenant_id: &str,
         id: &str,
     ) -> StoreFuture<'_, Option<PendingAction>> {
-        let found = self
-            .lock()
+        let g = self.lock();
+        if let Some((clock, ms)) = &g.pending_read_delay {
+            clock.fetch_add(*ms, std::sync::atomic::Ordering::SeqCst);
+        }
+        let found = g
             .pending
             .iter()
             .find(|p| p.tenant_id == tenant_id && p.id == id)
@@ -2122,19 +2150,27 @@ impl Store for MemoryStore {
         q: PendingQuery,
     ) -> StoreFuture<'_, Vec<PendingAction>> {
         let g = self.lock();
+        // Resolve the cursor among every action of the tenant, as D1 does,
+        // so a page boundary survives its action being decided or expiring.
+        let before = q.cursor.as_ref().and_then(|c| {
+            g.pending
+                .iter()
+                .find(|p| p.tenant_id == tenant_id && &p.id == c)
+                .map(|p| (p.created_at, p.id.clone()))
+        });
         let mut all: Vec<PendingAction> = g
             .pending
             .iter()
             .filter(|p| p.tenant_id == tenant_id)
             .filter(|p| q.status.is_none_or(|s| p.status_at(q.now) == s))
+            .filter(|p| {
+                before
+                    .as_ref()
+                    .is_none_or(|(t, i)| (p.created_at, &p.id) < (*t, i))
+            })
             .cloned()
             .collect();
         all.sort_by(|a, b| (b.created_at, &b.id).cmp(&(a.created_at, &a.id)));
-        if let Some(cursor) = &q.cursor
-            && let Some(pos) = all.iter().position(|p| &p.id == cursor)
-        {
-            all.drain(..=pos);
-        }
         all.truncate(q.limit);
         ready(Ok(all))
     }

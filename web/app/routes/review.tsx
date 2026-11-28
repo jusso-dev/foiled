@@ -95,13 +95,26 @@ export async function loader(args: Route.LoaderArgs) {
   );
   // Agent resets and destroys waiting for a human (#95). Read with
   // decoys:read; deciding needs decoys:write, which the API checks again.
+  const pendingCursor = params.get("pending_cursor");
   const pending = op.can("decoys:read")
-    ? await load(args.request, op.api.listPendingActions({ status: "pending", limit: 50 }))
+    ? await load(
+        args.request,
+        op.api.listPendingActions({
+          status: "pending",
+          limit: 50,
+          cursor: isId("pendingAction", pendingCursor) ? pendingCursor : undefined,
+        }),
+      )
     : null;
+  // The next page keeps the review queue's own filters.
+  const nextCursor = pending?.ok ? (pending.data.next_cursor ?? null) : null;
+  const pendingNext = new URLSearchParams(params);
+  if (nextCursor) pendingNext.set("pending_cursor", nextCursor);
   return {
     filters,
     pending: pending?.ok ? pending.data.items : ([] as PendingAction[]),
     pendingError: pending && !pending.ok ? pending.error : null,
+    pendingNext: nextCursor ? `/review?${pendingNext}` : null,
     canApprove: op.can("decoys:write"),
     window: { since: w.since, until: w.until },
     items: res.ok ? res.data.items : ([] as ReviewItem[]),
@@ -213,6 +226,7 @@ export default function Review({ loaderData: d, actionData }: Route.ComponentPro
       <PendingActions
         items={d.pending}
         error={d.pendingError}
+        next={d.pendingNext}
         canApprove={d.canApprove}
         result={actionData && d.pending.some((p) => p.id === actionData.item) ? actionData : null}
         decided={
@@ -494,8 +508,10 @@ function PendingActions({
   canApprove,
   result,
   decided,
+  next,
 }: {
   items: PendingAction[];
+  next: string | null;
   error: { status: number; message: string; notServed: boolean } | null;
   canApprove: boolean;
   result: { item: string; ok: boolean; message: string } | null;
@@ -527,6 +543,13 @@ function PendingActions({
             result={result?.item === p.id ? result : null}
           />
         ))}
+        {next ? (
+          <p className="pager">
+            <Link className="link" to={next}>
+              Older pending actions
+            </Link>
+          </p>
+        ) : null}
       </div>
     </section>
   );
