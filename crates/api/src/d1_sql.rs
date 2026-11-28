@@ -10,7 +10,7 @@ pub const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/d1/0004_enrich_cache.sql"),
     include_str!("../../../migrations/d1/0005_enrich_consumer.sql"),
     include_str!("../../../migrations/d1/0006_sandbox_runtime.sql"),
-    include_str!("../../../migrations/d1/0006_pending_actions.sql"),
+    include_str!("../../../migrations/d1/0007_pending_actions.sql"),
 ];
 
 pub const TOKEN_BY_ID: &str = "SELECT id, tenant_id, role, scopes, secret_sha256, expires_at, revoked, \
