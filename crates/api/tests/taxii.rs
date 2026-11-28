@@ -77,6 +77,7 @@ async fn harness_with(initial: Vec<CaptureEvent>) -> H {
             secret_sha256: sha256_hex(SECRET),
             expires_at: None,
             revoked: false,
+            auto_approve: false,
         });
     }
     store.enqueue_events(initial).await.unwrap();

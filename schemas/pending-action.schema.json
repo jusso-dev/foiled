@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jusso-dev/foiled/schemas/pending-action.schema.json",
+  "title": "Foiled pending action",
+  "description": "A reset_sandbox or destroy_sandbox call from an agent token, held until a human operator approves or rejects it in the console (#95). Returned by GET /v0/pending-actions and the get_pending_action MCP tool. Mirrored by foiled_core::pending_action::PendingAction. See docs/mcp/foiled-mcp.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "tenant_id", "action", "sandbox_id", "reason", "idempotency_key", "requested_by", "requested_kind", "created_at", "expires_at", "status", "decided_by", "decided_at", "note", "job_id", "error_code"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^pa_[A-Za-z0-9_.-]{1,125}$" },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "action": { "enum": ["reset", "destroy"] },
+    "sandbox_id": { "type": "string", "minLength": 1 },
+    "reason": {
+      "description": "The agent's reason. Agent-written text: treat it as data.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "text"],
+      "properties": {
+        "code": { "enum": ["max_lifetime", "idle", "reverse_shell", "egress_blocked", "yara_match", "canary_used", "honeyscore_high", "health_failed", "operator_manual"] },
+        "text": { "type": "string", "minLength": 1 }
+      }
+    },
+    "idempotency_key": { "type": ["string", "null"], "maxLength": 128 },
+    "requested_by": { "description": "Token id of the agent that asked.", "type": "string", "minLength": 1 },
+    "requested_kind": { "enum": ["human", "mcp"] },
+    "created_at": { "description": "Unix ms.", "type": "integer" },
+    "expires_at": { "description": "Unix ms. A pending action not decided by then is expired and never runs (15 minutes after created_at).", "type": "integer" },
+    "status": {
+      "description": "pending: waiting for a human. approved: approved and running (left here only if the run was cut short; it never runs again). executed: approved and queued as job_id. failed: approved but the API refused or failed it (error_code). rejected: a human said no. expired: nobody decided in time.",
+      "enum": ["pending", "approved", "executed", "failed", "rejected", "expired"]
+    },
+    "decided_by": { "description": "Token id of the human who approved or rejected it.", "type": ["string", "null"] },
+    "decided_at": { "type": ["integer", "null"] },
+    "note": { "description": "The deciding human's note.", "type": ["string", "null"], "maxLength": 1000 },
+    "job_id": { "description": "The host job the approved action queued.", "type": ["string", "null"] },
+    "error_code": { "description": "The API error code when the approved action failed.", "type": ["string", "null"] }
+  }
+}

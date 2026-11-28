@@ -166,6 +166,10 @@ pub const BINDINGS: &[Binding] = &[
         schema: "schemas/agent/enrol-response.schema.json",
     },
     Binding {
+        data_dir: "testdata/pending-actions",
+        schema: "schemas/pending-action.schema.json",
+    },
+    Binding {
         data_dir: "testdata/releases",
         schema: "schemas/release-manifest.schema.json",
     },

@@ -56,6 +56,7 @@ fn control_plane_state() -> (Arc<MemoryStore>, AppState) {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     store.add_identity(IdentityRecord {
         id: "host-1".into(),

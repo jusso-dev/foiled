@@ -15,6 +15,7 @@ use foiled_core::decoy::{Decoy, DecoyState, Reason};
 use foiled_core::enrich_pipeline::{EnrichMessage, ProviderFailureRecord};
 use foiled_core::enrichment::{AsnTable, CacheEntry, Observable};
 use foiled_core::enrolment::{AgentRecord, AgentStatus, SeenFrom};
+use foiled_core::pending_action::{PendingAction, PendingKind, PendingStatus};
 use foiled_core::sigv4::Credentials;
 use serde::Deserialize;
 use tower_service::Service;
@@ -35,8 +36,8 @@ use std::collections::BTreeMap;
 use crate::store::{
     AgentCerts, AgentQuery, AuditQuery, BudgetOutcome, DayAttempt, DayRecord, DecoyQuery,
     EnrolmentTokenRecord, Evidence, History, IdentityRecord, IpIocRow, JobRecord, LinkOverride,
-    LogQuery, NewCert, NewVersion, PendingStep, PublishedIoc, StixVersion, Store, StoreError,
-    StoreFuture, TokenRecord,
+    LogQuery, NewCert, NewVersion, PendingQuery, PendingStep, PublishedIoc, StixVersion, Store,
+    StoreError, StoreFuture, TokenRecord,
 };
 use crate::{AppState, router};
 
@@ -923,6 +924,7 @@ struct TokenRow {
     secret_sha256: String,
     expires_at: Option<f64>,
     revoked: f64,
+    auto_approve: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -1158,6 +1160,84 @@ fn job_args(j: &JobRecord) -> Vec<JsValue> {
     ]
 }
 
+#[derive(Deserialize)]
+struct PendingRow {
+    id: String,
+    tenant_id: String,
+    action: String,
+    sandbox_id: String,
+    reason_code: String,
+    reason_text: String,
+    idempotency_key: Option<String>,
+    requested_by: String,
+    requested_kind: String,
+    created_at: f64,
+    expires_at: f64,
+    status: String,
+    decided_by: Option<String>,
+    decided_at: Option<f64>,
+    note: Option<String>,
+    job_id: Option<String>,
+    error_code: Option<String>,
+}
+
+impl PendingRow {
+    fn into_action(self) -> Result<PendingAction, StoreError> {
+        let bad = |what: &str, v: &str| StoreError(format!("bad pending action {what} {v}"));
+        let code = serde_json::from_value(serde_json::Value::String(self.reason_code.clone()))
+            .map_err(|_| bad("reason_code", &self.reason_code))?;
+        Ok(PendingAction {
+            action: PendingKind::parse(&self.action).ok_or_else(|| bad("action", &self.action))?,
+            status: PendingStatus::parse(&self.status)
+                .filter(|s| s.stored())
+                .ok_or_else(|| bad("status", &self.status))?,
+            requested_kind: role(&self.requested_kind)?,
+            reason: Reason {
+                code,
+                text: self.reason_text,
+            },
+            id: self.id,
+            tenant_id: self.tenant_id,
+            sandbox_id: self.sandbox_id,
+            idempotency_key: self.idempotency_key,
+            requested_by: self.requested_by,
+            created_at: self.created_at as i64,
+            expires_at: self.expires_at as i64,
+            decided_by: self.decided_by,
+            decided_at: self.decided_at.map(|v| v as i64),
+            note: self.note,
+            job_id: self.job_id,
+            error_code: self.error_code,
+        })
+    }
+}
+
+fn pending_args(p: &PendingAction) -> Vec<JsValue> {
+    let code = serde_json::to_value(p.reason.code)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    vec![
+        s(&p.id),
+        s(&p.tenant_id),
+        s(p.action.as_str()),
+        s(&p.sandbox_id),
+        s(&code),
+        s(&p.reason.text),
+        opt(p.idempotency_key.as_deref()),
+        s(&p.requested_by),
+        s(p.requested_kind.as_str()),
+        n(p.created_at),
+        n(p.expires_at),
+        s(p.status.as_str()),
+        opt(p.decided_by.as_deref()),
+        p.decided_at.map(n).unwrap_or(JsValue::NULL),
+        opt(p.note.as_deref()),
+        opt(p.job_id.as_deref()),
+        opt(p.error_code.as_deref()),
+    ]
+}
+
 impl JobRow {
     fn into_record(self) -> JobRecord {
         JobRecord {
@@ -1232,6 +1312,7 @@ impl Store for CfStore {
                 secret_sha256: r.secret_sha256,
                 expires_at: r.expires_at.map(|v| v as i64),
                 revoked: r.revoked != 0.0,
+                auto_approve: r.auto_approve.is_some_and(|v| v != 0.0),
             }))
         })
     }
@@ -3151,6 +3232,205 @@ impl Store for CfStore {
             self.db
                 .prepare(sql::RECORD_AGENT_SEEN)
                 .bind(&args)
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
+            Ok(())
+        })
+    }
+
+    fn set_token_auto_approve(
+        &self,
+        tenant_id: &str,
+        token_id: &str,
+        enabled: bool,
+    ) -> StoreFuture<'_, bool> {
+        let (t, i) = (tenant_id.to_string(), token_id.to_string());
+        wrap(async move {
+            let row: Option<IdRow> = self
+                .db
+                .prepare(sql::SET_TOKEN_AUTO_APPROVE)
+                .bind(&[s(&t), s(&i), n(i64::from(enabled))])
+                .map_err(err)?
+                .first(None)
+                .await
+                .map_err(err)?;
+            Ok(row.is_some())
+        })
+    }
+
+    fn insert_pending_action(&self, action: PendingAction) -> StoreFuture<'_, ()> {
+        wrap(async move {
+            self.db
+                .prepare(sql::INSERT_PENDING)
+                .bind(&pending_args(&action))
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
+            Ok(())
+        })
+    }
+
+    fn get_pending_action(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> StoreFuture<'_, Option<PendingAction>> {
+        let (t, i) = (tenant_id.to_string(), id.to_string());
+        wrap(async move {
+            let row: Option<PendingRow> = self
+                .db
+                .prepare(sql::pending_by_id())
+                .bind(&[s(&t), s(&i)])
+                .map_err(err)?
+                .first(None)
+                .await
+                .map_err(err)?;
+            row.map(PendingRow::into_action).transpose()
+        })
+    }
+
+    fn pending_action_by_key(
+        &self,
+        tenant_id: &str,
+        requested_by: &str,
+        key: &str,
+    ) -> StoreFuture<'_, Option<PendingAction>> {
+        let (t, r, k) = (
+            tenant_id.to_string(),
+            requested_by.to_string(),
+            key.to_string(),
+        );
+        wrap(async move {
+            let row: Option<PendingRow> = self
+                .db
+                .prepare(sql::pending_by_key())
+                .bind(&[s(&t), s(&r), s(&k)])
+                .map_err(err)?
+                .first(None)
+                .await
+                .map_err(err)?;
+            row.map(PendingRow::into_action).transpose()
+        })
+    }
+
+    fn list_pending_actions(
+        &self,
+        tenant_id: &str,
+        q: PendingQuery,
+    ) -> StoreFuture<'_, Vec<PendingAction>> {
+        let t = tenant_id.to_string();
+        wrap(async move {
+            let cursor: Option<CursorRow> = match &q.cursor {
+                None => None,
+                Some(c) => self
+                    .db
+                    .prepare(sql::PENDING_CURSOR)
+                    .bind(&[s(&t), s(c)])
+                    .map_err(err)?
+                    .first(None)
+                    .await
+                    .map_err(err)?,
+            };
+            let rows = self
+                .db
+                .prepare(sql::list_pending())
+                .bind(&[
+                    s(&t),
+                    opt(q.status.map(PendingStatus::as_str)),
+                    n(q.now),
+                    cursor
+                        .as_ref()
+                        .map(|c| n(c.created_at as i64))
+                        .unwrap_or(JsValue::NULL),
+                    opt(cursor.as_ref().map(|c| c.id.as_str())),
+                    n(q.limit as i64),
+                ])
+                .map_err(err)?
+                .all()
+                .await
+                .map_err(err)?
+                .results::<PendingRow>()
+                .map_err(err)?;
+            rows.into_iter().map(PendingRow::into_action).collect()
+        })
+    }
+
+    fn count_open_pending_actions(
+        &self,
+        tenant_id: &str,
+        requested_by: &str,
+        now: i64,
+    ) -> StoreFuture<'_, u32> {
+        let (t, r) = (tenant_id.to_string(), requested_by.to_string());
+        wrap(async move {
+            let row: Option<CountRow> = self
+                .db
+                .prepare(sql::COUNT_OPEN_PENDING)
+                .bind(&[s(&t), s(&r), n(now)])
+                .map_err(err)?
+                .first(None)
+                .await
+                .map_err(err)?;
+            Ok(row.map(|r| r.count as u32).unwrap_or(0))
+        })
+    }
+
+    fn decide_pending_action(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        to: PendingStatus,
+        decided_by: &str,
+        note: Option<String>,
+        now: i64,
+    ) -> StoreFuture<'_, Option<PendingAction>> {
+        let (t, i, d) = (
+            tenant_id.to_string(),
+            id.to_string(),
+            decided_by.to_string(),
+        );
+        wrap(async move {
+            let row: Option<PendingRow> = self
+                .db
+                .prepare(sql::decide_pending())
+                .bind(&[
+                    s(&t),
+                    s(&i),
+                    s(to.as_str()),
+                    s(&d),
+                    opt(note.as_deref()),
+                    n(now),
+                ])
+                .map_err(err)?
+                .first(None)
+                .await
+                .map_err(err)?;
+            row.map(PendingRow::into_action).transpose()
+        })
+    }
+
+    fn finish_pending_action(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        to: PendingStatus,
+        job_id: Option<String>,
+        error_code: Option<String>,
+    ) -> StoreFuture<'_, ()> {
+        let (t, i) = (tenant_id.to_string(), id.to_string());
+        wrap(async move {
+            self.db
+                .prepare(sql::FINISH_PENDING)
+                .bind(&[
+                    s(&t),
+                    s(&i),
+                    s(to.as_str()),
+                    opt(job_id.as_deref()),
+                    opt(error_code.as_deref()),
+                ])
                 .map_err(err)?
                 .run()
                 .await

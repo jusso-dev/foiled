@@ -14,7 +14,7 @@ The MCP server is a route on the API Worker: `POST /v0/mcp` on the API hostname.
 - the MCP code has no path to a sandbox host, the host job queue, the capture store or quarantine bytes. It cannot do anything the same token could not do with `curl`;
 - the REST router it calls does not include `/v0/mcp`, so a tool can never call the MCP endpoint again.
 
-What the MCP layer adds on top: argument checks, tighter agent caps from [`configs/mcp.yaml`](../../configs/mcp.yaml), a confirmation step for destructive tools, one audit record per tool call, and escaping and framing of everything it returns.
+What the MCP layer adds on top: argument checks, tighter agent caps from [`configs/mcp.yaml`](../../configs/mcp.yaml), a confirmation step for destructive tools, human approval in the console for destructive calls from agent tokens ([below](#human-approval-for-destructive-tools)), one audit record per tool call, and escaping and framing of everything it returns.
 
 Every action and every piece of data a tool returns goes through the API. The MCP layer touches the store directly for three things only: its own rate-limit counters, its `mcp.tool_call` audit record, and one read of the job table by idempotency key so that a retried create is not refused by the agent caps. The catalogue it reads to list a new sandbox's ports is the reviewed bundle the API serves.
 
@@ -73,6 +73,8 @@ A tool that runs but fails returns a normal result with `isError: true`, so the 
 | --- | --- |
 | `invalid_arguments` | Arguments do not match the tool's input schema, or an id, IP, CVE or technique is malformed. |
 | `confirmation_required` | A destructive tool was called without `confirm: true`. |
+| `approval_queue_full` | This agent token already has 10 destructive actions waiting for a human. |
+| `conflict` | A destructive call from an agent token named a sandbox whose state does not allow the action, or reused an idempotency key for another action. |
 | `approval_pending` | Recorded in the audit log when a destructive call returned `input_required` to ask the operator. |
 | `not_approved` | The operator declined or cancelled the elicitation. |
 | `rate_limited` | The token's MCP call budget or create budget for the last hour is spent. |
@@ -92,8 +94,9 @@ Any other code comes from the API unchanged, for example `forbidden` (missing sc
 | `create_sandbox` | `decoys:write`, `decoys:read` | create | control plane | `GET /v0/sandboxes?created_by=<token>&live=true` (live count), `POST /v0/sandboxes` |
 | `list_sandboxes` | `decoys:read` | read | control plane | `GET /v0/sandboxes` |
 | `get_sandbox` | `decoys:read` | read | control plane | `GET /v0/sandboxes/{id}` |
-| `reset_sandbox` | `decoys:write` | destructive | control plane | `POST /v0/sandboxes/{id}:reset` |
-| `destroy_sandbox` | `decoys:write` | destructive | control plane | `POST /v0/sandboxes/{id}:destroy` |
+| `reset_sandbox` | `decoys:write` | destructive | control plane | Agent token: `GET /v0/sandboxes/{id}` and a pending action for a human. Operator or auto-approve token: `POST /v0/sandboxes/{id}:reset` |
+| `destroy_sandbox` | `decoys:write` | destructive | control plane | As reset, with `:destroy` |
+| `get_pending_action` | `decoys:read` | read | untrusted | `GET /v0/pending-actions/{id}` |
 | `query_attempts` | `attempts:read` | read | untrusted | `GET /v0/attempts` |
 | `get_attempt` | `attempts:read` | read | untrusted | `GET /v0/attempts/{id}` |
 | `get_attempt_timeline` | `attempts:read` | read | untrusted | `GET /v0/attempts/{id}/timeline` |
@@ -107,7 +110,8 @@ Arguments (all schemas have `additionalProperties: false`; ids match `^[A-Za-z0-
 - `create_sandbox`: `catalogue_entry_id` (required), `label` (at most 100 characters), `lifetime_seconds` (1 to 14,400, default 3,600), `allow_draft` (default false), `idempotency_key`. Returns the sandbox, its `status` (`pending`), the job id, the catalogue's listen ports as `endpoints` (address `null` until a host reports it healthy) and `egress: deny-by-default`.
 - `list_sandboxes`: `state`, `catalogue_entry_id`, `limit` (at most 50), `cursor`.
 - `get_sandbox`: `sandbox_id`.
-- `reset_sandbox`, `destroy_sandbox`: `sandbox_id`, `reason` (1 to 500 characters, not blank), `reason_code` (default `operator_manual`, codes as in [rotation.md](../rotation.md)), `confirm` (must be `true`), `idempotency_key`. Reset rebuilds the guest from its pinned catalogue image (#8).
+- `reset_sandbox`, `destroy_sandbox`: `sandbox_id`, `reason` (1 to 500 characters, not blank), `reason_code` (default `operator_manual`, codes as in [rotation.md](../rotation.md)), `confirm` (must be `true`), `idempotency_key`. Reset rebuilds the guest from its pinned catalogue image (#8). From an agent token the result is a pending action (`status: "pending"`, `pending_action_id`, the record and a note), not the job; see below. An example is [`testdata/mcp/results/destroy-pending-approval.json`](../../testdata/mcp/results/destroy-pending-approval.json).
+- `get_pending_action`: `pending_action_id`. Returns the [pending action](../../schemas/pending-action.schema.json) with its status as of now and, once it ran, its `job_id`. Marked untrusted because the reason is agent text.
 - `query_attempts`: `sandbox_id`, `src` (an IP address), `state` (`probe`, `exploit`, `post-exploitation`), `cve`, `technique_id` (for example `T1190`), `min_confidence` (0 to 100), `since`, `until` (Unix ms; default the last 7 days, at most 31), `limit` (at most 50, default 20). The technique and confidence filters use link scores before analyst overrides; `get_attempt_links` shows the overridden score.
 - `get_attempt`, `get_attempt_links`: `attempt_id`, `since`, `until`.
 - `get_attempt_timeline`: `attempt_id`, `max_entries` (at most 50), `since`, `until`. The pcap extract recipe is removed because it names host file paths.
@@ -146,13 +150,51 @@ Attempt payloads are written by attackers, and some will be written for language
 1. **Operator side only.** The MCP endpoint serves operators' agents on the API hostname. Nothing on the decoy side can reach it, and the LLM correlation worker (#28) has no credential or binding for it, by design ([llm-correlation.md](../llm-correlation.md)).
 2. **Least privilege.** An `mcp` token can only hold `catalogue:read`, `decoys:read`, `decoys:write`, `decoys:elevate`, `attempts:read`, `audit:read` and `events:read`. `admin` in the token table grants an agent nothing. An analysis agent should get a read-only token, which cannot change anything whatever it reads.
 3. **Labelled, escaped output.** Every string in a result, keys included, has control, bidi, zero-width and line-separator characters escaped, so attacker text cannot hide content, reorder text or start a new line in the framed block. Results that hold attacker text are marked `untrusted_capture` with a notice, and the frame's end marker carries a per-call nonce the attacker cannot predict, so a forged `[foiled:data end ...]` stays inside the data.
-4. **Destructive tools need approval.** `reset_sandbox` and `destroy_sandbox` are annotated `destructiveHint: true` and need `confirm: true` and a non-blank reason. **`confirm` is an argument the model sets. It is not human approval and not human-in-the-loop.** It only stops a model that has not been told to destroy something from doing so by accident.
+4. **Destructive tools need approval.** `reset_sandbox` and `destroy_sandbox` are annotated `destructiveHint: true` and need `confirm: true` and a non-blank reason. **`confirm` is an argument the model sets. It is not human approval and not human-in-the-loop.** It only stops a model that has not been told to destroy something from doing so by accident. So from an agent (`mcp` role) token these tools never run on the model's say-so: they record a pending action that a human approves in the console ([human approval](#human-approval-for-destructive-tools), #95). The rest of this item applies to operator (`human` role) tokens used through MCP.
    - When a `2026-07-28` client declares form elicitation (`elicitation` in `io.modelcontextprotocol/clientCapabilities`), the first call returns `resultType: "input_required"` with an `elicitation/create` form asking the operator to approve the action, and a `requestState`. The client shows the form and retries with `inputResponses.approve` and the same `requestState`. Only `action: "accept"` with `approve: true` goes ahead; a decline gives `not_approved`. The `requestState` is a hash of the token, tool, exact arguments and hour, so an approval cannot be reused for a different sandbox, reason or action, and it lapses after one to two hours. The audit record notes `approval: "elicitation"`.
    - Older revisions cannot elicit over this stateless transport (it needs a server-initiated request on a stream). For those clients, and for clients without the capability, only `confirm` applies and the audit record notes `approval: "confirm_argument"`. Rely on the client's own tool-approval prompt (most clients ask before running a tool annotated destructive), or switch the tools off for agents.
    - `agent_destructive_tools: false` hides reset and destroy from agent (`mcp` role) tokens entirely, so only operator tokens can use them. `destructive_tools: false` turns them off for everyone.
 5. **Caps and audit.** Agent caps bound what a misled agent can do in an hour, and every call, including refusals, is in the audit log with the token id.
 
-Limits of this: escaping and framing reduce the chance a model follows injected text; they do not make it impossible. `confirm` is not a security boundary against an agent that is under an attacker's control, and elicitation is only as good as the client that shows it. The boundary is the token: give agents that read attempts a read-only token, and either use an elicitation-capable client or set `agent_destructive_tools: false` for anything destructive.
+Limits of this: escaping and framing reduce the chance a model follows injected text; they do not make it impossible. `confirm` is not a security boundary against an agent that is under an attacker's control, and elicitation is only as good as the client that shows it. For agent tokens the boundary is the human approval below, which happens in the console with the operator's own session, out of the agent's reach. Give agents that only read attempts a read-only token anyway, and keep `auto_approve` for automation that never reads attacker text.
+
+## Human approval for destructive tools
+
+Issue: [#95](https://github.com/jusso-dev/foiled/issues/95). Code: `foiled_core::pending_action`, `crates/api/src/mcp/tools.rs` (`request_approval`), `crates/api/src/routes/pending.rs`. Schema: [pending-action.schema.json](../../schemas/pending-action.schema.json). Golden: `testdata/pending-actions/`.
+
+An agent that has just read a captured payload through `get_attempt` or `get_events` can be told by that payload to destroy a sandbox, and it can set `confirm: true` and write a plausible reason as easily as a real request. So a destructive call from an agent token does not run. Instead:
+
+1. **The call records a pending action and returns its id.** The MCP layer checks the token holds `decoys:write`, that the sandbox exists in the tenant (`GET /v0/sandboxes/{id}`) and that its state allows the move, then stores a pending action in D1 (`pending_actions`, [migration 0006](../../migrations/d1/0006_pending_actions.sql)) and returns `status: "pending"` with the `pending_action_id`. Nothing is sent to the host. The `mcp.tool_call` audit record has `detail.status: "pending_approval"`, `detail.approval: "pending"` and the `pending_action_id`. A retry with the same `idempotency_key` returns the same pending action; one token may have at most 10 waiting at once (`approval_queue_full`).
+2. **A human approves or rejects it in the console.** The review queue page lists pending actions above the queue ([console.md](../ui/console.md#review-queue)): the sandbox, the agent token, the agent's reason (shown as text, never followed), when it was asked for and when it expires. Approving needs a human token with `decoys:write`; an `mcp` token gets 403 whatever its scopes, so an agent can never approve its own request. Rejecting needs a note.
+3. **Approved actions run exactly once.** The move from `pending` to `approved` is one compare-and-set statement (`UPDATE ... WHERE status = 'pending' AND expires_at > now RETURNING ...`), so of any number of approvals, or an approval racing a rejection, exactly one wins; the others get 409. The winner sends the action to `POST /v0/sandboxes/{id}:{action}` with the approver's own token and the pending action id as `Idempotency-Key`, so the API's scopes, state checks, destructive rate limit and `decoy.<action>` audit record apply with the human as actor. The pending action ends `executed` (with `job_id`) or `failed` (with the API's `error_code`, for example `conflict` when the sandbox changed state in the meantime). Neither is ever run again. A row left at `approved` (the Worker stopped mid-run) is not retried either; check the audit log.
+4. **Without a decision it expires.** `PENDING_ACTION_TTL_MS` is 15 minutes. A pending action not decided by `expires_at` reads as `expired`, cannot be approved (409, audited) and never runs. Nothing needs to clean it up.
+5. **The agent can follow along** with `get_pending_action`, which reports `pending`, `executed`, `failed`, `rejected` or `expired`.
+
+Agent tokens cannot go round this through REST: `POST /v0/sandboxes/{id}:reset` and `:destroy` with an `mcp` token answer 403 `approval_required` (audited), unless the token is marked auto-approve. Their other decoy actions, and every action from operator tokens, are unchanged.
+
+### Audit
+
+| Record | Actor | Holds |
+| --- | --- | --- |
+| `mcp.tool_call` | The agent token | `detail.status: "pending_approval"`, `detail.approval: "pending"`, `detail.pending_action_id`, the reason. |
+| `pending_action.approve` | The approving human | `detail.requested_by` and `requested_kind` (the agent token), `decided_by` and `decided_kind`, `pending_action_id`, `action`, `sandbox_id`, `status` (`executed` or `failed`), `note`, `error_code`; `job_id` and the reason on the record. Outcome `accepted`, `denied` (the API refused, or the action was no longer pending) or `failed`. |
+| `pending_action.reject` | The rejecting human | The same identities, with the note. |
+| `decoy.reset`, `decoy.destroy` | The approving human | The API's own record of the job, as for any operator action. |
+
+### Auto-approve for trusted automation
+
+A scheduled clean-up job that destroys its own test sandboxes cannot wait for a person. An admin can mark that one agent token `auto_approve`:
+
+```sh
+curl -X PUT https://api.example.invalid/v0/tokens/agent01/auto-approve \
+  -H "Authorization: Bearer $FOILED_ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"enabled": true, "note": "nightly clean-up job, reads no attempts"}'
+```
+
+- Off for every token by default, including every token that existed before the migration.
+- Only a human token with `admin` can change it, only for an `mcp` token in the same tenant (operator tokens get 422: they never wait). Each change is audited as `token.auto_approve` with the note and the previous value.
+- With it on, the token's reset and destroy run at once through MCP or REST, and the `mcp.tool_call` record says `detail.approval: "auto_approve"`.
+- Only give it to automation that never reads attacker text (no `attempts:read`, no `audit:read`). A token that reads attempts and is auto-approved is back to `confirm` being the only check.
 
 ## Auth, scopes and token rotation
 
@@ -254,7 +296,7 @@ Agent caps from `configs/mcp.yaml` (validated by [`schemas/mcp-config.schema.jso
 | `limits.max_page` | 50 | Largest page from any list tool. |
 | `output.max_bytes` | 65,536 | Per tool result. Lists are cut to fit and flagged. |
 | `output.max_string_chars` | 2,000 | Per string. |
-| `destructive_tools` | true | Offer reset and destroy (still needing confirmation). |
+| `destructive_tools` | true | Offer reset and destroy (still needing confirmation, and human approval for agent tokens). |
 | `agent_destructive_tools` | true | Offer reset and destroy to agent (`mcp` role) tokens. Set false to keep them to operator tokens. |
 | `allowed_origins` | none | Browser origins allowed to call the endpoint. |
 | `enabled` | true | When false the endpoint answers 404. |
@@ -293,21 +335,24 @@ Every `tools/call` within the call budget, including refusals and unknown tools,
 | `outcome` | `accepted`, `denied` (refused by MCP or the API) or `failed` (storage or server error). |
 | `detail.tool` | Tool name. |
 | `detail.arguments` | The arguments with values of secret-looking keys (`token`, `secret`, `password`, `authorization`, `cookie`, `api_key`, `credential`) replaced by `[redacted]`, strings escaped and cut at 200 characters. |
-| `detail.status`, `detail.error_code`, `detail.http_status` | Result status (`ok`, `error` or `input_required`), the error code and the API status when there was one. |
-| `detail.approval` | For reset and destroy: `elicitation` (the operator approved in the client) or `confirm_argument` (only the model-set `confirm`). |
+| `detail.status`, `detail.error_code`, `detail.http_status` | Result status (`ok`, `error`, `input_required` or `pending_approval`), the error code and the API status when there was one. |
+| `detail.approval` | For reset and destroy: `pending` (an agent token; a human must approve, see [human approval](#human-approval-for-destructive-tools)), `auto_approve` (an agent token an admin marked for automation), `elicitation` (an operator token, approved in the client) or `confirm_argument` (an operator token, only the model-set `confirm`). |
+| `detail.pending_action_id` | The pending action an agent's reset or destroy created or found. |
 
 ## Tests
 
 `crates/api/tests/mcp.rs` runs against the real router over the in-memory store:
 
 - JSON-RPC round trips for both protocol eras, notifications, header and version rules (including the mandatory `2026-07-28` headers), parse errors, batches, oversized bodies, unknown methods and tools, origin and credential checks;
-- elicitation for destructive tools (ask, decline, an approval for other arguments refused, approve), and `agent_destructive_tools`;
+- elicitation for destructive tools from operator tokens (ask, decline, an approval for other arguments refused, approve), and `agent_destructive_tools`;
 - the sliding budget across an hour boundary, refused calls neither counted nor audited each time, idempotent retries passing the caps, the live cap counting only this token's live sandboxes, and an audit outage not turning a finished create into an error;
 - the contract flow create, list, query attempts, destroy, with audit records checked;
 - the agent caps: the N+1st create in the window, the live sandbox cap, the lifetime cap and the call budget each return a structured error;
 - scope enforcement (hidden tools still refused by the API, `admin` dropped for `mcp` tokens), tenant isolation, and id checks;
 - an attempt whose path, user agent and header carry an injected instruction, a forged end marker, a bidi override, an ANSI escape and a line separator, checked to come back escaped and framed;
 - golden files for the tool descriptors and result examples.
+
+`crates/api/tests/mcp_approval.rs` covers human approval (#95) through the MCP endpoint and the REST router: an agent's destroy does not run, is listed, and expires after 15 minutes without running; approval by a human runs it once (repeat and racing approvals get 409) and is audited with both the agent token and the human; rejection needs a note and never runs; agents cannot approve or skip approval through REST; other tenants see nothing; requests are checked, retried by key and capped; auto-approve can only be set by a human admin and makes the token's actions run at once; and human tokens keep their REST and MCP behaviour. `crates/api/src/d1_sql.rs` tests the D1 statements against SQLite, including the compare-and-set. `web/app/routes/pending-actions.test.tsx` covers the console panel.
 
 `crates/lint/tests/mcp.rs` checks the shipped config against the defaults and the schema, and that every tool schema compiles and enforces the confirmation rules. `foiled-lint` validates `configs/mcp.yaml` and `testdata/mcp/results/`.
 

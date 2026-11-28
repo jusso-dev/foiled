@@ -16,6 +16,7 @@ import campaignWave from "../../../testdata/campaigns/expected/fleet-wave-00.jso
 import hookLink from "../../../testdata/confidence-links/hook-and-sequence-high.json";
 import llmLink from "../../../testdata/confidence-links/llm-only-capped.json";
 import iocIp from "../../../testdata/iocs/expected/file-drop-00.json";
+import pendingExecutedJson from "../../../testdata/pending-actions/executed.json";
 import radarJson from "../../../testdata/radar/expected/tenant-edge-d.json";
 import reviewCve from "../../../testdata/review/expected/fleet-wave-00.json";
 import reviewIocPub from "../../../testdata/review/expected/fleet-wave-05.json";
@@ -30,6 +31,7 @@ import type {
   ConfidenceLink,
   Decoy,
   Ioc,
+  PendingAction,
   QuarantineItem,
   RadarFeed,
   ReviewItem,
@@ -161,6 +163,18 @@ export const reviewIoc = as<ReviewItem>(reviewIocPub);
 export const writeUp = as<WriteUp>(writeUpJson);
 export const radarFeed = as<RadarFeed>(radarJson);
 export const actorLinkRecord = as<ActorLinkRecord>(actorLinkJson);
+
+/** A destructive agent action (#95): golden output from testdata/pending-actions/. */
+export const pendingExecuted = as<PendingAction>(pendingExecutedJson);
+/** The same action as it looks while it waits for a human. */
+export const pendingDestroy: PendingAction = {
+  ...pendingExecuted,
+  status: "pending",
+  decided_by: null,
+  decided_at: null,
+  note: null,
+  job_id: null,
+};
 
 export const quarantined: QuarantineItem = {
   sha256: "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",

@@ -38,6 +38,7 @@ fn harness(signing: bool) -> H {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     for (n, id) in [(1u8, "host-1"), (2, "host-2")] {
         store.add_identity(IdentityRecord {

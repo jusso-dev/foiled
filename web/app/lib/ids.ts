@@ -6,6 +6,8 @@ export const ID_PATTERNS = {
   ioc: /^ioc_[a-f0-9]{24}$/,
   review: /^rq_[a-f0-9]{24}$/,
   writeup: /^wu_[a-f0-9]{24}$/,
+  /** Pending destructive agent actions (#95). */
+  pendingAction: /^pa_[A-Za-z0-9_-]{1,125}$/,
   actorLink: /^acl_[a-f0-9]{24}$/,
   sha256: /^[a-f0-9]{64}$/,
   catalogue: /^[a-z0-9][a-z0-9._-]*(\/[a-z0-9][a-z0-9._+-]*)+$/,

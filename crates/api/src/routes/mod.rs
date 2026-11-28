@@ -11,6 +11,7 @@ pub mod exports;
 pub mod hosts;
 pub mod ingest;
 pub mod iocs;
+pub mod pending;
 pub mod public;
 pub mod radar;
 pub mod review;

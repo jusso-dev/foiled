@@ -14,6 +14,7 @@ import campaignSchema from "../../../schemas/campaign.schema.json";
 import actionSchema from "../../../schemas/campaign-action.schema.json";
 import linkSchema from "../../../schemas/confidence-link.schema.json";
 import iocSchema from "../../../schemas/ioc.schema.json";
+import pendingSchema from "../../../schemas/pending-action.schema.json";
 import quarantineSchema from "../../../schemas/quarantine-meta.schema.json";
 import radarSchema from "../../../schemas/radar-feed.schema.json";
 import reviewSchema from "../../../schemas/review-item.schema.json";
@@ -29,6 +30,7 @@ import type {
   ConfidenceLink,
   EvidenceSource,
   Ioc,
+  PendingAction,
   QuarantineItem,
   RadarFeed,
   ReviewItem,
@@ -334,6 +336,25 @@ const evidenceSources: Record<EvidenceSource, true> = {
   noise_score: true,
 };
 
+const pending: Keys<PendingAction> = {
+  id: true,
+  tenant_id: true,
+  action: true,
+  sandbox_id: true,
+  reason: true,
+  idempotency_key: true,
+  requested_by: true,
+  requested_kind: true,
+  created_at: true,
+  expires_at: true,
+  status: true,
+  decided_by: true,
+  decided_at: true,
+  note: true,
+  job_id: true,
+  error_code: true,
+};
+
 const CASES: [string, Record<string, true>, { required: string[]; properties: object }][] = [
   ["attempt", attempt, attemptSchema],
   ["attempt-timeline", timeline, timelineSchema],
@@ -349,6 +370,7 @@ const CASES: [string, Record<string, true>, { required: string[]; properties: ob
   ["agent-record", agent, agentSchema],
   ["quarantine-meta", quarantine, quarantineSchema],
   ["review-item", review, reviewSchema],
+  ["pending-action", pending, pendingSchema],
   ["write-up", writeUp, writeUpSchema],
   ["radar-feed", radar, radarSchema],
   ["actor-link", actorLink, actorLinkSchema],

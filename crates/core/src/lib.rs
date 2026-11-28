@@ -29,6 +29,7 @@ pub mod ioc;
 pub mod llm;
 pub mod markdown;
 pub mod mcp;
+pub mod pending_action;
 pub mod radar;
 pub mod redact;
 pub mod release;

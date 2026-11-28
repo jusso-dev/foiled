@@ -34,6 +34,8 @@ import type {
   JobAccepted,
   LinkKind,
   Page,
+  PendingAction,
+  PendingStatus,
   Principal,
   QuarantineDownloadGrant,
   QuarantineDownloadRequest,
@@ -374,6 +376,17 @@ export class ConsoleApi {
       `/v0/actor-links/${seg("actorLink", id)}/decision${qs({ ...w })}`,
       { method: "POST", body },
     );
+  }
+
+  // Destructive agent actions waiting for a human (#95).
+  async listPendingActions(q: { status?: PendingStatus; limit?: number; cursor?: string } = {}) {
+    return this.json<Page<PendingAction>>(`/v0/pending-actions${qs(q)}`);
+  }
+  async decidePendingAction(id: string, decision: "approve" | "reject", note?: string) {
+    return this.json<PendingAction>(`/v0/pending-actions/${seg("pendingAction", id)}/${decision}`, {
+      method: "POST",
+      body: note ? { note } : {},
+    });
   }
 
   // Quarantine. TODO(#9, #14): planned; see api-types.ts.

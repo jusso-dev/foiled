@@ -103,6 +103,7 @@ async fn main() {
         secret_sha256: sha256_hex(&secret),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     // An agent token for MCP clients (#24): role mcp, least privilege.
     let mcp_secret = uuid::Uuid::new_v4().simple().to_string();
@@ -120,6 +121,7 @@ async fn main() {
         secret_sha256: sha256_hex(&mcp_secret),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     let mut state = AppState::new(store.clone(), Arc::new(now_ms));
     // Fake CA: enrolment and renewal work locally, certificates are not real.

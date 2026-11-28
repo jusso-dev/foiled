@@ -111,6 +111,7 @@ async fn a_full_window_stays_well_under_the_isolate_limit() {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     let evs = events(MAX_WINDOW_EVENTS / 9);
     assert!(evs.len() <= MAX_WINDOW_EVENTS && evs.len() > MAX_WINDOW_EVENTS - 9);

@@ -42,6 +42,7 @@ async fn harness() -> (AppState, Arc<MemoryStore>) {
             secret_sha256: sha256_hex(SECRET),
             expires_at: None,
             revoked: false,
+            auto_approve: false,
         });
     }
     for rel in [
@@ -287,6 +288,7 @@ async fn cut_exports_continue_by_cursor_even_within_one_millisecond() {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     let base = format!(
         "/v0/exports/iocs.json?since={}&until={}",
@@ -334,6 +336,7 @@ async fn campaigns_from_clustering_reach_the_exports() {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     let raw: Value = serde_json::from_str(
         &std::fs::read_to_string(format!(
@@ -407,6 +410,7 @@ async fn unpublished_campaign_ids_never_leave() {
         secret_sha256: sha256_hex(SECRET),
         expires_at: None,
         revoked: false,
+        auto_approve: false,
     });
     let raw: Value = serde_json::from_str(
         &std::fs::read_to_string(format!(
