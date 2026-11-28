@@ -561,6 +561,8 @@ fn nft_addrs(v: &serde_json::Value, out: &mut Vec<Cidr>) -> bool {
 fn nft_words(v: &serde_json::Value, out: &mut Vec<String>) -> bool {
     use serde_json::Value;
     match v {
+        // `@name` is a named set whose members are not read here.
+        Value::String(s) if s.starts_with('@') => false,
         Value::String(s) => {
             out.push(s.clone());
             true
@@ -571,8 +573,21 @@ fn nft_words(v: &serde_json::Value, out: &mut Vec<String>) -> bool {
     }
 }
 
+/// Keep the first of several matches on one field. Each further match
+/// narrows the rule again, so it can no longer be shown to cover the whole
+/// subnet; the first one is still a sound test of whether it can match.
+fn set_once<T>(slot: &mut Option<T>, v: T, other: &mut bool) {
+    if slot.is_some() {
+        *other = true;
+    } else {
+        *slot = Some(v);
+    }
+}
+
 fn parse_nft_rule(exprs: &[serde_json::Value], text: String, table_key: &str) -> Rule {
     let mut r = Rule::new(text);
+    // A copy of the packet already left, whatever the rule does next.
+    let mut escapes = false;
     for e in exprs {
         let Some((kind, body)) = e.as_object().and_then(|o| o.iter().next()) else {
             r.other = true;
@@ -580,7 +595,17 @@ fn parse_nft_rule(exprs: &[serde_json::Value], text: String, table_key: &str) ->
         };
         match kind.as_str() {
             "match" => {
-                let negated = body["op"].as_str() == Some("!=");
+                // Only equality, membership and their negation are modelled.
+                // A relational operator (`<`, `>=`, ...) selects a range, so
+                // it can neither rule an accept out nor prove a deny.
+                let negated = match body["op"].as_str() {
+                    Some("==" | "in") => false,
+                    Some("!=") => true,
+                    _ => {
+                        r.other = true;
+                        continue;
+                    }
+                };
                 let left = &body["left"];
                 let right = &body["right"];
                 let field = left["payload"]["field"].as_str();
@@ -589,11 +614,11 @@ fn parse_nft_rule(exprs: &[serde_json::Value], text: String, table_key: &str) ->
                 {
                     let mut nets = Vec::new();
                     if nft_addrs(right, &mut nets) {
-                        let m = Some(AddrMatch { negated, nets });
+                        let m = AddrMatch { negated, nets };
                         if field == Some("saddr") {
-                            r.src = m;
+                            set_once(&mut r.src, m, &mut r.other);
                         } else {
-                            r.dst = m;
+                            set_once(&mut r.dst, m, &mut r.other);
                         }
                     } else {
                         r.other = true;
@@ -601,11 +626,11 @@ fn parse_nft_rule(exprs: &[serde_json::Value], text: String, table_key: &str) ->
                 } else if let Some(key @ ("iifname" | "oifname")) = left["meta"]["key"].as_str() {
                     let mut names = Vec::new();
                     if nft_words(right, &mut names) {
-                        let m = Some(IfaceMatch { negated, names });
+                        let m = IfaceMatch { negated, names };
                         if key == "iifname" {
-                            r.iif = m;
+                            set_once(&mut r.iif, m, &mut r.other);
                         } else {
-                            r.oif = m;
+                            set_once(&mut r.oif, m, &mut r.other);
                         }
                     } else {
                         r.other = true;
@@ -614,8 +639,10 @@ fn parse_nft_rule(exprs: &[serde_json::Value], text: String, table_key: &str) ->
                     let mut states = Vec::new();
                     if nft_words(right, &mut states) {
                         let states: Vec<&str> = states.iter().map(String::as_str).collect();
-                        r.ct_new = ct_new(&states, negated);
-                        r.other |= r.ct_new.is_none();
+                        match ct_new(&states, negated) {
+                            Some(v) => set_once(&mut r.ct_new, v, &mut r.other),
+                            None => r.other = true,
+                        }
                     } else {
                         r.other = true;
                     }
@@ -639,8 +666,13 @@ fn parse_nft_rule(exprs: &[serde_json::Value], text: String, table_key: &str) ->
             "xt" if body["type"].as_str() == Some("target") => r.verdict = Verdict::Unknown,
             // A verdict map can accept some traffic; its entries are not read.
             "queue" | "vmap" => r.verdict = Verdict::Unknown,
+            // `dup` and `fwd` send the packet, or a copy of it, elsewhere.
+            "dup" | "fwd" => escapes = true,
             _ => r.other = true,
         }
+    }
+    if escapes {
+        r.verdict = Verdict::Unknown;
     }
     r
 }
@@ -1366,6 +1398,136 @@ mod tests {
             {NFT_FORWARD}, {NFT_DENY}, {active}, {active_deny}]}}"#
         );
         let rs = parse_nft(&both).unwrap();
+        assert_eq!(evaluate(&rs, &t("10.86.0.0/24")), Coverage::Covered);
+    }
+
+    fn nft_rule(handle: u32, exprs: &str) -> String {
+        format!(
+            r#"{{"rule": {{"family": "inet", "table": "foiled", "chain": "forward", "handle": {handle}, "expr": [{exprs}]}}}}"#
+        )
+    }
+
+    const NFT_SADDR_24: &str = r#"{"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": {"prefix": {"addr": "10.86.0.0", "len": 24}}}}"#;
+
+    #[test]
+    fn nftables_relational_operators_are_not_equality() {
+        // `ip saddr < 10.87.0.0` takes in the whole decoy subnet: an accept
+        // on it must shadow the deny, and a deny on it must not count.
+        for op in ["<", "<=", ">", ">=", "&"] {
+            let accept = nft_rule(
+                3,
+                &format!(
+                    r#"{{"match": {{"op": "{op}", "left": {{"payload": {{"protocol": "ip", "field": "saddr"}}}}, "right": "10.87.0.0"}}}}, {{"accept": null}}"#
+                ),
+            );
+            let rs = parse_nft(&nft(NFT_FORWARD, &format!("{accept}, {NFT_DENY}"))).unwrap();
+            assert_eq!(
+                evaluate(&rs, &t("10.86.0.0/24")),
+                Coverage::Shadowed("nft rule inet foiled forward handle 3".into()),
+                "{op}"
+            );
+            let deny = NFT_DENY.replace(r#""op": "==""#, &format!(r#""op": "{op}""#));
+            let rs = parse_nft(&nft(NFT_FORWARD, &deny)).unwrap();
+            assert_eq!(evaluate(&rs, &t("10.86.0.0/24")), Coverage::Missing, "{op}");
+        }
+        // Equality and membership still work, negated or not.
+        let member = NFT_DENY.replace(r#""op": "==""#, r#""op": "in""#);
+        let rs = parse_nft(&nft(NFT_FORWARD, &member)).unwrap();
+        assert_eq!(evaluate(&rs, &t("10.86.0.0/24")), Coverage::Covered);
+        let other_net = nft_rule(
+            3,
+            r#"{"match": {"op": "!=", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": {"prefix": {"addr": "10.86.0.0", "len": 24}}}}, {"accept": null}"#,
+        );
+        let rs = parse_nft(&nft(NFT_FORWARD, &format!("{other_net}, {NFT_DENY}"))).unwrap();
+        assert_eq!(evaluate(&rs, &t("10.86.0.0/24")), Coverage::Covered);
+    }
+
+    #[test]
+    fn nftables_rules_with_two_source_matches_are_partial() {
+        // Narrow prefix first, covering prefix second: only 10.86.0.0/25 is
+        // dropped, so the rule does not cover the subnet.
+        let narrow = r#"{"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": {"prefix": {"addr": "10.86.0.0", "len": 25}}}}"#;
+        for (a, b) in [(narrow, NFT_SADDR_24), (NFT_SADDR_24, narrow)] {
+            let deny = nft_rule(4, &format!(r#"{a}, {b}, {{"drop": null}}"#));
+            let rs = parse_nft(&nft(NFT_FORWARD, &deny)).unwrap();
+            assert_eq!(evaluate(&rs, &t("10.86.0.0/24")), Coverage::Missing);
+        }
+        // An accept with two source matches still counts as a possible
+        // accept when the first one overlaps the subnet.
+        let accept = nft_rule(
+            3,
+            &format!(r#"{narrow}, {NFT_SADDR_24}, {{"accept": null}}"#),
+        );
+        let rs = parse_nft(&nft(NFT_FORWARD, &format!("{accept}, {NFT_DENY}"))).unwrap();
+        assert!(matches!(
+            evaluate(&rs, &t("10.86.0.0/24")),
+            Coverage::Shadowed(_)
+        ));
+        // One source match keeps its meaning.
+        let rs = parse_nft(&nft(NFT_FORWARD, NFT_DENY)).unwrap();
+        assert_eq!(evaluate(&rs, &t("10.86.0.0/24")), Coverage::Covered);
+    }
+
+    #[test]
+    fn nftables_named_interface_sets_are_not_literal_names() {
+        // `iifname @trusted accept`: the set may hold the decoy bridge.
+        let accept = nft_rule(
+            3,
+            r#"{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "@trusted"}}, {"accept": null}"#,
+        );
+        let rs = parse_nft(&nft(NFT_FORWARD, &format!("{accept}, {NFT_DENY}"))).unwrap();
+        assert_eq!(
+            evaluate(&rs, &t("10.86.0.0/24")),
+            Coverage::Shadowed("nft rule inet foiled forward handle 3".into())
+        );
+        // A deny on a named set never counts.
+        let deny = nft_rule(
+            4,
+            r#"{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "@decoys"}}, {"drop": null}"#,
+        );
+        let rs = parse_nft(&nft(NFT_FORWARD, &deny)).unwrap();
+        assert_eq!(evaluate(&rs, &t("10.86.0.0/24")), Coverage::Missing);
+        // Literal names and inline sets keep working.
+        let deny = nft_rule(
+            4,
+            r#"{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": {"set": ["br-0123456789ab", "foil0"]}}}, {"drop": null}"#,
+        );
+        let rs = parse_nft(&nft(NFT_FORWARD, &deny)).unwrap();
+        assert_eq!(evaluate(&rs, &t("10.86.0.0/24")), Coverage::Covered);
+        let other = nft_rule(
+            3,
+            r#"{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "docker0"}}, {"accept": null}"#,
+        );
+        let rs = parse_nft(&nft(NFT_FORWARD, &format!("{other}, {NFT_DENY}"))).unwrap();
+        assert_eq!(evaluate(&rs, &t("10.86.0.0/24")), Coverage::Covered);
+    }
+
+    #[test]
+    fn nftables_dup_is_an_escape_even_before_a_drop() {
+        let dup = r#"{"dup": {"addr": "192.0.2.9", "dev": "eth0"}}"#;
+        // A rule of its own, then a covering drop: the copy already left.
+        let alone = nft_rule(3, &format!("{NFT_SADDR_24}, {dup}"));
+        let rs = parse_nft(&nft(NFT_FORWARD, &format!("{alone}, {NFT_DENY}"))).unwrap();
+        assert_eq!(
+            evaluate(&rs, &t("10.86.0.0/24")),
+            Coverage::Shadowed("nft rule inet foiled forward handle 3".into())
+        );
+        // In the same rule as the drop, even under a drop policy.
+        let both = nft_rule(4, &format!(r#"{NFT_SADDR_24}, {dup}, {{"drop": null}}"#));
+        let drop_policy = NFT_FORWARD.replace(r#""policy": "accept""#, r#""policy": "drop""#);
+        for chain in [NFT_FORWARD.to_string(), drop_policy] {
+            let rs = parse_nft(&nft(&chain, &both)).unwrap();
+            assert_eq!(
+                evaluate(&rs, &t("10.86.0.0/24")),
+                Coverage::Shadowed("nft rule inet foiled forward handle 4".into())
+            );
+        }
+        // Counters and logging still carry on.
+        let log = nft_rule(
+            3,
+            &format!(r#"{NFT_SADDR_24}, {{"counter": null}}, {{"log": {{"prefix": "x"}}}}"#),
+        );
+        let rs = parse_nft(&nft(NFT_FORWARD, &format!("{log}, {NFT_DENY}"))).unwrap();
         assert_eq!(evaluate(&rs, &t("10.86.0.0/24")), Coverage::Covered);
     }
 

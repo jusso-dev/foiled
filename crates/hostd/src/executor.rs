@@ -32,6 +32,12 @@ fn failed(job: &JobBody, state: Option<DecoyState>, e: RuntimeError) -> JobResul
     }
 }
 
+fn compromised(job: &JobBody) -> bool {
+    job.reason
+        .as_ref()
+        .is_some_and(|r| r.code.indicates_compromise())
+}
+
 /// Stop, flush capture, take a forensic snapshot when the reason suggests
 /// compromise (best effort), destroy. Returns an error only for steps that
 /// matter for containment.
@@ -40,11 +46,7 @@ fn tear_down(rt: &dyn Runtime, job: &JobBody) -> Result<(), RuntimeError> {
     rt.stop(id)?;
     // Evidence steps are best effort: losing them must not block containment.
     let _ = rt.capture_flush(id);
-    if job
-        .reason
-        .as_ref()
-        .is_some_and(|r| r.code.indicates_compromise())
-    {
+    if compromised(job) {
         let _ = rt.snapshot(id, SnapshotKind::Forensic);
     }
     rt.destroy(id)
@@ -81,12 +83,19 @@ pub fn execute(rt: &dyn Runtime, job: &JobBody) -> JobResult {
             Err(e) => failed(job, None, e),
         },
         JobKind::DecoyRotate | JobKind::DecoyReset => {
-            // The predecessor is untouched, so its state does not change.
-            if let Err(e) = rt.preflight() {
-                return failed(job, None, e);
-            }
+            let checked = match rt.preflight() {
+                // Routine: the predecessor is untouched, so its state does
+                // not change.
+                Err(e) if !compromised(job) => return failed(job, None, e),
+                r => r,
+            };
+            // A compromised predecessor is contained even when no successor
+            // can start: stopped, snapshotted and destroyed first.
             if let Err(e) = tear_down(rt, job) {
                 return failed(job, Some(DecoyState::Stopped), e);
+            }
+            if let Err(e) = checked {
+                return failed(job, Some(DecoyState::Failed), e);
             }
             match build(rt, job) {
                 Ok(()) => ok(job, Some(DecoyState::Healthy)),
@@ -302,45 +311,87 @@ mod tests {
         assert_eq!(r.failure_code, None, "other failures stay unclassified");
     }
 
+    /// A runtime whose egress preflight always fails.
+    struct Blocked(FakeRuntime);
+    impl Runtime for Blocked {
+        fn preflight(&self) -> crate::runtime::RtResult<()> {
+            Err(RuntimeError::egress("iptables -S: timed out after 10s"))
+        }
+        fn create(&self, s: &DecoySpec) -> crate::runtime::RtResult<crate::runtime::ExecMeta> {
+            self.0.create(s)
+        }
+        fn start(&self, d: &str) -> crate::runtime::RtResult<()> {
+            self.0.start(d)
+        }
+        fn stop(&self, d: &str) -> crate::runtime::RtResult<()> {
+            self.0.stop(d)
+        }
+        fn destroy(&self, d: &str) -> crate::runtime::RtResult<()> {
+            self.0.destroy(d)
+        }
+        fn snapshot(&self, d: &str, k: SnapshotKind) -> crate::runtime::RtResult<String> {
+            self.0.snapshot(d, k)
+        }
+        fn capture_flush(&self, d: &str) -> crate::runtime::RtResult<()> {
+            self.0.capture_flush(d)
+        }
+        fn running(&self) -> Vec<String> {
+            self.0.running()
+        }
+    }
+
     #[test]
     fn a_failing_preflight_never_tears_down_the_running_decoy() {
-        struct Blocked(FakeRuntime);
-        impl Runtime for Blocked {
-            fn preflight(&self) -> crate::runtime::RtResult<()> {
-                Err(RuntimeError::egress("iptables -S: timed out after 10s"))
-            }
-            fn create(&self, s: &DecoySpec) -> crate::runtime::RtResult<crate::runtime::ExecMeta> {
-                self.0.create(s)
-            }
-            fn start(&self, d: &str) -> crate::runtime::RtResult<()> {
-                self.0.start(d)
-            }
-            fn stop(&self, d: &str) -> crate::runtime::RtResult<()> {
-                self.0.stop(d)
-            }
-            fn destroy(&self, d: &str) -> crate::runtime::RtResult<()> {
-                self.0.destroy(d)
-            }
-            fn snapshot(&self, d: &str, k: SnapshotKind) -> crate::runtime::RtResult<String> {
-                self.0.snapshot(d, k)
-            }
-            fn capture_flush(&self, d: &str) -> crate::runtime::RtResult<()> {
-                self.0.capture_flush(d)
-            }
-            fn running(&self) -> Vec<String> {
-                self.0.running()
+        for kind in [JobKind::DecoyRotate, JobKind::DecoyReset] {
+            for reason in [Some(ReasonCode::MaxLifetime), None] {
+                let rt = Blocked(FakeRuntime::default());
+                let r = execute(&rt, &job(kind, reason));
+                assert_eq!(r.outcome, JobOutcome::Failed);
+                assert_eq!(r.decoy_state, None, "the predecessor keeps its state");
+                assert_eq!(
+                    r.failure_code,
+                    Some(foiled_core::agent::FailureCode::EgressUnverified)
+                );
+                assert_eq!(rt.0.calls(), vec![], "nothing stopped or destroyed");
             }
         }
+    }
+
+    #[test]
+    fn a_failing_preflight_still_contains_a_compromised_predecessor() {
         for kind in [JobKind::DecoyRotate, JobKind::DecoyReset] {
             let rt = Blocked(FakeRuntime::default());
-            let r = execute(&rt, &job(kind, Some(ReasonCode::MaxLifetime)));
+            let r = execute(&rt, &job(kind, Some(ReasonCode::EgressBlocked)));
             assert_eq!(r.outcome, JobOutcome::Failed);
-            assert_eq!(r.decoy_state, None, "the predecessor keeps its state");
+            assert_eq!(
+                rt.0.calls(),
+                vec![
+                    Call::Stop("d1".into()),
+                    Call::CaptureFlush("d1".into()),
+                    Call::Snapshot("d1".into()),
+                    Call::Destroy("d1".into()),
+                ],
+                "contained, then no successor built"
+            );
+            assert_eq!(r.decoy_state, Some(DecoyState::Failed));
             assert_eq!(
                 r.failure_code,
                 Some(foiled_core::agent::FailureCode::EgressUnverified)
             );
-            assert_eq!(rt.0.calls(), vec![], "nothing stopped or destroyed");
         }
+    }
+
+    #[test]
+    fn a_failed_stop_of_a_compromised_predecessor_is_the_reported_failure() {
+        let rt = Blocked(FakeRuntime::failing_when(|c| matches!(c, Call::Stop(_))));
+        let r = execute(
+            &rt,
+            &job(JobKind::DecoyRotate, Some(ReasonCode::ReverseShell)),
+        );
+        assert_eq!(r.outcome, JobOutcome::Failed);
+        assert_eq!(r.detail.as_deref(), Some("injected failure"));
+        assert_eq!(r.failure_code, None, "the stop failure, not the preflight");
+        assert_eq!(r.decoy_state, Some(DecoyState::Stopped));
+        assert_eq!(rt.0.calls(), vec![Call::Stop("d1".into())]);
     }
 }

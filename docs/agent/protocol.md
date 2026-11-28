@@ -80,6 +80,8 @@ Failures: a failed containment step (stop, destroy) reports `failed` with the de
 | --- | --- |
 | `egress_unverified` | The host could not confirm that new outbound connections from the decoy network are blocked (network missing, wrong driver or subnet, no covering deny rule, a rule that lets traffic out first, or the firewall could not be listed), so it did not start the decoy (#93). The decoy is reported `failed`. See [the lab walkthrough](../mvp-walkthrough.md). |
 
+**Upgrade order.** The control plane decodes job results and heartbeats strictly and refuses a member it does not know with 422. New optional members (`sandbox_runtime` and `dry_run` in #91, `failure_code` in #93) are therefore deployed API first: upgrade the API Worker, then the hosts. A host that is ahead of the API has its heartbeats refused and its acknowledgements carrying a new member dropped (a refused ack is not retried), so the job is never recorded as finished.
+
 ## Leases
 
 A lease holds a job for 5 minutes. A job not yet placed on a host is placed on the first host that leases it, along with its decoy. If the lease lapses without an ack, the same host can lease it again; the idempotency key stops it running twice there. Acks are accepted once, only from the leasing host.

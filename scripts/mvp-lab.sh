@@ -35,6 +35,8 @@ diagnose() {
   tail -5 "$WORK/mock.log" >&2 2>/dev/null
 }
 
+IPT4_ADDED=0
+IPT6_ADDED=0
 cleanup() {
   local status=$?
   set +e
@@ -43,8 +45,9 @@ cleanup() {
   docker ps -aq --filter label=foiled.decoy | xargs -r docker rm -f >/dev/null
   docker rm -f foiled-registry >/dev/null 2>&1
   docker network rm "$NET" >/dev/null 2>&1
-  sudo iptables -D DOCKER-USER -s "$SUBNET" -m conntrack --ctstate NEW -j REJECT 2>/dev/null
-  sudo ip6tables -D DOCKER-USER -s "$SUBNET6" -m conntrack --ctstate NEW -j REJECT 2>/dev/null
+  # Only the rules this run inserted: an identical operator rule stays.
+  [ "$IPT4_ADDED" -eq 1 ] && sudo iptables -D DOCKER-USER -s "$SUBNET" -m conntrack --ctstate NEW -j REJECT 2>/dev/null
+  [ "$IPT6_ADDED" -eq 1 ] && sudo ip6tables -D DOCKER-USER -s "$SUBNET6" -m conntrack --ctstate NEW -j REJECT 2>/dev/null
   if [ -f "$ENTRY_BACKUP" ]; then
     cp "$ENTRY_BACKUP" "$ENTRY" 2>/dev/null
   fi
@@ -151,7 +154,9 @@ echo "create failed with egress_unverified and no container, as required"
 
 log "7. Reject new outbound connections from the lab network"
 sudo iptables -I DOCKER-USER -s "$SUBNET" -m conntrack --ctstate NEW -j REJECT
+IPT4_ADDED=1
 sudo ip6tables -I DOCKER-USER -s "$SUBNET6" -m conntrack --ctstate NEW -j REJECT
+IPT6_ADDED=1
 
 log "8. Launch the demo decoy"
 DECOY="$(launch "mvp lab")"

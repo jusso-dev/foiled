@@ -82,7 +82,8 @@ pub trait Runtime: Send + Sync {
     /// Read-only checks that a later `create` would also run (for Docker,
     /// the egress preflight). Rotate and reset call it before tearing down
     /// the running decoy, so a check that is bound to fail never leaves the
-    /// decoy absent. `create` must still check for itself.
+    /// decoy absent, unless the reason indicates compromise: that decoy is
+    /// contained anyway. `create` must still check for itself.
     fn preflight(&self) -> RtResult<()> {
         Ok(())
     }

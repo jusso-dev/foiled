@@ -100,7 +100,10 @@ pub type Exec<'a> = &'a dyn Fn(&[String]) -> Result<String, String>;
 const LOCAL_DAEMONS: &[&str] = &["unix:///var/run/docker.sock", "unix:///run/docker.sock"];
 
 /// The daemon `docker` talks to must be the host's own system daemon:
-/// `DOCKER_HOST` unset or a local socket, and the active context too.
+/// `DOCKER_HOST` unset or a local socket, and the active context too. The
+/// CLI uses `DOCKER_HOST` even when `DOCKER_CONTEXT` is also set (it then
+/// resolves to the `default` context), so a remote `DOCKER_HOST` is the
+/// endpoint in use and is refused outright.
 fn check_local_daemon(docker_host: Option<&str>, exec: Exec) -> RtResult<()> {
     if let Some(h) = docker_host.filter(|h| !h.is_empty())
         && !LOCAL_DAEMONS.contains(&h)
@@ -315,19 +318,24 @@ fn exec_deadline(argv: &[String], deadline: Duration) -> Result<String, String> 
         .spawn()
         .map_err(|e| format!("{prog}: {e}"))?;
     // Drain both pipes on their own threads so a chatty command cannot
-    // block on a full pipe while we wait for it.
+    // block on a full pipe while we wait for it. Each reader hands its
+    // buffer over a channel, so collecting the output shares the deadline:
+    // a background process that keeps a pipe open cannot hold us past it.
     let drain = |p: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut p) = p {
                 let _ = p.read_to_end(&mut buf);
             }
-            buf
-        })
+            let _ = tx.send(buf);
+        });
+        rx
     };
     let out = drain(child.stdout.take().map(|p| Box::new(p) as _));
     let err = drain(child.stderr.take().map(|p| Box::new(p) as _));
     let start = Instant::now();
+    let timed_out = || format!("{prog} timed out after {}s", deadline.as_secs_f32());
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break s,
@@ -335,10 +343,7 @@ fn exec_deadline(argv: &[String], deadline: Duration) -> Result<String, String> 
                 let _ = child.kill();
                 let _ = child.wait();
                 // The readers end when the pipes close; do not wait on them.
-                return Err(format!(
-                    "{prog} timed out after {}s",
-                    deadline.as_secs_f32()
-                ));
+                return Err(timed_out());
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
             Err(e) => {
@@ -348,15 +353,17 @@ fn exec_deadline(argv: &[String], deadline: Duration) -> Result<String, String> 
             }
         }
     };
-    let text = |h: std::thread::JoinHandle<Vec<u8>>| {
-        String::from_utf8_lossy(&h.join().unwrap_or_default())
-            .trim()
-            .to_string()
+    // Detached readers finish on their own once the pipe closes.
+    let text = |rx: std::sync::mpsc::Receiver<Vec<u8>>| {
+        let left = deadline.saturating_sub(start.elapsed());
+        rx.recv_timeout(left)
+            .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+            .map_err(|_| timed_out())
     };
     if status.success() {
-        Ok(text(out))
+        text(out)
     } else {
-        Err(text(err))
+        Err(text(err)?)
     }
 }
 
@@ -379,7 +386,11 @@ impl DockerRuntime {
         rt
     }
 
-    /// Run the egress preflight and return the checked network's ID.
+    /// Run the egress preflight and return the checked network's ID. It
+    /// proves that new connections routed out of the decoy subnets are
+    /// denied in the forward path, nothing more: DNS lookups that Docker's
+    /// embedded resolver forwards for the decoy, and connections to the
+    /// host's own addresses (the `INPUT` path), are not checked.
     pub fn verified_network(&self) -> RtResult<String> {
         let docker_host = std::env::var("DOCKER_HOST").ok();
         egress_preflight(&self.cfg, docker_host.as_deref(), &|argv| {
@@ -806,6 +817,22 @@ mod tests {
             assert!(egress_err(egress_preflight(&lab(), None, &slow)).contains("timed out"));
         }
         assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn a_background_process_holding_the_pipe_cannot_outlast_the_deadline() {
+        // The command exits at once, but a grandchild keeps stdout open.
+        let argv: Vec<String> = ["sh", "-c", "echo ok; sleep 30 &"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let start = Instant::now();
+        let err = exec_deadline(&argv, Duration::from_millis(300)).unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "did not wait for the grandchild"
+        );
     }
 
     #[test]
