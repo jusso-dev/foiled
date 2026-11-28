@@ -174,6 +174,7 @@ const agent: Keys<AgentRecord> = {
   network_changed_at: true,
   revoked_at: true,
   revoke_reason: true,
+  sandbox_runtime: true,
 };
 
 const quarantine: Keys<QuarantineItem> = {

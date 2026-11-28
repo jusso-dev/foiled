@@ -1,11 +1,30 @@
 //! The decoy runtime interface (ADR 0002). Only the host agent calls it,
 //! never anything on the network. Firecracker, module containers and
 //! emulator supervision implement it on real hosts; [`FakeRuntime`] records
-//! calls for tests and dry runs.
+//! calls for tests and dry runs (`sandbox_runtime = "fake"`).
+//!
+//! Today only the Docker lab runtime and the fake are built in. Firecracker
+//! is tracked in #3; [`from_config`] refuses it instead of substituting
+//! another runtime (#91).
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use foiled_core::agent::DecoyParams;
+use foiled_core::agent::{DecoyParams, SandboxRuntime};
+
+use crate::config::{ConfigError, HostConfig};
+use crate::docker::DockerRuntime;
+
+/// Build the runtime `cfg` names. Never substitutes one runtime for another:
+/// a runtime that is not built in is an error, and the agent exits.
+pub fn from_config(cfg: &HostConfig) -> Result<(SandboxRuntime, Arc<dyn Runtime>), ConfigError> {
+    let kind = cfg.runtime()?;
+    let runtime: Arc<dyn Runtime> = match kind {
+        SandboxRuntime::Docker => Arc::new(DockerRuntime::new(cfg.docker.clone())),
+        SandboxRuntime::Fake => Arc::new(FakeRuntime::default()),
+        SandboxRuntime::Firecracker => return Err(ConfigError::RuntimeNotBuiltIn(kind)),
+    };
+    Ok((kind, runtime))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecoySpec {
@@ -144,5 +163,44 @@ impl Runtime for FakeRuntime {
 
     fn running(&self) -> Vec<String> {
         self.running.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LAB: &str = r#"
+host_id = "lab-1"
+api_base = "http://127.0.0.1:8787"
+publicly_exposed = false
+allowlist = []
+state_dir = "/tmp/foiled-test"
+
+[[trusted_keys]]
+id = "k1"
+public_key = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+"#;
+
+    fn build(runtime: &str) -> Result<SandboxRuntime, ConfigError> {
+        let cfg = HostConfig::parse(&format!("sandbox_runtime = \"{runtime}\"\n{LAB}"))?;
+        from_config(&cfg).map(|(kind, _)| kind)
+    }
+
+    #[test]
+    fn startup_builds_only_the_runtime_that_was_named() {
+        assert_eq!(build("docker"), Ok(SandboxRuntime::Docker));
+        assert_eq!(build("fake"), Ok(SandboxRuntime::Fake));
+        assert_eq!(
+            build("firecracker"),
+            Err(ConfigError::RuntimeNotBuiltIn(SandboxRuntime::Firecracker))
+        );
+        // No runtime named: the Firecracker default, which is refused rather
+        // than quietly replaced by the recording runtime.
+        let cfg = HostConfig::parse(LAB).unwrap();
+        assert!(matches!(
+            from_config(&cfg),
+            Err(ConfigError::RuntimeNotBuiltIn(SandboxRuntime::Firecracker))
+        ));
     }
 }

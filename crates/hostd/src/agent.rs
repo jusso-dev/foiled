@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use foiled_core::agent::{Heartbeat, JobOutcome, JobResult};
+use foiled_core::agent::{Heartbeat, JobOutcome, JobResult, SandboxRuntime};
 use foiled_core::capture::{CaptureEvent, MAX_BATCH};
 
 use crate::buffer::OfflineBuffer;
@@ -16,6 +16,9 @@ pub struct Agent {
     pub host_id: String,
     pub gate: JobGate,
     pub runtime: Arc<dyn Runtime>,
+    /// Which runtime `runtime` is. Reported in heartbeats, and a `fake`
+    /// runtime marks every job result as a dry run.
+    pub sandbox_runtime: SandboxRuntime,
     pub cp: ControlPlane,
     pub buffer: OfflineBuffer,
     pub publicly_exposed: bool,
@@ -42,10 +45,11 @@ impl Agent {
                     report.executed += 1;
                     let rt = self.runtime.clone();
                     let (decoy_id, params) = (job.decoy_id.clone(), job.decoy.clone());
-                    let result =
+                    let mut result =
                         tokio::task::spawn_blocking(move || executor::execute(rt.as_ref(), &job))
                             .await
                             .map_err(|e| ClientError::Unavailable(e.to_string()))?;
+                    result.dry_run = self.sandbox_runtime == SandboxRuntime::Fake;
                     match (result.decoy_state, params) {
                         (Some(foiled_core::decoy::DecoyState::Healthy), Some(p)) => {
                             self.decoys.insert(decoy_id, p);
@@ -79,6 +83,7 @@ impl Agent {
                         outcome: JobOutcome::Rejected,
                         decoy_state: None,
                         detail: Some(rejection.to_string()),
+                        dry_run: false,
                     }
                 }
             };
@@ -180,6 +185,7 @@ impl Agent {
             host_time: now,
             buffered_events: self.buffer.len().unwrap_or(0),
             dropped_events: self.buffer.dropped(),
+            sandbox_runtime: Some(self.sandbox_runtime),
         }
     }
 

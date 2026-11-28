@@ -1,7 +1,13 @@
 import { useId } from "react";
 import { Form } from "react-router";
 import { CsrfField } from "../components/console/ConsoleShell";
-import { PageHead, ReasonFields, SubmitButton, Time } from "../components/console/Controls";
+import {
+  PageHead,
+  ReasonFields,
+  RuntimeTag,
+  SubmitButton,
+  Time,
+} from "../components/console/Controls";
 import { ActionNotice, EmptyState, ErrorState, Notice } from "../components/console/Notice";
 import { RouteError } from "../components/console/RouteError";
 import type { AgentRecord, ReasonCode } from "../lib/api-types";
@@ -180,6 +186,7 @@ function AgentSection({
                 <th scope="col">Label</th>
                 <th scope="col">Status</th>
                 <th scope="col">Sandboxes</th>
+                <th scope="col">Runtime</th>
                 <th scope="col">Last seen</th>
                 <th scope="col">Certificate</th>
                 <th scope="col">Network</th>
@@ -258,6 +265,9 @@ function AgentRow({
         </span>
       </td>
       <td>{a.sandbox_allowed ? "allowed" : "emulations only"}</td>
+      <td>
+        <RuntimeTag runtime={a.sandbox_runtime ?? null} />
+      </td>
       <td className="mono muted">
         <Time ms={a.last_seen_at} />
       </td>

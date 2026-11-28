@@ -150,6 +150,7 @@ export function decoy(over: Partial<Decoy> = {}): Decoy {
     updated_at: 1792285000000,
     expires_at: 1792371400000,
     created_by: "tok1",
+    dry_run: false,
     ...over,
   };
 }

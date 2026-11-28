@@ -19,7 +19,7 @@ use foiled_api::issuer::FakeIssuer;
 use foiled_api::memory::MemoryStore;
 use foiled_api::store::{Store, TokenRecord};
 use foiled_api::{AppState, router};
-use foiled_core::agent::{JobSigner, TrustedKeys};
+use foiled_core::agent::{JobSigner, SandboxRuntime, TrustedKeys};
 use foiled_core::auth::{Role, Scope};
 use foiled_core::capture::{CaptureEvent, SourceKind};
 use foiled_core::decoy::DecoyState;
@@ -176,6 +176,7 @@ async fn enrol_place_buffer_replay_renew_and_revoke() {
             replays: ReplayStore::open(dir.path().join("replays.json")).unwrap(),
         },
         runtime: Arc::new(FakeRuntime::default()),
+        sandbox_runtime: SandboxRuntime::Fake,
         cp: ControlPlane::new(&base, &sensor_id, None)
             .unwrap()
             .with_role(Role::Sensor),
@@ -373,6 +374,7 @@ async fn an_event_for_a_moved_decoy_is_dropped_without_stalling_the_buffer() {
             replays: ReplayStore::open(dir.path().join("replays.json")).unwrap(),
         },
         runtime: Arc::new(FakeRuntime::default()),
+        sandbox_runtime: SandboxRuntime::Fake,
         cp: ControlPlane::new(&base, &a, None)
             .unwrap()
             .with_role(Role::Sensor),

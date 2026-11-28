@@ -454,7 +454,7 @@ paths:
       tags: [hosts]
       operationId: hostHeartbeat
       summary: Sandbox host health report
-      description: Host health, KVM present, public exposure, free disk, running decoys, agent version and buffer counters. The control plane records clock skew from `host_time` (#41).
+      description: Host health, KVM present, public exposure, the decoy runtime in use, free disk, running decoys, agent version and buffer counters. The control plane records clock skew from `host_time` (#41) and shows the runtime on the host's registry record; `fake` marks the host's decoys as dry runs (#91).
       security: [{ mtls: [] }]
       x-foiled-status: implemented
       x-foiled-store: d1
@@ -3219,7 +3219,7 @@ components:
           description: Place the decoy on this edge sensor of the caller's tenant (#31). The sensor must not be revoked, and sandbox entries need `sandbox_allowed` on the sensor. Without it, the first research host to lease the job takes it.
     Decoy:
       type: object
-      required: [id, tenant_id, catalogue_id, decoy_kind, state, generation, created_at, updated_at, expires_at, created_by]
+      required: [id, tenant_id, catalogue_id, decoy_kind, state, generation, created_at, updated_at, expires_at, created_by, dry_run]
       properties:
         id: { type: string }
         tenant_id: { type: string }
@@ -3233,6 +3233,9 @@ components:
         updated_at: { type: integer, description: "Unix ms." }
         expires_at: { type: integer, description: "Unix ms after which the decoy rotates for max_lifetime." }
         created_by: { type: string }
+        dry_run:
+          type: boolean
+          description: True when the host last built this decoy on the recording runtime (`sandbox_runtime = "fake"`). Nothing runs and nothing is captured, whatever `state` says (#91).
     JobAccepted:
       type: object
       required: [decoy, job_id, job_kind]

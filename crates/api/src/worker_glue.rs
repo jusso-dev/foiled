@@ -958,6 +958,8 @@ struct AgentRow {
     revoked_at: Option<f64>,
     revoke_reason_code: Option<String>,
     revoke_reason_text: Option<String>,
+    #[serde(default)]
+    sandbox_runtime: Option<String>,
 }
 
 impl AgentRow {
@@ -990,6 +992,11 @@ impl AgentRow {
             network_changed_at: ms(self.network_changed_at),
             revoked_at: ms(self.revoked_at),
             revoke_reason,
+            // An unknown name (a newer agent) reads as unknown, not an error.
+            sandbox_runtime: self
+                .sandbox_runtime
+                .as_deref()
+                .and_then(foiled_core::agent::SandboxRuntime::parse),
         })
     }
 }
@@ -1051,6 +1058,8 @@ struct DecoyRow {
     updated_at: f64,
     expires_at: f64,
     created_by: String,
+    #[serde(default)]
+    dry_run: Option<f64>,
 }
 
 impl DecoyRow {
@@ -1074,6 +1083,7 @@ impl DecoyRow {
             updated_at: self.updated_at as i64,
             expires_at: self.expires_at as i64,
             created_by: self.created_by,
+            dry_run: self.dry_run.is_some_and(|v| v != 0.0),
         })
     }
 }
@@ -1583,6 +1593,48 @@ impl Store for CfStore {
         wrap(async move {
             self.db
                 .prepare(sql::UPSERT_HEARTBEAT)
+                .bind(&args)
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
+            Ok(())
+        })
+    }
+
+    fn set_decoy_dry_run(
+        &self,
+        tenant_id: &str,
+        decoy_id: &str,
+        dry_run: bool,
+    ) -> StoreFuture<'_, ()> {
+        let args = [s(tenant_id), s(decoy_id), n(i64::from(dry_run))];
+        wrap(async move {
+            self.db
+                .prepare(sql::SET_DECOY_DRY_RUN)
+                .bind(&args)
+                .map_err(err)?
+                .run()
+                .await
+                .map_err(err)?;
+            Ok(())
+        })
+    }
+
+    fn set_agent_runtime(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        runtime: Option<foiled_core::agent::SandboxRuntime>,
+    ) -> StoreFuture<'_, ()> {
+        let args = [
+            s(tenant_id),
+            s(agent_id),
+            opt(runtime.map(foiled_core::agent::SandboxRuntime::as_str)),
+        ];
+        wrap(async move {
+            self.db
+                .prepare(sql::SET_AGENT_RUNTIME)
                 .bind(&args)
                 .map_err(err)?
                 .run()

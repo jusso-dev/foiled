@@ -16,5 +16,6 @@
   "last_asn": 64500,
   "network_changed_at": null,
   "revoked_at": null,
-  "revoke_reason": null
+  "revoke_reason": null,
+  "sandbox_runtime": "docker"
 }

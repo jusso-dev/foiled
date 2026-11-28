@@ -44,6 +44,23 @@ describe("decoy status and teardown", () => {
     expect(r.html).toContain("tag--ok");
   });
 
+  it("marks a decoy on the recording runtime as a dry run, even when healthy", async () => {
+    const { cookie } = await signIn();
+    const api = fakeApi((c) =>
+      c.path === "/v0/decoys/dcy-0001" ? decoy({ state: "healthy", dry_run: true }) : audit,
+    );
+    const r = expectPage(await page(envWith(api), "/decoys/dcy-0001", { cookie }));
+    const t = text(r.html);
+    expect(t).toContain("dry run");
+    expect(t).toContain("Nothing is running, nothing listens and nothing is captured");
+
+    const real = fakeApi((c) =>
+      c.path === "/v0/decoys/dcy-0001" ? decoy({ state: "healthy" }) : audit,
+    );
+    const ok = expectPage(await page(envWith(real), "/decoys/dcy-0001", { cookie }));
+    expect(text(ok.html)).not.toContain("dry run");
+  });
+
   it("tears down with a reason, an idempotency key and an explicit confirmation", async () => {
     const { cookie, session } = await signIn();
     const api = fakeApi((c) => {

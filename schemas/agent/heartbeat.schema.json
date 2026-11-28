@@ -14,6 +14,10 @@
     "running_decoys": { "type": "array", "items": { "type": "string" } },
     "host_time": { "type": "integer", "description": "Host clock, Unix ms. The control plane derives clock skew." },
     "buffered_events": { "type": "integer", "minimum": 0 },
-    "dropped_events": { "type": "integer", "minimum": 0 }
+    "dropped_events": { "type": "integer", "minimum": 0 },
+    "sandbox_runtime": {
+      "enum": ["firecracker", "docker", "fake"],
+      "description": "The decoy runtime the agent is driving (#91). fake is the recording runtime: a dry run where nothing runs and nothing is captured. Absent from agents that predate the field."
+    }
   }
 }

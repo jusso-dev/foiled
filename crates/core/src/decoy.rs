@@ -189,6 +189,10 @@ pub struct Decoy {
     /// Unix ms after which the decoy is rotated for `max_lifetime`.
     pub expires_at: i64,
     pub created_by: String,
+    /// The host built this decoy on the recording runtime: nothing runs and
+    /// nothing is captured, whatever `state` says (#91).
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[cfg(test)]

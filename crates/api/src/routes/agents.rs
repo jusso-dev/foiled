@@ -232,6 +232,7 @@ async fn create(
         network_changed_at: None,
         revoked_at: None,
         revoke_reason: None,
+        sandbox_runtime: None,
     };
     let (token, shown) = new_token(&state, &who, &agent, ttl);
     state.store.create_agent(agent.clone(), token).await?;

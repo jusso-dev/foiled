@@ -1156,6 +1156,40 @@ impl Store for MemoryStore {
         ready(Ok(()))
     }
 
+    fn set_decoy_dry_run(
+        &self,
+        tenant_id: &str,
+        decoy_id: &str,
+        dry_run: bool,
+    ) -> StoreFuture<'_, ()> {
+        if let Some(d) = self
+            .lock()
+            .decoys
+            .iter_mut()
+            .find(|d| d.tenant_id == tenant_id && d.id == decoy_id)
+        {
+            d.dry_run = dry_run;
+        }
+        ready(Ok(()))
+    }
+
+    fn set_agent_runtime(
+        &self,
+        tenant_id: &str,
+        agent_id: &str,
+        runtime: Option<foiled_core::agent::SandboxRuntime>,
+    ) -> StoreFuture<'_, ()> {
+        if let Some(a) = self
+            .lock()
+            .agents
+            .iter_mut()
+            .find(|a| a.tenant_id == tenant_id && a.id == agent_id)
+        {
+            a.sandbox_runtime = runtime;
+        }
+        ready(Ok(()))
+    }
+
     fn ip_iocs(&self, tenant_id: &str, since: i64) -> StoreFuture<'_, Vec<IpIocRow>> {
         use std::collections::BTreeMap;
         let g = self.lock();

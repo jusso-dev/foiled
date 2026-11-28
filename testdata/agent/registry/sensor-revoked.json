@@ -19,5 +19,6 @@
   "revoke_reason": {
     "code": "operator_manual",
     "text": "Sensor host reported stolen; certificate revoked."
-  }
+  },
+  "sandbox_runtime": null
 }

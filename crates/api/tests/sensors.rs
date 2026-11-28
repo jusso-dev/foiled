@@ -769,6 +769,38 @@ async fn a_network_jump_is_flagged_and_audited() {
     .await;
     assert_eq!(agent["network_changed_at"], NOW);
     assert_eq!(agent["last_ip"], "203.0.113.50");
+    assert_eq!(agent["sandbox_runtime"], Value::Null, "not reported yet");
+}
+
+#[tokio::test]
+async fn the_registry_shows_the_runtime_from_the_last_heartbeat() {
+    let h = harness();
+    let (a, fp) = enrolled(&h, "admin1", json!({})).await;
+    let path = format!("/v0/sensors/{a}/heartbeat");
+    let get = || operator(&h, "admin1", "GET", "/v0/sensors", Value::Null);
+    assert_eq!(get().await.1["items"][0]["sandbox_runtime"], Value::Null);
+    for runtime in ["fake", "docker"] {
+        let hb = json!({
+            "host_id": a, "agent_version": "0.1.0", "kvm_present": false,
+            "publicly_exposed": false, "free_disk_bytes": 1, "running_decoys": [],
+            "host_time": NOW, "buffered_events": 0, "dropped_events": 0,
+            "sandbox_runtime": runtime
+        });
+        assert_eq!(cert(&h, &fp, &path, hb).await.0, StatusCode::NO_CONTENT);
+        assert_eq!(get().await.1["items"][0]["sandbox_runtime"], runtime);
+    }
+    let unknown = json!({
+        "host_id": a, "agent_version": "0.1.0", "kvm_present": false,
+        "publicly_exposed": false, "free_disk_bytes": 1, "running_decoys": [],
+        "host_time": NOW, "buffered_events": 0, "dropped_events": 0,
+        "sandbox_runtime": "recording"
+    });
+    assert_eq!(
+        cert(&h, &fp, &path, unknown).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unknown runtime names are refused"
+    );
+    assert_eq!(get().await.1["items"][0]["sandbox_runtime"], "docker");
 }
 
 #[tokio::test]

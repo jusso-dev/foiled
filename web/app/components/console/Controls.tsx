@@ -1,6 +1,6 @@
 import { type ReactNode, useId } from "react";
 import { useNavigation } from "react-router";
-import type { AttemptState, DecoyState } from "../../lib/api-types";
+import type { AttemptState, DecoyState, SandboxRuntime } from "../../lib/api-types";
 import { formatTs, isoTs } from "../../lib/format";
 import { REASON_LABEL } from "../../lib/reasons";
 import { CHECKLIST } from "../../lib/review";
@@ -16,9 +16,47 @@ const DECOY_TONE: Record<DecoyState, "ok" | "warn" | "bad" | "plain"> = {
   destroyed: "plain",
 };
 
-/** Decoy state as a tag. The word carries the meaning; colour only repeats it. */
-export function DecoyStateTag({ state }: { state: DecoyState }) {
-  return <span className={`tag tag--${DECOY_TONE[state] ?? "plain"}`}>{state}</span>;
+/**
+ * Decoy state as a tag. The word carries the meaning; colour only repeats it.
+ * A decoy built on the recording runtime is never shown as plainly healthy:
+ * it gets a "dry run" tag next to its state, because nothing is running (#91).
+ */
+export function DecoyStateTag({ state, dryRun = false }: { state: DecoyState; dryRun?: boolean }) {
+  const tag = <span className={`tag tag--${DECOY_TONE[state] ?? "plain"}`}>{state}</span>;
+  if (!dryRun) return tag;
+  return (
+    <>
+      {tag} <DryRunTag />
+    </>
+  );
+}
+
+/** Marks a decoy or agent on the recording runtime: nothing runs, nothing is captured. */
+export function DryRunTag() {
+  return (
+    <span className="tag tag--warn" title="Recording runtime: nothing runs and nothing is captured">
+      dry run
+    </span>
+  );
+}
+
+const RUNTIME_LABEL: Record<SandboxRuntime, string> = {
+  firecracker: "Firecracker",
+  docker: "Docker (lab)",
+  fake: "fake",
+};
+
+/** The runtime an agent reported in its last heartbeat. */
+export function RuntimeTag({ runtime }: { runtime: SandboxRuntime | null }) {
+  if (runtime === null) return <span className="muted">not reported</span>;
+  if (runtime === "fake") {
+    return (
+      <>
+        <span className="tag">{RUNTIME_LABEL.fake}</span> <DryRunTag />
+      </>
+    );
+  }
+  return <span className="tag">{RUNTIME_LABEL[runtime] ?? runtime}</span>;
 }
 
 const ATTEMPT_TONE: Record<AttemptState, "plain" | "warn" | "bad"> = {

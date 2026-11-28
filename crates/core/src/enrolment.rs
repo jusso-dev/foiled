@@ -13,6 +13,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::agent::SandboxRuntime;
 use crate::auth::{Role, Scope};
 use crate::decoy::Reason;
 
@@ -96,6 +97,11 @@ pub struct AgentRecord {
     pub network_changed_at: Option<i64>,
     pub revoked_at: Option<i64>,
     pub revoke_reason: Option<Reason>,
+    /// The runtime named in the agent's last heartbeat, `None` until one
+    /// arrives (or from agents that predate the field). `fake` means every
+    /// decoy on this agent is a dry run.
+    #[serde(default)]
+    pub sandbox_runtime: Option<SandboxRuntime>,
 }
 
 /// `POST /v0/enrol`. Sent once, by the sensor, before it has a certificate.
