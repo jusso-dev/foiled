@@ -320,6 +320,89 @@ async fn rejected_jobs_are_audited_as_denied() {
 }
 
 #[tokio::test]
+async fn egress_failures_fail_the_decoy_and_audit_the_code() {
+    let h = harness(true);
+    let decoy = create_redis(&h).await;
+    let job = keys().verify(&lease(&h, 1, "host-1").await[0]).unwrap();
+    let (s, b) = host(
+        &h,
+        1,
+        &format!("/v0/hosts/host-1/jobs/{}:ack", job.job_id),
+        json!({
+            "job_id": job.job_id,
+            "outcome": "failed",
+            "decoy_state": "failed",
+            "detail": "egress unverified: no rule denies new outbound IPv4 connections from 10.86.0.0/24",
+            "failure_code": "egress_unverified",
+        }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT, "{b}");
+    assert_eq!(h.store.decoy(&decoy).unwrap().state, DecoyState::Failed);
+    let rec = h
+        .store
+        .audit()
+        .into_iter()
+        .find(|a| a.action == "job.ack")
+        .unwrap();
+    assert_eq!(rec.outcome, foiled_core::audit::Outcome::Failed);
+    assert_eq!(rec.detail["failure_code"], "egress_unverified");
+}
+
+#[tokio::test]
+async fn unknown_failure_codes_are_refused() {
+    let h = harness(true);
+    create_redis(&h).await;
+    let job = keys().verify(&lease(&h, 1, "host-1").await[0]).unwrap();
+    let (s, _) = host(
+        &h,
+        1,
+        &format!("/v0/hosts/host-1/jobs/{}:ack", job.job_id),
+        json!({"job_id": job.job_id, "outcome": "failed", "failure_code": "made_up"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn failure_codes_on_a_non_failed_outcome_are_refused() {
+    let h = harness(true);
+    let decoy = create_redis(&h).await;
+    let job = keys().verify(&lease(&h, 1, "host-1").await[0]).unwrap();
+    let path = format!("/v0/hosts/host-1/jobs/{}:ack", job.job_id);
+    for outcome in ["succeeded", "rejected"] {
+        let (s, b) = host(
+            &h,
+            1,
+            &path,
+            json!({
+                "job_id": job.job_id,
+                "outcome": outcome,
+                "decoy_state": "healthy",
+                "failure_code": "egress_unverified",
+            }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{outcome}: {b}");
+    }
+    assert_ne!(
+        h.store.decoy(&decoy).unwrap().state,
+        DecoyState::Healthy,
+        "a refused ack changes nothing"
+    );
+    assert!(!h.store.audit().iter().any(|a| a.action == "job.ack"));
+    // The job is still leased, so the honest ack goes through.
+    let (s, b) = host(
+        &h,
+        1,
+        &path,
+        json!({"job_id": job.job_id, "outcome": "succeeded"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT, "{b}");
+}
+
+#[tokio::test]
 async fn heartbeats_record_clock_skew_for_the_calling_host_only() {
     let h = harness(true);
     let hb = |id: &str| {

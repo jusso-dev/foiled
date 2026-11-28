@@ -84,6 +84,7 @@ impl Agent {
                         decoy_state: None,
                         detail: Some(rejection.to_string()),
                         dry_run: false,
+                        failure_code: None,
                     }
                 }
             };

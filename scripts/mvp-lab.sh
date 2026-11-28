@@ -6,7 +6,8 @@
 #
 # LAB ONLY. Uses the Docker lab runtime (never for a public IP), a local
 # registry, the in-memory mock control plane and loopback-only ports.
-# Needs: docker with buildx, sudo for one iptables rule, cargo, curl, python3.
+# Needs: docker with buildx, sudo for two firewall rules (iptables and
+# ip6tables), cargo, curl, python3.
 set -euo pipefail
 
 ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
@@ -19,6 +20,7 @@ fi
 API=127.0.0.1:8787
 NET=foiled-lab
 SUBNET=10.86.0.0/24
+SUBNET6=fd00:86::/64
 ENTRY=catalogue/entries/foiled/demo-app/1.0.0.yaml
 ENTRY_BACKUP="$WORK/demo-app-entry.yaml.orig"
 PIDS=()
@@ -42,6 +44,7 @@ cleanup() {
   docker rm -f foiled-registry >/dev/null 2>&1
   docker network rm "$NET" >/dev/null 2>&1
   sudo iptables -D DOCKER-USER -s "$SUBNET" -m conntrack --ctstate NEW -j REJECT 2>/dev/null
+  sudo ip6tables -D DOCKER-USER -s "$SUBNET6" -m conntrack --ctstate NEW -j REJECT 2>/dev/null
   if [ -f "$ENTRY_BACKUP" ]; then
     cp "$ENTRY_BACKUP" "$ENTRY" 2>/dev/null
   fi
@@ -92,9 +95,8 @@ open(path, "w").write(s)
 PY
 cargo run -q -p foiled-lint -- .
 
-log "3. Lab network with outbound connections from decoys rejected"
-docker network create --subnet "$SUBNET" "$NET" >/dev/null
-sudo iptables -I DOCKER-USER -s "$SUBNET" -m conntrack --ctstate NEW -j REJECT
+log "3. Lab network (IPv4 and IPv6), not yet firewalled"
+docker network create --ipv6 --subnet "$SUBNET" --subnet "$SUBNET6" "$NET" >/dev/null
 
 log "4. Start the mock control plane in lab mode"
 cargo build -q -p foiled-mock-api -p foiled-hostd
@@ -117,8 +119,11 @@ heartbeat_secs = 5
 
 [docker]
 network = "$NET"
+subnets = ["$SUBNET", "$SUBNET6"]
 bind = "127.0.0.1"
 writable = ["/tmp", "/srv/demo-app"]
+# hostd lists the firewall read only before every create; it never edits it.
+firewall_command = ["sudo", "-n"]
 
 [[trusted_keys]]
 id = "lab"
@@ -127,20 +132,40 @@ EOF
 target/debug/foiled-hostd "$WORK/hostd.toml" >"$WORK/hostd.log" 2>&1 &
 PIDS+=($!)
 
-log "6. Launch the demo decoy"
-DECOY="$(api POST /v0/decoys '{"catalogue_id":"foiled/demo-app/1.0.0","label":"mvp lab"}' \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["decoy"]["id"])')"
+launch() { # label
+  api POST /v0/decoys "{\"catalogue_id\":\"foiled/demo-app/1.0.0\",\"label\":\"$1\"}" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["decoy"]["id"])'
+}
+
+log "6. Without a deny rule the agent refuses to start a decoy"
+BLOCKED="$(launch "no egress rule")"
+failed() { api GET "/v0/decoys/$BLOCKED" | grep -q '"state":"failed"'; }
+wait_for "decoy refused" 60 failed
+audited() { api GET "/v0/audit?action=job.ack" | grep -q '"failure_code":"egress_unverified"'; }
+wait_for "egress_unverified in the job.ack audit" 10 audited
+if [ -n "$(docker ps -aq --filter "label=foiled.decoy=$BLOCKED")" ]; then
+  echo "FAIL: a container was started without an egress rule" >&2
+  exit 1
+fi
+echo "create failed with egress_unverified and no container, as required"
+
+log "7. Reject new outbound connections from the lab network"
+sudo iptables -I DOCKER-USER -s "$SUBNET" -m conntrack --ctstate NEW -j REJECT
+sudo ip6tables -I DOCKER-USER -s "$SUBNET6" -m conntrack --ctstate NEW -j REJECT
+
+log "8. Launch the demo decoy"
+DECOY="$(launch "mvp lab")"
 echo "decoy: $DECOY"
 healthy() { api GET "/v0/decoys/$DECOY" | grep -q '"state":"healthy"'; }
 wait_for "decoy healthy" 90 healthy
 wait_for "demo app answering" 30 curl -sf http://127.0.0.1:8080/
 
-log "7. Exploit FOILED-DEMO-0001 (harmless marker file)"
+log "9. Exploit FOILED-DEMO-0001 (harmless marker file)"
 curl -sS -X POST "http://127.0.0.1:8080/api/upload?path=../../../tmp/foiled-lab-marker.txt" \
   -H 'user-agent: foiled-mvp-lab' --data 'lab marker, not a payload'
 echo
 
-log "8. Verify the decoy cannot reach the internet"
+log "10. Verify the decoy cannot reach the internet"
 if docker exec "foiled-$DECOY" python3 -I -c \
   "import socket; socket.create_connection(('192.0.2.1', 80), timeout=5)" 2>/dev/null; then
   echo "FAIL: decoy opened an outbound connection" >&2
@@ -148,17 +173,17 @@ if docker exec "foiled-$DECOY" python3 -I -c \
 fi
 echo "outbound connection refused, as required"
 
-log "9. Capture reached the control plane"
+log "11. Capture reached the control plane"
 has_hook() { api GET /v0/exports/iocs.csv | grep -q FOILED-DEMO-0001; }
 wait_for "hook event in the IOC export" 60 has_hook
 
-log "10. Rotate the decoy; capture already shipped stays"
+log "12. Rotate the decoy; capture already shipped stays"
 api POST "/v0/decoys/$DECOY:rotate" '{"reason":{"code":"operator_manual","text":"mvp lab rotation"}}' >/dev/null
 rotated() { api GET "/v0/decoys/$DECOY" | grep -q '"generation":2'; }
 wait_for "rotation to generation 2" 90 rotated
 wait_for "rotated decoy healthy" 60 healthy
 
-log "11. Export iocs.csv with bearer auth"
+log "13. Export iocs.csv with bearer auth"
 api GET /v0/exports/iocs.csv | tee "$WORK/iocs.csv"
 ROWS="$(tail -n +2 "$WORK/iocs.csv" | grep -c . || true)"
 if [ "$ROWS" -lt 1 ]; then

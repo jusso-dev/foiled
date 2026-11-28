@@ -11,7 +11,7 @@ Before exposing anything on a public IP, read [SECURITY.md](../SECURITY.md), the
 
 ## Lab track
 
-Needs: Linux, Docker with Buildx, `sudo` for one iptables rule, a Rust toolchain, `curl` and `python3`. Run it all with:
+Needs: Linux, Docker with Buildx, `sudo` for two firewall rules (`iptables` and `ip6tables`), a Rust toolchain, `curl` and `python3`. Run it all with:
 
 ```sh
 scripts/mvp-lab.sh
@@ -21,14 +21,13 @@ What it does, step by step:
 
 1. **Build the demo image** from [`build/recipes/foiled-demo-app`](../build/recipes/foiled-demo-app/README.md) (reproducible, offline build, ADR 0004), load it, and push it to a registry on `127.0.0.1:5000`. The registry gives the image a digest.
 2. **Pin the catalogue entry** `foiled/demo-app/1.0.0` to that digest by adding `image: localhost:5000/foiled-demo-app@sha256:...` under `artefact`. The entry already carries its matcher (`foiled-demo-0001-upload-traversal`) and hook. `foiled-lint` checks it. (The script edits the working tree only and restores it at exit.)
-3. **Create the lab network** `foiled-lab` (`10.86.0.0/24`) and reject new outbound connections from it:
+3. **Create the lab network** `foiled-lab` with an IPv4 and an IPv6 subnet:
 
    ```sh
-   docker network create --subnet 10.86.0.0/24 foiled-lab
-   sudo iptables -I DOCKER-USER -s 10.86.0.0/24 -m conntrack --ctstate NEW -j REJECT
+   docker network create --ipv6 --subnet 10.86.0.0/24 --subnet fd00:86::/64 foiled-lab
    ```
 
-   Replies to inbound connections still flow; anything the decoy starts is refused.
+   The script adds the firewall rules only after step 6, to show that the agent refuses to start a decoy without them.
 4. **Start the mock control plane** in lab mode: `cargo run -p foiled-mock-api -- 127.0.0.1:8787 --lab-host lab-host-1`. It prints an operator token and the job signing public key. Lab mode stands in for Cloudflare's mTLS check for the one lab host, which is acceptable only because it listens on loopback.
 5. **Start the host agent** with a `hostd.toml` like this (the script writes it):
 
@@ -42,15 +41,35 @@ What it does, step by step:
 
    [docker]
    network = "foiled-lab"
+   subnets = ["10.86.0.0/24", "fd00:86::/64"]   # the network must have exactly these
    bind = "127.0.0.1"
    writable = ["/tmp", "/srv/demo-app"]
+   firewall = "iptables"                        # or "nftables"
+   firewall_command = ["sudo", "-n"]            # listing rules needs CAP_NET_ADMIN
 
    [[trusted_keys]]
    id = "lab"
    public_key = "<printed by the mock>"
    ```
 
-6. **Launch the decoy** as an operator:
+6. **No rule, no decoy.** Before every create, and once at start, the agent checks the lab network read only (it never edits firewall rules, #93):
+
+   - `docker` talks to the host's own system daemon: `DOCKER_HOST` is unset or `unix:///var/run/docker.sock` (or `unix:///run/docker.sock`), and `docker context inspect` shows the same socket for the active context. The firewall the agent lists must be the one the decoys' traffic crosses, so a remote (`tcp://`, `ssh://`), rootless or Docker Desktop daemon is refused.
+   - `docker network inspect foiled-lab`: the network exists, uses the `bridge` driver and has exactly the configured `subnets`. `docker run` then attaches to that network by its ID, so a network recreated under the same name in the meantime is never used unchecked.
+   - `iptables -S` for each IPv4 subnet and `ip6tables -S` for each IPv6 subnet (or `nft -j list ruleset` with `firewall = "nftables"`): starting in `FORWARD` and following jumps in order, a `DROP` or `REJECT` covering every new connection from the subnet must come before anything that could let some of it out, such as Docker's own `-i <bridge> -j ACCEPT`, an earlier `ACCEPT` for one port, or a `RETURN`. Rules for replies (`RELATED,ESTABLISHED`), for traffic into the network and for other networks are ignored. A rule the check does not understand never counts as a deny.
+
+   Each of these commands has 10 seconds; one that runs longer is killed and counts as a failure. If any of that fails, the create job fails with `failure_code: egress_unverified` and a `detail` naming the subnet and, when there is one, the rule that lets traffic out. No container is started and the decoy goes to `failed`. Rotate and reset run the same check before they stop the running decoy, so a failed check leaves it running as it was. The script launches one decoy at this point and checks exactly that, including the `job.ack` audit record.
+
+   Then it adds the rules:
+
+   ```sh
+   sudo iptables -I DOCKER-USER -s 10.86.0.0/24 -m conntrack --ctstate NEW -j REJECT
+   sudo ip6tables -I DOCKER-USER -s fd00:86::/64 -m conntrack --ctstate NEW -j REJECT
+   ```
+
+   Use `-I`, not `-A`: on Docker before 28, `DOCKER-USER` ends in `RETURN`, so an appended rule is never reached, and the agent reports it as shadowed. Replies to inbound connections still flow; anything the decoy starts is refused. To run the agent as a user without root, give it a sudoers entry for exactly `iptables -S` and `ip6tables -S` (or `nft -j list ruleset`) with `NOPASSWD`, and nothing else.
+
+7. **Launch the decoy** as an operator:
 
    ```sh
    curl -X POST http://127.0.0.1:8787/v0/decoys -H "authorization: Bearer $TOKEN" \
@@ -58,16 +77,16 @@ What it does, step by step:
    ```
 
    The API writes a `decoy.create` job. The agent leases it, checks the signature, host, expiry, replay and allow-list, runs the container read-only with all capabilities dropped, and acknowledges. The decoy goes `pending`, `starting`, `healthy`.
-7. **Exploit FOILED-DEMO-0001** with a harmless marker:
+8. **Exploit FOILED-DEMO-0001** with a harmless marker:
 
    ```sh
    curl -X POST 'http://127.0.0.1:8080/api/upload?path=../../../tmp/foiled-lab-marker.txt' --data 'lab marker'
    ```
 
    The demo app logs the request and fires the `demo-app.upload-path-traversal` hook. The agent turns both lines into capture envelopes, buffers them and sends them to `/v0/ingest/events`.
-8. **Verify egress fails**: from inside the decoy, a TCP connection to `192.0.2.1:80` is refused. The script fails if it succeeds.
-9. **Check capture arrived**: the IOC export contains the source address with `FOILED-DEMO-0001` in `hook_cves`.
-10. **Rotate** with a reason:
+9. **Verify egress fails**: from inside the decoy, a TCP connection to `192.0.2.1:80` is refused. The script fails if it succeeds.
+10. **Check capture arrived**: the IOC export contains the source address with `FOILED-DEMO-0001` in `hook_cves`.
+11. **Rotate** with a reason:
 
     ```sh
     curl -X POST "http://127.0.0.1:8787/v0/decoys/$DECOY:rotate" -H "authorization: Bearer $TOKEN" \
@@ -75,7 +94,7 @@ What it does, step by step:
     ```
 
     The agent stops the container (network first), flushes capture, destroys it and starts a fresh one from the same digest. The decoy reaches generation 2. Evidence already captured stays with the control plane, and anything not yet sent stays in the agent's on-disk buffer under `state_dir`, outside the guest.
-11. **Export** with bearer auth:
+12. **Export** with bearer auth:
 
     ```sh
     curl -H "authorization: Bearer $TOKEN" http://127.0.0.1:8787/v0/exports/iocs.csv

@@ -9,7 +9,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use foiled_core::agent::{DecoyParams, SandboxRuntime};
+use foiled_core::agent::{DecoyParams, FailureCode, SandboxRuntime};
 
 use crate::config::{ConfigError, HostConfig};
 use crate::docker::DockerRuntime;
@@ -46,11 +46,32 @@ pub enum SnapshotKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeError(pub String);
+pub struct RuntimeError {
+    pub message: String,
+    /// Reported to the control plane as the job result's `failure_code`.
+    pub code: Option<FailureCode>,
+}
+
+impl RuntimeError {
+    pub fn new(message: impl Into<String>) -> Self {
+        RuntimeError {
+            message: message.into(),
+            code: None,
+        }
+    }
+
+    /// The decoy network's egress block could not be confirmed (#93).
+    pub fn egress(message: impl Into<String>) -> Self {
+        RuntimeError {
+            message: format!("egress unverified: {}", message.into()),
+            code: Some(FailureCode::EgressUnverified),
+        }
+    }
+}
 
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
@@ -58,6 +79,13 @@ pub type RtResult<T> = Result<T, RuntimeError>;
 
 /// Blocking interface; the agent runs it on a blocking thread.
 pub trait Runtime: Send + Sync {
+    /// Read-only checks that a later `create` would also run (for Docker,
+    /// the egress preflight). Rotate and reset call it before tearing down
+    /// the running decoy, so a check that is bound to fail never leaves the
+    /// decoy absent. `create` must still check for itself.
+    fn preflight(&self) -> RtResult<()> {
+        Ok(())
+    }
     fn create(&self, spec: &DecoySpec) -> RtResult<ExecMeta>;
     fn start(&self, decoy_id: &str) -> RtResult<()>;
     /// Freeze networking and stop the guest. Never asks the guest to shut down.
@@ -109,7 +137,7 @@ impl FakeRuntime {
         let fail = self.fail_on.lock().unwrap().is_some_and(|f| f(&c));
         self.calls.lock().unwrap().push(c);
         if fail {
-            Err(RuntimeError("injected failure".into()))
+            Err(RuntimeError::new("injected failure"))
         } else {
             Ok(())
         }

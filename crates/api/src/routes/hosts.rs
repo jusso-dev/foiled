@@ -14,7 +14,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use foiled_core::agent::{Heartbeat, JobBody, JobKind, JobOutcome, JobResult, SignedJob};
+use foiled_core::agent::{
+    FailureCode, Heartbeat, JobBody, JobKind, JobOutcome, JobResult, SignedJob,
+};
 use foiled_core::audit::Outcome;
 use foiled_core::auth::{Principal, Role, Scope};
 use foiled_core::decoy::{DecoyState, Reason, ReasonCode};
@@ -196,6 +198,12 @@ async fn ack(
             "job_id in the body does not match the path",
         ));
     }
+    if result.failure_code.is_some() && result.outcome != JobOutcome::Failed {
+        return Err(ApiError::unprocessable(
+            "invalid_body",
+            "failure_code is only allowed on a failed outcome",
+        ));
+    }
     let status = match result.outcome {
         JobOutcome::Succeeded => "succeeded",
         JobOutcome::Failed => "failed",
@@ -287,6 +295,7 @@ async fn ack(
         "decoy_state": applied.map(DecoyState::as_str),
         "detail": result.detail,
         "dry_run": result.dry_run,
+        "failure_code": result.failure_code.map(FailureCode::as_str),
     });
     state.store.append_audit(rec).await?;
     Ok(StatusCode::NO_CONTENT)
